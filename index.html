@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fare Board — manual check</title>
+<title>Fare Board</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -14,14 +14,14 @@
   }
   *{box-sizing:border-box;margin:0}
   body{background:var(--night);color:var(--ink);font-family:Inter,system-ui,sans-serif;
-       padding:32px 20px 64px;max-width:960px;margin:0 auto}
+       padding:32px 20px 64px;max-width:1000px;margin:0 auto}
   .eyebrow{font-family:'IBM Plex Mono',monospace;font-size:12px;letter-spacing:.22em;
            color:var(--muted);text-transform:uppercase}
   h1{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:clamp(26px,4vw,38px);
      color:var(--amber);letter-spacing:.04em;margin:6px 0 4px}
   .sub{color:var(--muted);font-size:14px;margin-bottom:20px;line-height:1.5}
 
-  .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:28px}
+  .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;align-items:center}
   .btn{display:inline-block;background:var(--amber);color:var(--night);font-weight:600;
        text-decoration:none;padding:9px 16px;border-radius:6px;font-size:14px;border:none;cursor:pointer}
   .btn:hover{opacity:.9}
@@ -30,25 +30,64 @@
   .btn-sm{padding:5px 10px;font-size:12.5px}
   .btn-link{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12.5px;padding:2px 4px}
   .btn-link:hover{color:var(--bad)}
+  .spacer{flex:1}
+  .err{color:var(--bad);font-size:13px;margin:6px 0}
+  .msg{color:var(--good);font-size:13px;margin:6px 0}
 
-  .group{background:var(--panel);border:1px solid var(--line);border-radius:10px;
-         padding:18px 20px;margin-bottom:20px}
-  .group-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-  .group-title{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:var(--ink);
-               flex:1;min-width:120px}
-  .group-title-input{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;
-       background:var(--night);border:1px solid var(--amber);color:var(--ink);
-       padding:4px 8px;border-radius:6px;flex:1;min-width:120px}
-  .group-actions{display:flex;gap:8px;flex-wrap:wrap}
+  /* Auth */
+  .auth-wrap{max-width:380px;margin:60px auto;background:var(--panel);border:1px solid var(--line);
+      border-radius:10px;padding:28px}
+  .auth-wrap h2{font-family:'IBM Plex Mono',monospace;font-size:20px;margin-bottom:16px;color:var(--amber)}
+  .auth-wrap label{display:block;font-size:12px;color:var(--muted);text-transform:uppercase;
+      letter-spacing:.06em;margin:12px 0 4px;font-family:'IBM Plex Mono',monospace}
+  .auth-wrap input{width:100%}
+  .auth-switch{margin-top:16px;font-size:13px;color:var(--muted)}
+  .auth-switch button{background:none;border:none;color:var(--amber);cursor:pointer;font-size:13px;
+      text-decoration:underline;padding:0}
+
+  /* Tabs */
+  .tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line);margin-bottom:20px}
+  .tab{background:transparent;border:none;color:var(--muted);padding:10px 16px;font-size:14px;
+      font-family:'IBM Plex Mono',monospace;cursor:pointer;border-bottom:2px solid transparent}
+  .tab.active{color:var(--amber);border-bottom-color:var(--amber)}
+  .tab:hover{color:var(--ink)}
+  .tab-new{color:var(--muted);font-size:18px;padding:10px 14px}
+
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px}
+  .panel-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+  .panel-head h2{font-family:'IBM Plex Mono',monospace;font-size:20px;flex:1;min-width:120px}
+  .title-input{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:600;
+      background:var(--night);border:1px solid var(--amber);color:var(--ink);
+      padding:4px 8px;border-radius:6px;flex:1;min-width:120px}
+
+  .totals{font-family:'IBM Plex Mono',monospace;font-size:15px;color:var(--amber);
+      background:var(--night);border:1px solid var(--line);border-radius:8px;
+      padding:10px 14px;margin:12px 0 16px}
+
+  .meta-block{background:var(--night);border:1px solid var(--line);border-radius:8px;
+      padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--muted)}
+  .meta-block b{color:var(--ink)}
+  .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+  .tag{background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+      padding:2px 10px;font-size:12px}
+
+  .share-block{margin-bottom:16px}
+  .collab-list{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+  .collab-chip{background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+      padding:3px 6px 3px 10px;font-size:12.5px;display:flex;align-items:center;gap:6px}
 
   .pair-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
   .leg-tag{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
            margin-bottom:6px;font-family:'IBM Plex Mono',monospace}
+  .leg-col{min-height:20px}
   .solo-list{display:flex;flex-direction:column;gap:14px}
   @media (max-width:640px){ .pair-row{grid-template-columns:1fr} }
 
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+  .card.drag-over{border-color:var(--amber)}
   .card h3{font-size:15px;font-weight:600;margin-bottom:4px}
+  .drag-handle{cursor:grab;color:var(--muted);font-size:13px;margin-right:6px;user-select:none}
+  .card-title-row{display:flex;align-items:center}
   .meta-line{font-size:12.5px;color:var(--muted);margin-bottom:8px;font-family:'IBM Plex Mono',monospace;line-height:1.6}
   .meta-line b{color:var(--ink);font-weight:600}
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
@@ -78,52 +117,36 @@
   .empty-hist{color:var(--muted);font-size:12.5px;margin-top:8px}
   .empty-state{background:var(--panel);border:1px dashed var(--line);border-radius:10px;
       padding:28px 20px;text-align:center;color:var(--muted)}
-  .new-group-form{display:flex;gap:8px;align-items:center;margin-bottom:20px}
+  .new-form{display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap}
 </style>
 </head>
 <body>
-  <p class="eyebrow">Fare board · manual check</p>
+  <p class="eyebrow">Fare board</p>
   <h1>FLIGHT PRICES</h1>
-  <p class="sub">Sites like Southwest block automated price lookups, so this isn't a live feed —
-    click a flight's link to check the real price yourself, then log what you saw. Everything here
-    (groups, notes, prices, logs) is saved in <b>this browser only</b> — this page is public, but your
-    flight data never leaves your device unless you export it yourself. Use "Export data" to back up
-    a JSON file, and "Import data" to load it on another browser or device.</p>
+  <p class="sub" id="subtext">Loading…</p>
 
-  <div class="toolbar">
-    <button class="btn" id="searchAllBtn">Search all flights →</button>
-    <button class="btn btn-ghost" id="newGroupToggle">+ New group</button>
-    <button class="btn btn-ghost" id="exportBtn">Export data</button>
-    <button class="btn btn-ghost" id="importBtn">Import data</button>
-    <input type="file" id="importFile" accept="application/json" hidden>
-  </div>
-  <div class="new-group-form" id="newGroupForm" hidden>
-    <input type="text" id="newGroupTitle" placeholder="Group title (e.g. Denver Trip)">
-    <button class="btn btn-sm" id="newGroupSave">Create</button>
-    <button class="btn-link" id="newGroupCancel">cancel</button>
-  </div>
+  <div id="root"></div>
 
-  <div id="groups"></div>
-  <div class="empty-state" id="emptyState" hidden>No groups yet. Click "+ New group" to add your first trip, or "Import data" to load a backup.</div>
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-<script>
-const STORE_KEY = "flight-tracker-dashboard-v1";
-const uid = () => Math.random().toString(36).slice(2, 10);
+// These are intentionally public (standard Supabase client pattern) —
+// Row Level Security is what actually protects the data.
+const SUPABASE_URL = "https://mmqcbjgftpwzaughimkr.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_OU7_hsa5kefA2SDizMneeg_RjqASdUZ";
 
-const SEED = { groups: [] };
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const root = document.getElementById("root");
+const uid = () => crypto.randomUUID();
 
-function load(){
-  try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {}
-  const seeded = JSON.parse(JSON.stringify(SEED));
-  save(seeded);
-  return seeded;
-}
-function save(data){ localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
+const OLD_LOCAL_KEY = "flight-tracker-dashboard-v1";
+const MIGRATED_FLAG = "flight-tracker-migrated";
 
-let data = load();
+let session = null;
+let trips = [];
+let activeTripId = null;
+let authMode = "login"; // login | signup | forgot | reset
+let authError = "", authMsg = "";
 
 const fmtCash = (n, cur="USD") =>
   new Intl.NumberFormat("en-US",{style:"currency",currency:cur}).format(n);
@@ -133,49 +156,326 @@ const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c =>
 
 function paidText(f){
   const parts = [];
-  if (f.paidCash != null) parts.push(fmtCash(f.paidCash, f.currency));
-  if (f.paidPoints != null) parts.push(fmtPoints(f.paidPoints));
+  if (f.paid_cash != null) parts.push(fmtCash(f.paid_cash, f.currency));
+  if (f.paid_points != null) parts.push(fmtPoints(f.paid_points));
   return parts.length ? parts.join(" + ") : "—";
 }
 
 function findFlight(flightId){
-  for (const g of data.groups) {
-    const f = g.flights.find(fl => fl.id === flightId);
-    if (f) return { group: g, flight: f };
+  for (const t of trips) {
+    const f = (t.flights || []).find(fl => fl.id === flightId);
+    if (f) return { trip: t, flight: f };
   }
   return null;
 }
 
-function renderCard(f, currentGroupId){
-  const cur = f.currency || "USD";
-  const moveOptions = data.groups
-    .filter(g => g.id !== currentGroupId)
-    .map(g => `<option value="${g.id}">${esc(g.title)}</option>`).join("");
-  const metaBits = [`Paid <b>${paidText(f)}</b>`];
-  if (f.alertBelow != null) metaBits.push(`Alert below <b>${fmtCash(f.alertBelow, cur)}</b>`);
+// ---------------- Auth screen ----------------
 
-  const entries = (f.priceLog || []).slice().sort((a,b)=>b.date.localeCompare(a.date));
+function renderAuth(){
+  document.getElementById("subtext").textContent = "Sign in to see your flights.";
+  let body;
+  if (authMode === "reset"){
+    body = `
+      <h2>Set a new password</h2>
+      <label>New password</label>
+      <input type="password" id="a-newpass">
+      <div class="row" style="margin-top:14px">
+        <button class="btn" id="a-submit">Update password</button>
+      </div>`;
+  } else if (authMode === "forgot"){
+    body = `
+      <h2>Reset password</h2>
+      <label>Email</label>
+      <input type="email" id="a-email">
+      <div class="row" style="margin-top:14px">
+        <button class="btn" id="a-submit">Send reset link</button>
+      </div>
+      <p class="auth-switch"><button id="a-back">Back to log in</button></p>`;
+  } else {
+    const isSignup = authMode === "signup";
+    body = `
+      <h2>${isSignup ? "Create account" : "Log in"}</h2>
+      <label>Email</label>
+      <input type="email" id="a-email">
+      <label>Password</label>
+      <input type="password" id="a-pass">
+      <div class="row" style="margin-top:14px">
+        <button class="btn" id="a-submit">${isSignup ? "Sign up" : "Log in"}</button>
+      </div>
+      <p class="auth-switch">
+        ${isSignup ? "Already have an account?" : "Need an account?"}
+        <button id="a-toggle">${isSignup ? "Log in" : "Sign up"}</button>
+      </p>
+      ${!isSignup ? `<p class="auth-switch"><button id="a-forgot">Forgot password?</button></p>` : ""}`;
+  }
+
+  root.innerHTML = `
+    <div class="auth-wrap">
+      ${body}
+      ${authError ? `<p class="err">${esc(authError)}</p>` : ""}
+      ${authMsg ? `<p class="msg">${esc(authMsg)}</p>` : ""}
+    </div>`;
+
+  const emailEl = document.getElementById("a-email");
+  const passEl = document.getElementById("a-pass");
+  const submitBtn = document.getElementById("a-submit");
+  const toggleBtn = document.getElementById("a-toggle");
+  const forgotBtn = document.getElementById("a-forgot");
+  const backBtn = document.getElementById("a-back");
+
+  if (toggleBtn) toggleBtn.addEventListener("click", () => {
+    authMode = authMode === "signup" ? "login" : "signup";
+    authError = ""; authMsg = "";
+    renderAuth();
+  });
+  if (forgotBtn) forgotBtn.addEventListener("click", () => {
+    authMode = "forgot"; authError = ""; authMsg = "";
+    renderAuth();
+  });
+  if (backBtn) backBtn.addEventListener("click", () => {
+    authMode = "login"; authError = ""; authMsg = "";
+    renderAuth();
+  });
+
+  submitBtn.addEventListener("click", async () => {
+    authError = ""; authMsg = "";
+    try {
+      if (authMode === "signup"){
+        const { error } = await supabase.auth.signUp({
+          email: emailEl.value.trim(), password: passEl.value,
+          options: { emailRedirectTo: window.location.href }
+        });
+        if (error) throw error;
+        authMsg = "Check your email to confirm your account, then log in.";
+        authMode = "login";
+      } else if (authMode === "login"){
+        const { error } = await supabase.auth.signInWithPassword({
+          email: emailEl.value.trim(), password: passEl.value
+        });
+        if (error) throw error;
+      } else if (authMode === "forgot"){
+        const { error } = await supabase.auth.resetPasswordForEmail(emailEl.value.trim(), {
+          redirectTo: window.location.href
+        });
+        if (error) throw error;
+        authMsg = "Check your email for a reset link.";
+      } else if (authMode === "reset"){
+        const newPassEl = document.getElementById("a-newpass");
+        const { error } = await supabase.auth.updateUser({ password: newPassEl.value });
+        if (error) throw error;
+        authMsg = "Password updated. You're logged in.";
+        authMode = "login";
+      }
+    } catch (e){
+      authError = e.message || String(e);
+    }
+    renderAuth();
+  });
+}
+
+// ---------------- Data layer ----------------
+
+async function loadTrips(){
+  const { data, error } = await supabase
+    .from("trips")
+    .select("*, flights(*, price_logs(*)), trip_collaborators(*)")
+    .order("created_at", { ascending: true });
+  if (error) { console.error(error); return []; }
+  for (const t of data){
+    (t.flights || []).sort((a,b) => a.position - b.position);
+    for (const f of t.flights || []) (f.price_logs || []).sort((a,b) => b.date.localeCompare(a.date));
+  }
+  return data;
+}
+
+async function refresh(){
+  trips = await loadTrips();
+  if (!trips.find(t => t.id === activeTripId)) activeTripId = trips[0]?.id || null;
+  render();
+}
+
+async function createTrip(fields){
+  const { data, error } = await supabase.from("trips").insert({
+    owner_id: session.user.id,
+    title: fields.title || "New trip",
+  }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function updateTrip(id, patch){
+  const { error } = await supabase.from("trips").update(patch).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deleteTrip(id){
+  const { error } = await supabase.from("trips").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function addCollaborator(tripId, email){
+  const { error } = await supabase.from("trip_collaborators").insert({
+    trip_id: tripId, email: email.trim().toLowerCase(), invited_by: session.user.id
+  });
+  if (error) alert(error.message);
+}
+
+async function removeCollaborator(id){
+  const { error } = await supabase.from("trip_collaborators").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function createFlight(tripId, fields){
+  const siblingPositions = (trips.find(t => t.id === tripId)?.flights || [])
+    .filter(f => (f.leg || null) === (fields.leg || null))
+    .map(f => f.position);
+  const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
+  const { error } = await supabase.from("flights").insert({
+    trip_id: tripId, label: fields.label, leg: fields.leg || null, url: fields.url,
+    currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
+    alert_below: fields.alertBelow, notes: fields.notes, position
+  });
+  if (error) alert(error.message);
+}
+
+async function updateFlight(id, patch){
+  const { error } = await supabase.from("flights").update(patch).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deleteFlight(id){
+  const { error } = await supabase.from("flights").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function moveFlightToTrip(flightId, newTripId){
+  const siblingPositions = (trips.find(t => t.id === newTripId)?.flights || []).map(f => f.position);
+  const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
+  const { error } = await supabase.from("flights").update({ trip_id: newTripId, leg: null, position }).eq("id", flightId);
+  if (error) alert(error.message);
+}
+
+async function reorderFlight(flight, siblingsSameLeg, targetIndex){
+  // siblingsSameLeg: array of flights (excluding `flight`) in the same trip+leg, sorted by position
+  let before = siblingsSameLeg[targetIndex - 1];
+  let after = siblingsSameLeg[targetIndex];
+  let newPos;
+  if (!before && !after) newPos = 0;
+  else if (!before) newPos = after.position - 1000;
+  else if (!after) newPos = before.position + 1000;
+  else {
+    newPos = (before.position + after.position) / 2;
+    if (after.position - before.position < 1e-6){
+      // renumber this leg's list, then retry
+      const all = [...siblingsSameLeg];
+      all.splice(targetIndex, 0, flight);
+      for (let i = 0; i < all.length; i++){
+        await supabase.from("flights").update({ position: i * 1000 }).eq("id", all[i].id);
+      }
+      return;
+    }
+  }
+  const { error } = await supabase.from("flights").update({ position: newPos }).eq("id", flight.id);
+  if (error) alert(error.message);
+}
+
+async function addPriceLog(flightId, date, price){
+  const { error } = await supabase.from("price_logs").insert({ flight_id: flightId, date, price });
+  if (error) alert(error.message);
+}
+async function updatePriceLog(id, patch){
+  const { error } = await supabase.from("price_logs").update(patch).eq("id", id);
+  if (error) alert(error.message);
+}
+async function deletePriceLog(id){
+  const { error } = await supabase.from("price_logs").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+// Bulk-create trips (with nested flights/price_logs) from a plain JS array
+// shaped like `trips` rows with `.flights[].price_logs[]` attached. Used by
+// both the one-time localStorage migration and JSON "Import" (new trips).
+async function bulkCreateTrips(tripBlobs){
+  const tripRows = [], flightRows = [], logRows = [];
+  for (const t of tripBlobs){
+    const tripId = uid();
+    tripRows.push({
+      id: tripId, owner_id: session.user.id, title: t.title || "Imported trip",
+      travel_start: t.travel_start || null, travel_end: t.travel_end || null,
+      notes: t.notes || null, attendees: t.attendees || []
+    });
+    const byLeg = {};
+    for (const f of (t.flights || [])){
+      const legKey = f.leg || "_";
+      byLeg[legKey] = (byLeg[legKey] || 0);
+      const flightId = uid();
+      flightRows.push({
+        id: flightId, trip_id: tripId, label: f.label, leg: f.leg || null,
+        url: f.url, currency: f.currency || "USD",
+        paid_cash: f.paidCash ?? f.paid_cash ?? null,
+        paid_points: f.paidPoints ?? f.paid_points ?? null,
+        alert_below: f.alertBelow ?? f.alert_below ?? null,
+        notes: f.notes || null, position: byLeg[legKey]
+      });
+      byLeg[legKey] += 1000;
+      for (const l of (f.priceLog || f.price_logs || [])){
+        logRows.push({ id: uid(), flight_id: flightId, date: l.date, price: l.price });
+      }
+    }
+  }
+  if (tripRows.length){ const { error } = await supabase.from("trips").insert(tripRows); if (error) throw error; }
+  if (flightRows.length){ const { error } = await supabase.from("flights").insert(flightRows); if (error) throw error; }
+  if (logRows.length){ const { error } = await supabase.from("price_logs").insert(logRows); if (error) throw error; }
+}
+
+async function importFromLocalStorage(){
+  let raw;
+  try { raw = JSON.parse(localStorage.getItem(OLD_LOCAL_KEY)); } catch { raw = null; }
+  if (!raw || !Array.isArray(raw.groups) || !raw.groups.length){
+    alert("No saved browser data found to import.");
+    return;
+  }
+  const tripBlobs = raw.groups.map(g => ({ title: g.title, flights: g.flights || [] }));
+  try {
+    await bulkCreateTrips(tripBlobs);
+    localStorage.setItem(MIGRATED_FLAG, "true");
+    await refresh();
+  } catch (e){
+    alert("Import failed (nothing was marked as migrated, so it's safe to retry): " + e.message);
+  }
+}
+
+// ---------------- Main app rendering ----------------
+
+function renderCard(trip, f){
+  const cur = f.currency || "USD";
+  const moveOptions = trips.filter(t => t.id !== trip.id)
+    .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
+  const metaBits = [`Paid <b>${paidText(f)}</b>`];
+  if (f.alert_below != null) metaBits.push(`Alert below <b>${fmtCash(f.alert_below, cur)}</b>`);
+
+  const entries = f.price_logs || [];
   let histHTML;
   if (!entries.length){
     histHTML = `<p class="empty-hist">No checks logged yet.</p>`;
   } else {
-    const rows = entries.map((e, idx) => {
+    const rows = entries.map((e) => {
       let deltaHTML = '<span class="flat">·</span>';
-      if (f.paidCash != null){
-        const d = e.price - f.paidCash;
+      if (f.paid_cash != null){
+        const d = e.price - f.paid_cash;
         deltaHTML = d === 0 ? '<span class="flat">even</span>' :
           `<span class="${d<0?'down':'up'}">${d<0?'▼':'▲'} ${fmtCash(Math.abs(d),cur)}</span>`;
       }
       let statusTxt = "", statusCls = "";
-      if (f.alertBelow != null && e.price <= f.alertBelow){ statusTxt = "BELOW ALERT"; statusCls = "status-alert"; }
-      return `<tr data-log-row="${f.id}-${idx}">
+      if (f.alert_below != null && e.price <= f.alert_below){ statusTxt = "BELOW ALERT"; statusCls = "status-alert"; }
+      return `<tr data-log-row="${e.id}">
         <td>${esc(e.date)}</td>
         <td>${fmtCash(e.price, cur)}</td>
         <td>${deltaHTML}</td>
         <td>${statusTxt ? `<span class="status ${statusCls}">${statusTxt}</span>` : ""}</td>
         <td>
-          <span class="btn-link" data-edit-log="${f.id}" data-idx="${idx}">edit</span>
-          <span class="btn-link" data-del-log="${f.id}" data-idx="${idx}">remove</span>
+          <span class="btn-link" data-edit-log="${e.id}" data-flight="${f.id}">edit</span>
+          <span class="btn-link" data-del-log="${e.id}">remove</span>
         </td>
       </tr>`;
     }).join("");
@@ -186,15 +486,18 @@ function renderCard(f, currentGroupId){
   }
 
   return `
-  <div class="card" data-card="${f.id}">
-    <h3>${esc(f.label)}</h3>
+  <div class="card" data-card="${f.id}" data-leg="${f.leg || ""}" data-trip="${trip.id}">
+    <div class="card-title-row">
+      <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
+      <h3>${esc(f.label)}</h3>
+    </div>
     <p class="meta-line">${metaBits.join(" &middot; ")}</p>
     ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
     <div class="row">
       <a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener">Check price →</a>
       <button class="btn btn-ghost btn-sm" data-edit-flight="${f.id}">Edit</button>
       <button class="btn-link" data-del-flight="${f.id}">delete flight</button>
-      ${moveOptions ? `<select data-move-flight="${f.id}" title="Move to group">
+      ${moveOptions ? `<select data-move-flight="${f.id}" title="Move to trip">
         <option value="">Move to…</option>
         ${moveOptions}
       </select>` : ""}
@@ -245,39 +548,7 @@ function renderEditForm(f){
   </div>`;
 }
 
-function renderGroup(g){
-  const out = g.flights.filter(f => f.leg === "outbound");
-  const ret = g.flights.filter(f => f.leg === "return");
-  const solo = g.flights.filter(f => !f.leg);
-
-  let pairsHTML = "";
-  const pairCount = Math.max(out.length, ret.length);
-  for (let i = 0; i < pairCount; i++){
-    pairsHTML += `<div class="pair-row">
-      <div>${out[i] ? `<div class="leg-tag">Outbound</div>${renderCard(out[i], g.id)}` : ""}</div>
-      <div>${ret[i] ? `<div class="leg-tag">Return</div>${renderCard(ret[i], g.id)}` : ""}</div>
-    </div>`;
-  }
-  const soloHTML = solo.length
-    ? `<div class="solo-list">${solo.map(f => renderCard(f, g.id)).join("")}</div>` : "";
-
-  return `
-  <div class="group" data-group="${g.id}">
-    <div class="group-head">
-      <span class="group-title" data-title="${g.id}">${esc(g.title)}</span>
-      <div class="group-actions">
-        <button class="btn btn-ghost btn-sm" data-rename-group="${g.id}">Rename</button>
-        <button class="btn btn-ghost btn-sm" data-add-flight-toggle="${g.id}">+ Add flight</button>
-        <button class="btn-link" data-del-group="${g.id}">delete group</button>
-      </div>
-    </div>
-    <div data-add-flight-form="${g.id}"></div>
-    ${pairsHTML}${soloHTML}
-    ${!g.flights.length ? `<p class="empty-hist">No flights in this group yet.</p>` : ""}
-  </div>`;
-}
-
-function addFlightFormHTML(groupId){
+function addFlightFormHTML(tripId){
   return `
   <div class="edit-grid">
     <label class="field span2">Label
@@ -309,213 +580,328 @@ function addFlightFormHTML(groupId){
       <textarea data-nf-notes placeholder="optional"></textarea>
     </label>
     <div class="span2 row" style="margin:0">
-      <button class="btn btn-sm" data-nf-save="${groupId}">Add flight</button>
-      <button class="btn-link" data-nf-cancel="${groupId}">cancel</button>
+      <button class="btn btn-sm" data-nf-save="${tripId}">Add flight</button>
+      <button class="btn-link" data-nf-cancel="${tripId}">cancel</button>
+    </div>
+  </div>`;
+}
+
+function renderTripPanel(trip){
+  const flights = trip.flights || [];
+  const out = flights.filter(f => f.leg === "outbound");
+  const ret = flights.filter(f => f.leg === "return");
+  const solo = flights.filter(f => !f.leg);
+
+  let pairsHTML = "";
+  const pairCount = Math.max(out.length, ret.length);
+  for (let i = 0; i < pairCount; i++){
+    pairsHTML += `<div class="pair-row">
+      <div class="leg-col" data-leg-list="outbound" data-trip="${trip.id}">
+        ${out[i] ? `<div class="leg-tag">Outbound</div>${renderCard(trip, out[i])}` : ""}
+      </div>
+      <div class="leg-col" data-leg-list="return" data-trip="${trip.id}">
+        ${ret[i] ? `<div class="leg-tag">Return</div>${renderCard(trip, ret[i])}` : ""}
+      </div>
+    </div>`;
+  }
+  const soloHTML = `<div class="solo-list" data-leg-list="" data-trip="${trip.id}">
+    ${solo.map(f => renderCard(trip, f)).join("")}
+  </div>`;
+
+  const totalCash = flights.reduce((s,f) => s + (f.paid_cash || 0), 0);
+  const totalPoints = flights.reduce((s,f) => s + (f.paid_points || 0), 0);
+  const totalParts = [];
+  if (totalCash) totalParts.push(fmtCash(totalCash));
+  if (totalPoints) totalParts.push(fmtPoints(totalPoints));
+
+  const isOwner = trip.owner_id === session.user.id;
+  const collabs = trip.trip_collaborators || [];
+
+  const metaParts = [];
+  if (trip.travel_start || trip.travel_end){
+    metaParts.push(`<div><b>Dates:</b> ${esc(trip.travel_start || "?")} → ${esc(trip.travel_end || "?")}</div>`);
+  }
+  if (trip.notes) metaParts.push(`<div><b>Notes:</b> ${esc(trip.notes)}</div>`);
+  if ((trip.attendees || []).length){
+    metaParts.push(`<div><b>Attendees:</b> <span class="tags">${trip.attendees.map(a=>`<span class="tag">${esc(a)}</span>`).join("")}</span></div>`);
+  }
+
+  return `
+    <div class="panel" data-panel="${trip.id}">
+      <div class="panel-head">
+        <h2 data-title="${trip.id}">${esc(trip.title)}</h2>
+        <button class="btn btn-ghost btn-sm" data-rename-trip="${trip.id}">Rename</button>
+        <button class="btn btn-ghost btn-sm" data-edit-meta="${trip.id}">Trip details</button>
+        <button class="btn btn-ghost btn-sm" data-add-flight-toggle="${trip.id}">+ Add flight</button>
+        <button class="btn btn-ghost btn-sm" data-search-trip="${trip.id}">Search this trip →</button>
+        <button class="btn-link" data-del-trip="${trip.id}">delete trip</button>
+      </div>
+
+      ${totalParts.length ? `<div class="totals">Total paid: ${totalParts.join(" + ")}</div>` : ""}
+
+      ${metaParts.length ? `<div class="meta-block">${metaParts.join("")}</div>` : ""}
+      <div data-meta-form="${trip.id}"></div>
+
+      <div class="share-block">
+        <div class="collab-list">
+          ${collabs.map(c => `<span class="collab-chip">${esc(c.email)}
+            ${isOwner ? `<span class="btn-link" data-remove-collab="${c.id}">×</span>` : ""}</span>`).join("")}
+        </div>
+        ${isOwner ? `<div class="row" style="margin-top:6px">
+          <input type="email" placeholder="Invite by email" data-invite-email="${trip.id}">
+          <button class="btn btn-ghost btn-sm" data-invite-save="${trip.id}">Invite</button>
+        </div>` : `<p class="empty-hist">Shared with you by ${esc(trip.owner_email || "the trip owner")}.</p>`}
+      </div>
+
+      <div data-add-flight-form="${trip.id}"></div>
+      ${pairsHTML}${soloHTML}
+      ${!flights.length ? `<p class="empty-hist">No flights in this trip yet.</p>` : ""}
+    </div>`;
+}
+
+function renderMetaForm(trip){
+  return `
+  <div class="edit-grid" data-meta-edit="${trip.id}">
+    <label class="field">Travel start
+      <input type="date" data-m-start value="${trip.travel_start || ""}">
+    </label>
+    <label class="field">Travel end
+      <input type="date" data-m-end value="${trip.travel_end || ""}">
+    </label>
+    <label class="field span2">Attendees (comma-separated)
+      <input type="text" data-m-attendees value="${esc((trip.attendees||[]).join(", "))}">
+    </label>
+    <label class="field span2">Notes
+      <textarea data-m-notes>${esc(trip.notes || "")}</textarea>
+    </label>
+    <div class="span2 row" style="margin:0">
+      <button class="btn btn-sm" data-meta-save="${trip.id}">Save</button>
+      <button class="btn-link" data-meta-cancel="${trip.id}">cancel</button>
     </div>
   </div>`;
 }
 
 function render(){
-  const groupsDiv = document.getElementById("groups");
-  document.getElementById("emptyState").hidden = data.groups.length > 0;
-  groupsDiv.innerHTML = data.groups.map(renderGroup).join("");
-  wireEvents();
+  if (!session){ renderAuth(); return; }
+
+  document.getElementById("subtext").textContent =
+    "Sites like Southwest block automated price lookups, so check prices yourself and log what you see.";
+
+  const activeTrip = trips.find(t => t.id === activeTripId);
+  const showImport = !!localStorage.getItem(OLD_LOCAL_KEY) && !localStorage.getItem(MIGRATED_FLAG);
+
+  root.innerHTML = `
+    <div class="toolbar">
+      <span style="color:var(--muted);font-size:13px">${esc(session.user.email)}</span>
+      <button class="btn btn-ghost btn-sm" id="logoutBtn">Log out</button>
+      <div class="spacer"></div>
+      ${showImport ? `<button class="btn btn-ghost" id="importLocalBtn">Import from this browser's saved data</button>` : ""}
+      <button class="btn btn-ghost" id="exportBtn">Export all</button>
+      <button class="btn btn-ghost" id="importBtn">Import JSON</button>
+      <input type="file" id="importFile" accept="application/json" hidden>
+    </div>
+
+    <div class="tabs">
+      ${trips.map(t => `<button class="tab ${t.id===activeTripId?'active':''}" data-tab="${t.id}">${esc(t.title)}</button>`).join("")}
+      <button class="tab tab-new" id="newTripTab" title="New trip">+</button>
+    </div>
+
+    ${activeTrip ? renderTripPanel(activeTrip) :
+      `<div class="empty-state">No trips yet. Click "+" to add your first one, or import saved data above.</div>`}
+  `;
+
+  wireEvents(activeTrip);
 }
 
-function wireEvents(){
-  // search all
-  document.getElementById("searchAllBtn").onclick = () => {
-    const urls = data.groups.flatMap(g => g.flights.map(f => f.url)).filter(Boolean);
-    urls.forEach(u => window.open(u, "_blank"));
-  };
+function wireEvents(activeTrip){
+  document.getElementById("logoutBtn").onclick = async () => { await supabase.auth.signOut(); };
 
-  // export data
+  const importLocalBtn = document.getElementById("importLocalBtn");
+  if (importLocalBtn) importLocalBtn.onclick = importFromLocalStorage;
+
   document.getElementById("exportBtn").onclick = () => {
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ groups: trips.map(t => ({
+      title: t.title, travel_start: t.travel_start, travel_end: t.travel_end,
+      notes: t.notes, attendees: t.attendees,
+      flights: (t.flights||[]).map(f => ({
+        label: f.label, leg: f.leg, url: f.url, currency: f.currency,
+        paidCash: f.paid_cash, paidPoints: f.paid_points, alertBelow: f.alert_below,
+        notes: f.notes, priceLog: (f.price_logs||[]).map(l => ({date: l.date, price: l.price}))
+      }))
+    })) }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `flight-tracker-backup-${new Date().toISOString().slice(0,10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    a.href = url; a.download = `flight-tracker-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click(); URL.revokeObjectURL(url);
   };
 
-  // import data
-  document.getElementById("importBtn").onclick = () => {
-    document.getElementById("importFile").click();
-  };
+  document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
   document.getElementById("importFile").onchange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       let parsed;
       try { parsed = JSON.parse(reader.result); }
       catch { alert("That file isn't valid JSON."); return; }
       if (!parsed || !Array.isArray(parsed.groups)) { alert("That file doesn't look like a flight-tracker backup."); return; }
-      if (!confirm("Import this file? It will replace everything currently in the dashboard.")) return;
-      data = parsed;
-      save(data);
-      render();
+      if (!confirm(`Import ${parsed.groups.length} trip(s) from this file as new trip(s)?`)) return;
+      try { await bulkCreateTrips(parsed.groups); await refresh(); }
+      catch (err){ alert("Import failed: " + err.message); }
     };
     reader.readAsText(file);
     e.target.value = "";
   };
 
-  // new group
-  document.getElementById("newGroupToggle").onclick = () => {
-    document.getElementById("newGroupForm").hidden = false;
-    document.getElementById("newGroupTitle").focus();
-  };
-  document.getElementById("newGroupCancel").onclick = () => {
-    document.getElementById("newGroupForm").hidden = true;
-    document.getElementById("newGroupTitle").value = "";
-  };
-  document.getElementById("newGroupSave").onclick = () => {
-    const titleInput = document.getElementById("newGroupTitle");
-    const title = titleInput.value.trim();
-    if (!title) return;
-    data.groups.push({ id: "grp-" + uid(), title, flights: [] });
-    save(data);
-    titleInput.value = "";
-    document.getElementById("newGroupForm").hidden = true;
-    render();
-  };
-
-  // rename group (inline)
-  document.querySelectorAll("[data-rename-group]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const gid = btn.dataset.renameGroup;
-      const span = document.querySelector(`[data-title="${gid}"]`);
-      const g = data.groups.find(x => x.id === gid);
-      const input = document.createElement("input");
-      input.type = "text"; input.className = "group-title-input"; input.value = g.title;
-      span.replaceWith(input);
-      input.focus(); input.select();
-      const commit = () => {
-        const val = input.value.trim();
-        if (val) { g.title = val; save(data); }
-        render();
-      };
-      input.addEventListener("keydown", e => {
-        if (e.key === "Enter") commit();
-        if (e.key === "Escape") render();
-      });
-      input.addEventListener("blur", commit);
-    });
+  document.querySelectorAll("[data-tab]").forEach(btn => {
+    btn.addEventListener("click", () => { activeTripId = btn.dataset.tab; render(); });
   });
 
-  // delete group
-  document.querySelectorAll("[data-del-group]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const gid = btn.dataset.delGroup;
-      const g = data.groups.find(x => x.id === gid);
-      if (!confirm(`Delete group "${g.title}" and all its flights?`)) return;
-      data.groups = data.groups.filter(x => x.id !== gid);
-      save(data);
-      render();
-    });
+  document.getElementById("newTripTab").onclick = async () => {
+    const title = prompt("Trip title (e.g. Denver Trip):");
+    if (!title || !title.trim()) return;
+    const t = await createTrip({ title: title.trim() });
+    if (t) { activeTripId = t.id; }
+    await refresh();
+  };
+
+  if (!activeTrip) return;
+
+  document.querySelector(`[data-rename-trip="${activeTrip.id}"]`).addEventListener("click", () => {
+    const h2 = document.querySelector(`[data-title="${activeTrip.id}"]`);
+    const input = document.createElement("input");
+    input.type = "text"; input.className = "title-input"; input.value = activeTrip.title;
+    h2.replaceWith(input);
+    input.focus(); input.select();
+    const commit = async () => {
+      const val = input.value.trim();
+      if (val && val !== activeTrip.title) await updateTrip(activeTrip.id, { title: val });
+      await refresh();
+    };
+    input.addEventListener("keydown", e => { if (e.key === "Enter") commit(); if (e.key === "Escape") render(); });
+    input.addEventListener("blur", commit);
   });
 
-  // add-flight toggle
-  document.querySelectorAll("[data-add-flight-toggle]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const gid = btn.dataset.addFlightToggle;
-      const holder = document.querySelector(`[data-add-flight-form="${gid}"]`);
-      holder.innerHTML = holder.innerHTML ? "" : addFlightFormHTML(gid);
-      wireAddFlightForm(gid);
-    });
+  document.querySelector(`[data-del-trip="${activeTrip.id}"]`).addEventListener("click", async () => {
+    if (!confirm(`Delete trip "${activeTrip.title}" and all its flights?`)) return;
+    await deleteTrip(activeTrip.id);
+    activeTripId = null;
+    await refresh();
   });
 
-  // per-flight edit toggle
+  document.querySelector(`[data-search-trip="${activeTrip.id}"]`).addEventListener("click", () => {
+    (activeTrip.flights || []).forEach(f => f.url && window.open(f.url, "_blank"));
+  });
+
+  document.querySelector(`[data-edit-meta="${activeTrip.id}"]`).addEventListener("click", () => {
+    const holder = document.querySelector(`[data-meta-form="${activeTrip.id}"]`);
+    holder.innerHTML = holder.innerHTML ? "" : renderMetaForm(activeTrip);
+    const saveBtn = document.querySelector(`[data-meta-save="${activeTrip.id}"]`);
+    if (!saveBtn) return;
+    saveBtn.addEventListener("click", async () => {
+      const start = holder.querySelector(`[data-m-start]`).value || null;
+      const end = holder.querySelector(`[data-m-end]`).value || null;
+      const attendeesRaw = holder.querySelector(`[data-m-attendees]`).value;
+      const attendees = attendeesRaw.split(",").map(s=>s.trim()).filter(Boolean);
+      const notes = holder.querySelector(`[data-m-notes]`).value.trim();
+      await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, attendees, notes });
+      await refresh();
+    });
+    document.querySelector(`[data-meta-cancel="${activeTrip.id}"]`)?.addEventListener("click", render);
+  });
+
+  const inviteBtn = document.querySelector(`[data-invite-save="${activeTrip.id}"]`);
+  if (inviteBtn) inviteBtn.addEventListener("click", async () => {
+    const input = document.querySelector(`[data-invite-email="${activeTrip.id}"]`);
+    const email = input.value.trim();
+    if (!email) return;
+    await addCollaborator(activeTrip.id, email);
+    await refresh();
+  });
+
+  document.querySelectorAll("[data-remove-collab]").forEach(el => {
+    el.addEventListener("click", async () => { await removeCollaborator(el.dataset.removeCollab); await refresh(); });
+  });
+
+  document.querySelector(`[data-add-flight-toggle="${activeTrip.id}"]`).addEventListener("click", () => {
+    const holder = document.querySelector(`[data-add-flight-form="${activeTrip.id}"]`);
+    holder.innerHTML = holder.innerHTML ? "" : addFlightFormHTML(activeTrip.id);
+    wireAddFlightForm(activeTrip.id);
+  });
+
   document.querySelectorAll("[data-edit-flight]").forEach(btn => {
     btn.addEventListener("click", () => {
       const fid = btn.dataset.editFlight;
       const { flight } = findFlight(fid);
       const card = document.querySelector(`[data-card="${fid}"]`);
-      const formHTML = renderEditForm(flight);
       const wrap = document.createElement("div");
-      wrap.innerHTML = formHTML;
+      wrap.innerHTML = renderEditForm(flight);
       card.replaceWith(wrap.firstElementChild);
       const form = document.querySelector(`[data-edit-form="${fid}"]`);
       form.querySelector("[data-f-label]").value = flight.label || "";
       form.querySelector("[data-f-leg]").value = flight.leg || "";
       form.querySelector("[data-f-currency]").value = flight.currency || "USD";
       form.querySelector("[data-f-url]").value = flight.url || "";
-      form.querySelector("[data-f-paidcash]").value = flight.paidCash ?? "";
-      form.querySelector("[data-f-paidpoints]").value = flight.paidPoints ?? "";
-      form.querySelector("[data-f-alert]").value = flight.alertBelow ?? "";
+      form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
+      form.querySelector("[data-f-paidpoints]").value = flight.paid_points ?? "";
+      form.querySelector("[data-f-alert]").value = flight.alert_below ?? "";
       form.querySelector("[data-f-notes]").value = flight.notes || "";
 
-      form.querySelector("[data-save-flight]").addEventListener("click", () => {
-        flight.label = form.querySelector("[data-f-label]").value.trim() || flight.label;
-        flight.leg = form.querySelector("[data-f-leg]").value || null;
-        flight.currency = form.querySelector("[data-f-currency]").value.trim() || "USD";
-        flight.url = form.querySelector("[data-f-url]").value.trim();
+      form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
         const pp = form.querySelector("[data-f-paidpoints]").value;
         const ab = form.querySelector("[data-f-alert]").value;
-        flight.paidCash = pc === "" ? null : parseFloat(pc);
-        flight.paidPoints = pp === "" ? null : parseFloat(pp);
-        flight.alertBelow = ab === "" ? null : parseFloat(ab);
-        flight.notes = form.querySelector("[data-f-notes]").value.trim();
-        save(data);
-        render();
+        await updateFlight(fid, {
+          label: form.querySelector("[data-f-label]").value.trim() || flight.label,
+          leg: form.querySelector("[data-f-leg]").value || null,
+          currency: form.querySelector("[data-f-currency]").value.trim() || "USD",
+          url: form.querySelector("[data-f-url]").value.trim(),
+          paid_cash: pc === "" ? null : parseFloat(pc),
+          paid_points: pp === "" ? null : parseFloat(pp),
+          alert_below: ab === "" ? null : parseFloat(ab),
+          notes: form.querySelector("[data-f-notes]").value.trim(),
+        });
+        await refresh();
       });
       form.querySelector("[data-cancel-flight]").addEventListener("click", render);
     });
   });
 
-  // move flight to another group
   document.querySelectorAll("[data-move-flight]").forEach(sel => {
-    sel.addEventListener("change", () => {
-      const fid = sel.dataset.moveFlight;
-      const targetId = sel.value;
-      if (!targetId) return;
-      const { group: fromGroup, flight } = findFlight(fid);
-      const toGroup = data.groups.find(g => g.id === targetId);
-      fromGroup.flights = fromGroup.flights.filter(f => f.id !== fid);
-      toGroup.flights.push(flight);
-      save(data);
-      render();
+    sel.addEventListener("change", async () => {
+      if (!sel.value) return;
+      await moveFlightToTrip(sel.dataset.moveFlight, sel.value);
+      await refresh();
     });
   });
 
-  // delete flight
   document.querySelectorAll("[data-del-flight]").forEach(btn => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const fid = btn.dataset.delFlight;
-      const { group, flight } = findFlight(fid);
+      const { flight } = findFlight(fid);
       if (!confirm(`Delete flight "${flight.label}"?`)) return;
-      group.flights = group.flights.filter(f => f.id !== fid);
-      save(data);
-      render();
+      await deleteFlight(fid);
+      await refresh();
     });
   });
 
-  // log price
   document.querySelectorAll("[data-save-log]").forEach(btn => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const fid = btn.dataset.saveLog;
       const input = document.querySelector(`[data-log-input="${fid}"]`);
       const val = parseFloat(input.value);
       if (isNaN(val)) return;
-      const { flight } = findFlight(fid);
-      flight.priceLog = flight.priceLog || [];
-      flight.priceLog.push({ date: new Date().toISOString().slice(0,10), price: val });
-      save(data);
-      render();
+      await addPriceLog(fid, new Date().toISOString().slice(0,10), val);
+      await refresh();
     });
   });
 
-  // edit a logged price
   document.querySelectorAll("[data-edit-log]").forEach(el => {
     el.addEventListener("click", () => {
-      const fid = el.dataset.editLog, idx = +el.dataset.idx;
+      const logId = el.dataset.editLog, fid = el.dataset.flight;
       const { flight } = findFlight(fid);
-      const entries = flight.priceLog.slice().sort((a,b)=>b.date.localeCompare(a.date));
-      const target = entries[idx];
-      const tr = document.querySelector(`[data-log-row="${fid}-${idx}"]`);
+      const target = (flight.price_logs || []).find(l => l.id === logId);
+      const tr = document.querySelector(`[data-log-row="${logId}"]`);
       const editTr = document.createElement("tr");
       editTr.innerHTML = `
         <td><input type="date" data-le-date></td>
@@ -527,38 +913,32 @@ function wireEvents(){
       tr.replaceWith(editTr);
       editTr.querySelector("[data-le-date]").value = target.date;
       editTr.querySelector("[data-le-price]").value = target.price;
-      editTr.querySelector("[data-le-save]").addEventListener("click", () => {
+      editTr.querySelector("[data-le-save]").addEventListener("click", async () => {
         const newDate = editTr.querySelector("[data-le-date]").value;
         const newPrice = parseFloat(editTr.querySelector("[data-le-price]").value);
-        if (newDate) target.date = newDate;
-        if (!isNaN(newPrice)) target.price = newPrice;
-        save(data);
-        render();
+        const patch = {};
+        if (newDate) patch.date = newDate;
+        if (!isNaN(newPrice)) patch.price = newPrice;
+        await updatePriceLog(logId, patch);
+        await refresh();
       });
       editTr.querySelector("[data-le-cancel]").addEventListener("click", render);
     });
   });
 
-  // delete a logged price
   document.querySelectorAll("[data-del-log]").forEach(el => {
-    el.addEventListener("click", () => {
-      const fid = el.dataset.delLog, idx = +el.dataset.idx;
-      const { flight } = findFlight(fid);
-      const entries = flight.priceLog.slice().sort((a,b)=>b.date.localeCompare(a.date));
-      const target = entries[idx];
-      flight.priceLog = flight.priceLog.filter(e => e !== target);
-      save(data);
-      render();
-    });
+    el.addEventListener("click", async () => { await deletePriceLog(el.dataset.delLog); await refresh(); });
   });
+
+  wireDragEvents(activeTrip);
 }
 
-function wireAddFlightForm(groupId){
-  const holder = document.querySelector(`[data-add-flight-form="${groupId}"]`);
+function wireAddFlightForm(tripId){
+  const holder = document.querySelector(`[data-add-flight-form="${tripId}"]`);
   const saveBtn = holder.querySelector("[data-nf-save]");
   const cancelBtn = holder.querySelector("[data-nf-cancel]");
   if (!saveBtn) return;
-  saveBtn.addEventListener("click", () => {
+  saveBtn.addEventListener("click", async () => {
     const label = holder.querySelector("[data-nf-label]").value.trim();
     const url = holder.querySelector("[data-nf-url]").value.trim();
     if (!label || !url) { alert("Label and URL are required."); return; }
@@ -568,21 +948,78 @@ function wireAddFlightForm(groupId){
     const pp = holder.querySelector("[data-nf-paidpoints]").value;
     const ab = holder.querySelector("[data-nf-alert]").value;
     const notes = holder.querySelector("[data-nf-notes]").value.trim();
-    const g = data.groups.find(x => x.id === groupId);
-    g.flights.push({
-      id: "fl-" + uid(), label, leg, url, currency,
+    await createFlight(tripId, {
+      label, leg, url, currency,
       paidCash: pc === "" ? null : parseFloat(pc),
       paidPoints: pp === "" ? null : parseFloat(pp),
       alertBelow: ab === "" ? null : parseFloat(ab),
-      notes, priceLog: []
+      notes
     });
-    save(data);
-    render();
+    await refresh();
   });
   cancelBtn.addEventListener("click", () => { holder.innerHTML = ""; });
 }
 
-render();
+// ---------------- Drag and drop ----------------
+
+let dragFlightId = null;
+
+function wireDragEvents(activeTrip){
+  document.querySelectorAll("[data-drag-handle]").forEach(handle => {
+    handle.addEventListener("dragstart", (e) => {
+      dragFlightId = handle.dataset.dragHandle;
+      e.dataTransfer.effectAllowed = "move";
+    });
+  });
+
+  document.querySelectorAll(".card").forEach(card => {
+    card.addEventListener("dragover", (e) => { e.preventDefault(); card.classList.add("drag-over"); });
+    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      if (!dragFlightId || dragFlightId === card.dataset.card) return;
+      const targetLeg = card.dataset.leg || null;
+      const { flight: dragged } = findFlight(dragFlightId);
+      if ((dragged.leg || null) !== targetLeg) return; // no cross-leg drag for now
+      const siblings = (activeTrip.flights || [])
+        .filter(f => f.id !== dragFlightId && (f.leg || null) === targetLeg)
+        .sort((a,b) => a.position - b.position);
+      const targetIndex = siblings.findIndex(f => f.id === card.dataset.card);
+      await reorderFlight(dragged, siblings, targetIndex);
+      await refresh();
+    });
+  });
+
+  document.querySelectorAll("[data-leg-list]").forEach(list => {
+    list.addEventListener("dragover", (e) => e.preventDefault());
+    list.addEventListener("drop", async (e) => {
+      if (e.target !== list) return; // let card-level drop handlers take it
+      e.preventDefault();
+      if (!dragFlightId) return;
+      const targetLeg = list.dataset.legList || null;
+      const { flight: dragged } = findFlight(dragFlightId);
+      if ((dragged.leg || null) !== targetLeg) return;
+      const siblings = (activeTrip.flights || [])
+        .filter(f => f.id !== dragFlightId && (f.leg || null) === targetLeg)
+        .sort((a,b) => a.position - b.position);
+      await reorderFlight(dragged, siblings, siblings.length);
+      await refresh();
+    });
+  });
+}
+
+// ---------------- Init ----------------
+
+supabase.auth.onAuthStateChange((event, newSession) => {
+  if (event === "PASSWORD_RECOVERY"){ authMode = "reset"; render(); return; }
+  session = newSession;
+  if (session) refresh(); else render();
+});
+
+const { data: { session: initSession } } = await supabase.auth.getSession();
+session = initSession;
+if (session) refresh(); else render();
 </script>
 </body>
 </html>
