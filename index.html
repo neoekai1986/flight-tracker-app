@@ -128,7 +128,13 @@
   <div id="root"></div>
 
 <script type="module">
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+// jsDelivr primary, esm.sh fallback — some networks/CDN edges fail one or the other.
+let createClient;
+try {
+  ({ createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm'));
+} catch {
+  ({ createClient } = await import('https://esm.sh/@supabase/supabase-js@2'));
+}
 
 // These are intentionally public (standard Supabase client pattern) —
 // Row Level Security is what actually protects the data.
