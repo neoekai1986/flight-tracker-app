@@ -786,11 +786,11 @@ function renderTripPanel(trip){
       </div>
 
       <div data-add-flight-form="${trip.id}"></div>
+      <div data-add-rental-form="${trip.id}"></div>
       ${flights.length ? `<div class="section-head">Flights</div>` : ""}
       ${pairsHTML}${soloHTML}
       ${!flights.length ? `<p class="empty-hist">No flights in this trip yet.</p>` : ""}
 
-      <div data-add-rental-form="${trip.id}"></div>
       ${rentals.length ? `<div class="section-head">Rentals</div>
         <div class="solo-list" data-rental-list="${trip.id}">
           ${rentals.map(r => renderRentalCard(trip, r)).join("")}
