@@ -666,7 +666,7 @@ function renderEditForm(f){
   </div>`;
 }
 
-function addFlightFormHTML(tripId){
+function addFlightFormHTML(tripId, trip){
   return `
   <div class="edit-grid">
     <label class="field span2">URL (paste a Southwest/Kayak link — airports &amp; date auto-fill)
@@ -679,7 +679,7 @@ function addFlightFormHTML(tripId){
       <input type="text" data-nf-dest placeholder="DEN" maxlength="4" style="text-transform:uppercase">
     </label>
     <label class="field">Depart date
-      <input type="date" data-nf-date>
+      <input type="date" data-nf-date value="${trip?.travel_start || ""}">
     </label>
     <label class="field">Depart time
       <input type="time" data-nf-time>
@@ -865,8 +865,9 @@ function renderRentalCard(trip, r){
   </div>`;
 }
 
-function rentalFormHTML(prefix, idAttr){
+function rentalFormHTML(prefix, idAttr, defaults){
   const p = prefix; // "nr" (new) or "er" (edit)
+  const d = defaults || {};
   return `
   <div class="edit-grid" ${idAttr || ""}>
     <label class="field">Type
@@ -882,10 +883,10 @@ function rentalFormHTML(prefix, idAttr){
       <input type="text" data-${p}-url placeholder="optional">
     </label>
     <label class="field">Rental start
-      <input type="date" data-${p}-start>
+      <input type="date" data-${p}-start value="${d.rentalStart || ""}">
     </label>
     <label class="field">Rental end
-      <input type="date" data-${p}-end>
+      <input type="date" data-${p}-end value="${d.rentalEnd || ""}">
     </label>
     <label class="field">Free-cancel deadline
       <input type="date" data-${p}-cancelby>
@@ -1080,14 +1081,16 @@ function wireEvents(activeTrip){
 
   document.querySelector(`[data-add-flight-toggle="${activeTrip.id}"]`).addEventListener("click", () => {
     const holder = document.querySelector(`[data-add-flight-form="${activeTrip.id}"]`);
-    holder.innerHTML = holder.innerHTML ? "" : addFlightFormHTML(activeTrip.id);
+    holder.innerHTML = holder.innerHTML ? "" : addFlightFormHTML(activeTrip.id, activeTrip);
     wireAddFlightForm(activeTrip.id);
   });
 
   document.querySelector(`[data-add-rental-toggle="${activeTrip.id}"]`).addEventListener("click", () => {
     const holder = document.querySelector(`[data-add-rental-form="${activeTrip.id}"]`);
     if (holder.innerHTML){ holder.innerHTML = ""; return; }
-    holder.innerHTML = rentalFormHTML("nr");
+    holder.innerHTML = rentalFormHTML("nr", "", {
+      rentalStart: activeTrip.travel_start, rentalEnd: activeTrip.travel_end
+    });
     holder.querySelector("[data-nr-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
     holder.querySelector("[data-nr-save]").addEventListener("click", async () => {
       const label = holder.querySelector("[data-nr-label]").value.trim();
