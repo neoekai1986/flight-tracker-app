@@ -113,6 +113,10 @@
   .status{font-size:10.5px;letter-spacing:.1em;padding:2px 7px;border-radius:4px;
           border:1px solid var(--line);color:var(--muted);white-space:nowrap}
   .status-alert{color:var(--night);background:var(--good);border-color:var(--good);font-weight:600}
+  .status-warn{color:var(--night);background:var(--amber);border-color:var(--amber);font-weight:600}
+  .section-head{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);
+      font-family:'IBM Plex Mono',monospace;margin:22px 0 10px;display:flex;align-items:center;gap:10px}
+  .section-head::after{content:"";flex:1;border-top:1px solid var(--line)}
   .up{color:var(--bad)} .down{color:var(--good)} .flat{color:var(--muted)}
   .empty-hist{color:var(--muted);font-size:12.5px;margin-top:8px}
   .empty-state{background:var(--panel);border:1px dashed var(--line);border-radius:10px;
@@ -172,6 +176,62 @@ function findFlight(flightId){
     const f = (t.flights || []).find(fl => fl.id === flightId);
     if (f) return { trip: t, flight: f };
   }
+  return null;
+}
+
+function findRental(rentalId){
+  for (const t of trips) {
+    const r = (t.rentals || []).find(x => x.id === rentalId);
+    if (r) return { trip: t, rental: r };
+  }
+  return null;
+}
+
+// "2026-12-04" -> "Dec 4" (parsed as a plain date, no timezone shifting)
+function fmtShortDate(iso){
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+// "22:00" -> "10:00 PM"
+function fmtTime(t){
+  if (!t) return "";
+  const [h, m] = t.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 || 12;
+  return `${h12}:${String(m).padStart(2,"0")} ${ampm}`;
+}
+
+// Auto-generated flight title: "Dec 4 10:00 PM, BWI → DEN, 22,000 pts"
+// (date/time, depart airport → arrival airport, points or cash paid)
+function flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints){
+  if (!origin || !destination) return "";
+  const parts = [];
+  const when = [fmtShortDate(departDate), fmtTime(departTime)].filter(Boolean).join(" ");
+  if (when) parts.push(when);
+  parts.push(`${origin.toUpperCase()} → ${destination.toUpperCase()}`);
+  if (paidPoints != null && paidPoints !== "" && !isNaN(paidPoints)) parts.push(fmtPoints(paidPoints));
+  else if (paidCash != null && paidCash !== "" && !isNaN(paidCash)) parts.push(fmtCash(paidCash));
+  return parts.join(", ");
+}
+
+// Pull airports + date out of a pasted flight-search URL where possible.
+// Southwest puts them right in the query string; Kayak uses /flights/BWI-DEN/2026-12-04.
+function parseFlightUrl(url){
+  try {
+    const u = new URL(url);
+    const q = u.searchParams;
+    const sw = {
+      origin: q.get("originationAirportCode"),
+      destination: q.get("destinationAirportCode"),
+      departDate: q.get("departureDate"),
+    };
+    if (sw.origin && sw.destination) return sw;
+    const kayak = u.pathname.match(/\/flights\/([A-Z]{3})-([A-Z]{3})\/(\d{4}-\d{2}-\d{2})/i);
+    if (kayak) return { origin: kayak[1].toUpperCase(), destination: kayak[2].toUpperCase(), departDate: kayak[3] };
+  } catch {}
   return null;
 }
 
@@ -284,11 +344,12 @@ function renderAuth(){
 async function loadTrips(){
   const { data, error } = await supabase
     .from("trips")
-    .select("*, flights(*, price_logs(*)), trip_collaborators(*)")
+    .select("*, flights(*, price_logs(*)), rentals(*), trip_collaborators(*)")
     .order("created_at", { ascending: true });
   if (error) { console.error(error); return []; }
   for (const t of data){
     (t.flights || []).sort((a,b) => a.position - b.position);
+    (t.rentals || []).sort((a,b) => a.position - b.position);
     for (const f of t.flights || []) (f.price_logs || []).sort((a,b) => b.date.localeCompare(a.date));
   }
   return data;
@@ -338,9 +399,33 @@ async function createFlight(tripId, fields){
   const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
   const { error } = await supabase.from("flights").insert({
     trip_id: tripId, label: fields.label, leg: fields.leg || null, url: fields.url,
+    origin: fields.origin || null, destination: fields.destination || null,
+    depart_date: fields.departDate || null, depart_time: fields.departTime || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
     alert_below: fields.alertBelow, notes: fields.notes, position
   });
+  if (error) alert(error.message);
+}
+
+async function createRental(tripId, fields){
+  const siblingPositions = (trips.find(t => t.id === tripId)?.rentals || []).map(r => r.position);
+  const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
+  const { error } = await supabase.from("rentals").insert({
+    trip_id: tripId, kind: fields.kind || "housing", label: fields.label, url: fields.url || null,
+    currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
+    rental_start: fields.rentalStart || null, rental_end: fields.rentalEnd || null,
+    cancel_by: fields.cancelBy || null, notes: fields.notes || null, position
+  });
+  if (error) alert(error.message);
+}
+
+async function updateRental(id, patch){
+  const { error } = await supabase.from("rentals").update(patch).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deleteRental(id){
+  const { error } = await supabase.from("rentals").delete().eq("id", id);
   if (error) alert(error.message);
 }
 
@@ -361,10 +446,10 @@ async function moveFlightToTrip(flightId, newTripId){
   if (error) alert(error.message);
 }
 
-async function reorderFlight(flight, siblingsSameLeg, targetIndex){
-  // siblingsSameLeg: array of flights (excluding `flight`) in the same trip+leg, sorted by position
-  let before = siblingsSameLeg[targetIndex - 1];
-  let after = siblingsSameLeg[targetIndex];
+async function reorderItem(table, item, siblings, targetIndex){
+  // siblings: array of rows (excluding `item`) in the same list, sorted by position
+  let before = siblings[targetIndex - 1];
+  let after = siblings[targetIndex];
   let newPos;
   if (!before && !after) newPos = 0;
   else if (!before) newPos = after.position - 1000;
@@ -372,16 +457,16 @@ async function reorderFlight(flight, siblingsSameLeg, targetIndex){
   else {
     newPos = (before.position + after.position) / 2;
     if (after.position - before.position < 1e-6){
-      // renumber this leg's list, then retry
-      const all = [...siblingsSameLeg];
-      all.splice(targetIndex, 0, flight);
+      // renumber this list, then bail (positions are now clean)
+      const all = [...siblings];
+      all.splice(targetIndex, 0, item);
       for (let i = 0; i < all.length; i++){
-        await supabase.from("flights").update({ position: i * 1000 }).eq("id", all[i].id);
+        await supabase.from(table).update({ position: i * 1000 }).eq("id", all[i].id);
       }
       return;
     }
   }
-  const { error } = await supabase.from("flights").update({ position: newPos }).eq("id", flight.id);
+  const { error } = await supabase.from(table).update({ position: newPos }).eq("id", item.id);
   if (error) alert(error.message);
 }
 
@@ -402,7 +487,7 @@ async function deletePriceLog(id){
 // shaped like `trips` rows with `.flights[].price_logs[]` attached. Used by
 // both the one-time localStorage migration and JSON "Import" (new trips).
 async function bulkCreateTrips(tripBlobs){
-  const tripRows = [], flightRows = [], logRows = [];
+  const tripRows = [], flightRows = [], logRows = [], rentalRows = [];
   for (const t of tripBlobs){
     const tripId = uid();
     tripRows.push({
@@ -418,6 +503,8 @@ async function bulkCreateTrips(tripBlobs){
       flightRows.push({
         id: flightId, trip_id: tripId, label: f.label, leg: f.leg || null,
         url: f.url, currency: f.currency || "USD",
+        origin: f.origin || null, destination: f.destination || null,
+        depart_date: f.depart_date || null,
         paid_cash: f.paidCash ?? f.paid_cash ?? null,
         paid_points: f.paidPoints ?? f.paid_points ?? null,
         alert_below: f.alertBelow ?? f.alert_below ?? null,
@@ -428,10 +515,23 @@ async function bulkCreateTrips(tripBlobs){
         logRows.push({ id: uid(), flight_id: flightId, date: l.date, price: l.price });
       }
     }
+    let rentalPos = 0;
+    for (const r of (t.rentals || [])){
+      rentalRows.push({
+        id: uid(), trip_id: tripId, kind: r.kind || "housing", label: r.label,
+        url: r.url || null, currency: r.currency || "USD",
+        paid_cash: r.paidCash ?? r.paid_cash ?? null,
+        paid_points: r.paidPoints ?? r.paid_points ?? null,
+        rental_start: r.rental_start || null, rental_end: r.rental_end || null,
+        cancel_by: r.cancel_by || null, notes: r.notes || null, position: rentalPos
+      });
+      rentalPos += 1000;
+    }
   }
   if (tripRows.length){ const { error } = await supabase.from("trips").insert(tripRows); if (error) throw error; }
   if (flightRows.length){ const { error } = await supabase.from("flights").insert(flightRows); if (error) throw error; }
   if (logRows.length){ const { error } = await supabase.from("price_logs").insert(logRows); if (error) throw error; }
+  if (rentalRows.length){ const { error } = await supabase.from("rentals").insert(rentalRows); if (error) throw error; }
 }
 
 async function importFromLocalStorage(){
@@ -519,8 +619,20 @@ function renderCard(trip, f){
 function renderEditForm(f){
   return `
   <div class="edit-grid" data-edit-form="${f.id}">
-    <label class="field span2">Label
-      <input type="text" data-f-label value="">
+    <label class="field span2">URL (airports &amp; date auto-fill from Southwest/Kayak links)
+      <input type="text" data-f-url value="">
+    </label>
+    <label class="field">From (airport)
+      <input type="text" data-f-origin placeholder="BWI" maxlength="4" style="text-transform:uppercase">
+    </label>
+    <label class="field">To (airport)
+      <input type="text" data-f-dest placeholder="DEN" maxlength="4" style="text-transform:uppercase">
+    </label>
+    <label class="field">Depart date
+      <input type="date" data-f-date>
+    </label>
+    <label class="field">Depart time
+      <input type="time" data-f-time>
     </label>
     <label class="field">Leg
       <select data-f-leg>
@@ -529,11 +641,11 @@ function renderEditForm(f){
         <option value="return">Return</option>
       </select>
     </label>
+    <label class="field span2">Title (auto-generated from airports + date; type to override)
+      <input type="text" data-f-label value="">
+    </label>
     <label class="field">Currency
       <input type="text" data-f-currency value="">
-    </label>
-    <label class="field span2">URL
-      <input type="text" data-f-url value="">
     </label>
     <label class="field">Paid (cash)
       <input type="number" step="0.01" data-f-paidcash placeholder="e.g. 298">
@@ -557,8 +669,20 @@ function renderEditForm(f){
 function addFlightFormHTML(tripId){
   return `
   <div class="edit-grid">
-    <label class="field span2">Label
-      <input type="text" data-nf-label placeholder="e.g. BWI → MCO, Jan 5">
+    <label class="field span2">URL (paste a Southwest/Kayak link — airports &amp; date auto-fill)
+      <input type="text" data-nf-url placeholder="paste search URL">
+    </label>
+    <label class="field">From (airport)
+      <input type="text" data-nf-origin placeholder="BWI" maxlength="4" style="text-transform:uppercase">
+    </label>
+    <label class="field">To (airport)
+      <input type="text" data-nf-dest placeholder="DEN" maxlength="4" style="text-transform:uppercase">
+    </label>
+    <label class="field">Depart date
+      <input type="date" data-nf-date>
+    </label>
+    <label class="field">Depart time
+      <input type="time" data-nf-time>
     </label>
     <label class="field">Leg
       <select data-nf-leg>
@@ -567,11 +691,11 @@ function addFlightFormHTML(tripId){
         <option value="return">Return</option>
       </select>
     </label>
+    <label class="field span2">Title (auto-generated; type to override)
+      <input type="text" data-nf-label placeholder="e.g. BWI → MCO, Jan 5">
+    </label>
     <label class="field">Currency
       <input type="text" data-nf-currency value="USD">
-    </label>
-    <label class="field span2">URL
-      <input type="text" data-nf-url placeholder="paste search URL">
     </label>
     <label class="field">Paid (cash)
       <input type="number" step="0.01" data-nf-paidcash placeholder="optional">
@@ -614,8 +738,9 @@ function renderTripPanel(trip){
     ${solo.map(f => renderCard(trip, f)).join("")}
   </div>`;
 
-  const totalCash = flights.reduce((s,f) => s + (f.paid_cash || 0), 0);
-  const totalPoints = flights.reduce((s,f) => s + (f.paid_points || 0), 0);
+  const rentals = trip.rentals || [];
+  const totalCash = [...flights, ...rentals].reduce((s,x) => s + (x.paid_cash || 0), 0);
+  const totalPoints = [...flights, ...rentals].reduce((s,x) => s + (x.paid_points || 0), 0);
   const totalParts = [];
   if (totalCash) totalParts.push(fmtCash(totalCash));
   if (totalPoints) totalParts.push(fmtPoints(totalPoints));
@@ -639,6 +764,7 @@ function renderTripPanel(trip){
         <button class="btn btn-ghost btn-sm" data-rename-trip="${trip.id}">Rename</button>
         <button class="btn btn-ghost btn-sm" data-edit-meta="${trip.id}">Trip details</button>
         <button class="btn btn-ghost btn-sm" data-add-flight-toggle="${trip.id}">+ Add flight</button>
+        <button class="btn btn-ghost btn-sm" data-add-rental-toggle="${trip.id}">+ Add rental</button>
         <button class="btn btn-ghost btn-sm" data-search-trip="${trip.id}">Search this trip →</button>
         <button class="btn-link" data-del-trip="${trip.id}">delete trip</button>
       </div>
@@ -660,9 +786,124 @@ function renderTripPanel(trip){
       </div>
 
       <div data-add-flight-form="${trip.id}"></div>
+      ${flights.length ? `<div class="section-head">Flights</div>` : ""}
       ${pairsHTML}${soloHTML}
       ${!flights.length ? `<p class="empty-hist">No flights in this trip yet.</p>` : ""}
+
+      <div data-add-rental-form="${trip.id}"></div>
+      ${rentals.length ? `<div class="section-head">Rentals</div>
+        <div class="solo-list" data-rental-list="${trip.id}">
+          ${rentals.map(r => renderRentalCard(trip, r)).join("")}
+        </div>` : ""}
     </div>`;
+}
+
+// Shared auto-title behavior for the add/edit flight forms. `sel` maps logical
+// names to the form's data-attribute selectors.
+function wireAutoTitle(container, sel){
+  const urlEl = container.querySelector(sel.url);
+  const originEl = container.querySelector(sel.origin);
+  const destEl = container.querySelector(sel.dest);
+  const dateEl = container.querySelector(sel.date);
+  const timeEl = container.querySelector(sel.time);
+  const cashEl = container.querySelector(sel.paidCash);
+  const pointsEl = container.querySelector(sel.paidPoints);
+  const labelEl = container.querySelector(sel.label);
+
+  const regen = () => {
+    if (labelEl.dataset.auto === "0") return;
+    const t = flightTitle(originEl.value.trim(), destEl.value.trim(),
+      dateEl.value, timeEl.value,
+      cashEl.value === "" ? null : parseFloat(cashEl.value),
+      pointsEl.value === "" ? null : parseFloat(pointsEl.value));
+    if (t) labelEl.value = t;
+  };
+  labelEl.addEventListener("input", () => { labelEl.dataset.auto = "0"; });
+  [originEl, destEl, dateEl, timeEl, cashEl, pointsEl].forEach(el => el.addEventListener("input", regen));
+  urlEl.addEventListener("input", () => {
+    const parsed = parseFlightUrl(urlEl.value.trim());
+    if (!parsed) return;
+    if (parsed.origin) originEl.value = parsed.origin;
+    if (parsed.destination) destEl.value = parsed.destination;
+    if (parsed.departDate) dateEl.value = parsed.departDate;
+    regen();
+  });
+}
+
+function rentalCancelBadge(r){
+  if (!r.cancel_by) return "";
+  const today = new Date(); today.setHours(0,0,0,0);
+  const [y,m,d] = r.cancel_by.split("-").map(Number);
+  const cancelDate = new Date(y, m-1, d);
+  const daysLeft = Math.round((cancelDate - today) / 86400000);
+  let cls = "", txt = `Cancel by ${fmtShortDate(r.cancel_by)}`;
+  if (daysLeft < 0){ txt = `Cancel window passed (${fmtShortDate(r.cancel_by)})`; }
+  else if (daysLeft === 0){ txt = "LAST DAY to cancel"; cls = "status-warn"; }
+  else if (daysLeft <= 7){ txt = `Cancel by ${fmtShortDate(r.cancel_by)} — ${daysLeft}d left`; cls = "status-warn"; }
+  return `<span class="status ${cls}">${txt}</span>${r.reminded_at ? ` <span class="status">reminder sent</span>` : ""}`;
+}
+
+function renderRentalCard(trip, r){
+  const icon = r.kind === "car" ? "🚗" : "🏠";
+  const metaBits = [`Paid <b>${paidText(r)}</b>`];
+  if (r.rental_start || r.rental_end){
+    metaBits.push(`<b>${fmtShortDate(r.rental_start) || "?"} → ${fmtShortDate(r.rental_end) || "?"}</b>`);
+  }
+  return `
+  <div class="card" data-rental-card="${r.id}" data-trip="${trip.id}">
+    <div class="card-title-row">
+      <span class="drag-handle" draggable="true" data-rental-drag="${r.id}" title="Drag to reorder">⠿</span>
+      <h3>${icon} ${esc(r.label)}</h3>
+    </div>
+    <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
+    ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
+    <div class="row" style="margin-bottom:0">
+      ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
+      <button class="btn btn-ghost btn-sm" data-edit-rental="${r.id}">Edit</button>
+      <button class="btn-link" data-del-rental="${r.id}">delete rental</button>
+    </div>
+  </div>`;
+}
+
+function rentalFormHTML(prefix, idAttr){
+  const p = prefix; // "nr" (new) or "er" (edit)
+  return `
+  <div class="edit-grid" ${idAttr || ""}>
+    <label class="field">Type
+      <select data-${p}-kind>
+        <option value="housing">🏠 Housing (Airbnb/VRBO/hotel)</option>
+        <option value="car">🚗 Car rental</option>
+      </select>
+    </label>
+    <label class="field">Name
+      <input type="text" data-${p}-label placeholder="e.g. Airbnb Breckenridge">
+    </label>
+    <label class="field span2">URL (listing/reservation link)
+      <input type="text" data-${p}-url placeholder="optional">
+    </label>
+    <label class="field">Rental start
+      <input type="date" data-${p}-start>
+    </label>
+    <label class="field">Rental end
+      <input type="date" data-${p}-end>
+    </label>
+    <label class="field">Free-cancel deadline
+      <input type="date" data-${p}-cancelby>
+    </label>
+    <label class="field">Paid (cash)
+      <input type="number" step="0.01" data-${p}-paidcash placeholder="optional">
+    </label>
+    <label class="field">Paid (points)
+      <input type="number" step="1" data-${p}-paidpoints placeholder="optional">
+    </label>
+    <label class="field span2">Notes
+      <textarea data-${p}-notes placeholder="optional"></textarea>
+    </label>
+    <div class="span2 row" style="margin:0">
+      <button class="btn btn-sm" data-${p}-save>Save</button>
+      <button class="btn-link" data-${p}-cancel>cancel</button>
+    </div>
+  </div>`;
 }
 
 function renderMetaForm(trip){
@@ -731,8 +972,15 @@ function wireEvents(activeTrip){
       notes: t.notes, attendees: t.attendees,
       flights: (t.flights||[]).map(f => ({
         label: f.label, leg: f.leg, url: f.url, currency: f.currency,
+        origin: f.origin, destination: f.destination, depart_date: f.depart_date,
         paidCash: f.paid_cash, paidPoints: f.paid_points, alertBelow: f.alert_below,
         notes: f.notes, priceLog: (f.price_logs||[]).map(l => ({date: l.date, price: l.price}))
+      })),
+      rentals: (t.rentals||[]).map(r => ({
+        kind: r.kind, label: r.label, url: r.url, currency: r.currency,
+        paidCash: r.paid_cash, paidPoints: r.paid_points,
+        rental_start: r.rental_start, rental_end: r.rental_end,
+        cancel_by: r.cancel_by, notes: r.notes
       }))
     })) }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -797,6 +1045,7 @@ function wireEvents(activeTrip){
 
   document.querySelector(`[data-search-trip="${activeTrip.id}"]`).addEventListener("click", () => {
     (activeTrip.flights || []).forEach(f => f.url && window.open(f.url, "_blank"));
+    (activeTrip.rentals || []).forEach(r => r.url && window.open(r.url, "_blank"));
   });
 
   document.querySelector(`[data-edit-meta="${activeTrip.id}"]`).addEventListener("click", () => {
@@ -835,6 +1084,82 @@ function wireEvents(activeTrip){
     wireAddFlightForm(activeTrip.id);
   });
 
+  document.querySelector(`[data-add-rental-toggle="${activeTrip.id}"]`).addEventListener("click", () => {
+    const holder = document.querySelector(`[data-add-rental-form="${activeTrip.id}"]`);
+    if (holder.innerHTML){ holder.innerHTML = ""; return; }
+    holder.innerHTML = rentalFormHTML("nr");
+    holder.querySelector("[data-nr-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
+    holder.querySelector("[data-nr-save]").addEventListener("click", async () => {
+      const label = holder.querySelector("[data-nr-label]").value.trim();
+      if (!label){ alert("Name is required."); return; }
+      const pc = holder.querySelector("[data-nr-paidcash]").value;
+      const pp = holder.querySelector("[data-nr-paidpoints]").value;
+      await createRental(activeTrip.id, {
+        kind: holder.querySelector("[data-nr-kind]").value,
+        label, url: holder.querySelector("[data-nr-url]").value.trim(),
+        rentalStart: holder.querySelector("[data-nr-start]").value || null,
+        rentalEnd: holder.querySelector("[data-nr-end]").value || null,
+        cancelBy: holder.querySelector("[data-nr-cancelby]").value || null,
+        paidCash: pc === "" ? null : parseFloat(pc),
+        paidPoints: pp === "" ? null : parseFloat(pp),
+        notes: holder.querySelector("[data-nr-notes]").value.trim(),
+      });
+      await refresh();
+    });
+  });
+
+  document.querySelectorAll("[data-edit-rental]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const rid = btn.dataset.editRental;
+      const { rental } = findRental(rid);
+      const card = document.querySelector(`[data-rental-card="${rid}"]`);
+      const wrap = document.createElement("div");
+      wrap.innerHTML = rentalFormHTML("er", `data-rental-edit-form="${rid}"`);
+      card.replaceWith(wrap.firstElementChild);
+      const form = document.querySelector(`[data-rental-edit-form="${rid}"]`);
+      form.querySelector("[data-er-kind]").value = rental.kind;
+      form.querySelector("[data-er-label]").value = rental.label || "";
+      form.querySelector("[data-er-url]").value = rental.url || "";
+      form.querySelector("[data-er-start]").value = rental.rental_start || "";
+      form.querySelector("[data-er-end]").value = rental.rental_end || "";
+      form.querySelector("[data-er-cancelby]").value = rental.cancel_by || "";
+      form.querySelector("[data-er-paidcash]").value = rental.paid_cash ?? "";
+      form.querySelector("[data-er-paidpoints]").value = rental.paid_points ?? "";
+      form.querySelector("[data-er-notes]").value = rental.notes || "";
+      form.querySelector("[data-er-cancel]").addEventListener("click", render);
+      form.querySelector("[data-er-save]").addEventListener("click", async () => {
+        const pc = form.querySelector("[data-er-paidcash]").value;
+        const pp = form.querySelector("[data-er-paidpoints]").value;
+        const newCancelBy = form.querySelector("[data-er-cancelby]").value || null;
+        const patch = {
+          kind: form.querySelector("[data-er-kind]").value,
+          label: form.querySelector("[data-er-label]").value.trim() || rental.label,
+          url: form.querySelector("[data-er-url]").value.trim() || null,
+          rental_start: form.querySelector("[data-er-start]").value || null,
+          rental_end: form.querySelector("[data-er-end]").value || null,
+          cancel_by: newCancelBy,
+          paid_cash: pc === "" ? null : parseFloat(pc),
+          paid_points: pp === "" ? null : parseFloat(pp),
+          notes: form.querySelector("[data-er-notes]").value.trim() || null,
+        };
+        // A changed deadline should get a fresh reminder email.
+        if (newCancelBy !== rental.cancel_by) patch.reminded_at = null;
+        await updateRental(rid, patch);
+        await refresh();
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-del-rental]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const rid = btn.dataset.delRental;
+      const { rental } = findRental(rid);
+      if (!confirm(`Delete rental "${rental.label}"?`)) return;
+      await deleteRental(rid);
+      await refresh();
+    });
+  });
+
   document.querySelectorAll("[data-edit-flight]").forEach(btn => {
     btn.addEventListener("click", () => {
       const fid = btn.dataset.editFlight;
@@ -848,22 +1173,45 @@ function wireEvents(activeTrip){
       form.querySelector("[data-f-leg]").value = flight.leg || "";
       form.querySelector("[data-f-currency]").value = flight.currency || "USD";
       form.querySelector("[data-f-url]").value = flight.url || "";
+      form.querySelector("[data-f-origin]").value = flight.origin || "";
+      form.querySelector("[data-f-dest]").value = flight.destination || "";
+      form.querySelector("[data-f-date]").value = flight.depart_date || "";
+      form.querySelector("[data-f-time]").value = (flight.depart_time || "").slice(0,5);
       form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
       form.querySelector("[data-f-paidpoints]").value = flight.paid_points ?? "";
       form.querySelector("[data-f-alert]").value = flight.alert_below ?? "";
       form.querySelector("[data-f-notes]").value = flight.notes || "";
+      // Only keep auto-regenerating if the current label matches what we'd generate.
+      const labelEl = form.querySelector("[data-f-label]");
+      labelEl.dataset.auto =
+        (!flight.label || flight.label === flightTitle(flight.origin, flight.destination,
+          flight.depart_date, (flight.depart_time || "").slice(0,5),
+          flight.paid_cash, flight.paid_points)) ? "1" : "0";
+      wireAutoTitle(form, { url: "[data-f-url]", origin: "[data-f-origin]",
+        dest: "[data-f-dest]", date: "[data-f-date]", time: "[data-f-time]",
+        paidCash: "[data-f-paidcash]", paidPoints: "[data-f-paidpoints]",
+        label: "[data-f-label]" });
 
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
         const pp = form.querySelector("[data-f-paidpoints]").value;
         const ab = form.querySelector("[data-f-alert]").value;
+        const origin = form.querySelector("[data-f-origin]").value.trim().toUpperCase() || null;
+        const destination = form.querySelector("[data-f-dest]").value.trim().toUpperCase() || null;
+        const departDate = form.querySelector("[data-f-date]").value || null;
+        const departTime = form.querySelector("[data-f-time]").value || null;
+        const paidCash = pc === "" ? null : parseFloat(pc);
+        const paidPoints = pp === "" ? null : parseFloat(pp);
         await updateFlight(fid, {
-          label: form.querySelector("[data-f-label]").value.trim() || flight.label,
+          label: form.querySelector("[data-f-label]").value.trim()
+            || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints)
+            || flight.label,
           leg: form.querySelector("[data-f-leg]").value || null,
           currency: form.querySelector("[data-f-currency]").value.trim() || "USD",
           url: form.querySelector("[data-f-url]").value.trim(),
-          paid_cash: pc === "" ? null : parseFloat(pc),
-          paid_points: pp === "" ? null : parseFloat(pp),
+          origin, destination, depart_date: departDate, depart_time: departTime,
+          paid_cash: paidCash,
+          paid_points: paidPoints,
           alert_below: ab === "" ? null : parseFloat(ab),
           notes: form.querySelector("[data-f-notes]").value.trim(),
         });
@@ -944,20 +1292,30 @@ function wireAddFlightForm(tripId){
   const saveBtn = holder.querySelector("[data-nf-save]");
   const cancelBtn = holder.querySelector("[data-nf-cancel]");
   if (!saveBtn) return;
+  wireAutoTitle(holder, { url: "[data-nf-url]", origin: "[data-nf-origin]",
+    dest: "[data-nf-dest]", date: "[data-nf-date]", time: "[data-nf-time]",
+    paidCash: "[data-nf-paidcash]", paidPoints: "[data-nf-paidpoints]",
+    label: "[data-nf-label]" });
   saveBtn.addEventListener("click", async () => {
-    const label = holder.querySelector("[data-nf-label]").value.trim();
     const url = holder.querySelector("[data-nf-url]").value.trim();
-    if (!label || !url) { alert("Label and URL are required."); return; }
-    const leg = holder.querySelector("[data-nf-leg]").value || null;
-    const currency = holder.querySelector("[data-nf-currency]").value.trim() || "USD";
+    const origin = holder.querySelector("[data-nf-origin]").value.trim().toUpperCase() || null;
+    const destination = holder.querySelector("[data-nf-dest]").value.trim().toUpperCase() || null;
+    const departDate = holder.querySelector("[data-nf-date]").value || null;
+    const departTime = holder.querySelector("[data-nf-time]").value || null;
     const pc = holder.querySelector("[data-nf-paidcash]").value;
     const pp = holder.querySelector("[data-nf-paidpoints]").value;
+    const paidCash = pc === "" ? null : parseFloat(pc);
+    const paidPoints = pp === "" ? null : parseFloat(pp);
+    const label = holder.querySelector("[data-nf-label]").value.trim()
+      || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints);
+    if (!label || !url) { alert("A URL plus either a title or From/To airports are required."); return; }
+    const leg = holder.querySelector("[data-nf-leg]").value || null;
+    const currency = holder.querySelector("[data-nf-currency]").value.trim() || "USD";
     const ab = holder.querySelector("[data-nf-alert]").value;
     const notes = holder.querySelector("[data-nf-notes]").value.trim();
     await createFlight(tripId, {
-      label, leg, url, currency,
-      paidCash: pc === "" ? null : parseFloat(pc),
-      paidPoints: pp === "" ? null : parseFloat(pp),
+      label, leg, url, currency, origin, destination, departDate, departTime,
+      paidCash, paidPoints,
       alertBelow: ab === "" ? null : parseFloat(ab),
       notes
     });
@@ -969,16 +1327,25 @@ function wireAddFlightForm(tripId){
 // ---------------- Drag and drop ----------------
 
 let dragFlightId = null;
+let dragRentalId = null;
 
 function wireDragEvents(activeTrip){
   document.querySelectorAll("[data-drag-handle]").forEach(handle => {
     handle.addEventListener("dragstart", (e) => {
       dragFlightId = handle.dataset.dragHandle;
+      dragRentalId = null;
+      e.dataTransfer.effectAllowed = "move";
+    });
+  });
+  document.querySelectorAll("[data-rental-drag]").forEach(handle => {
+    handle.addEventListener("dragstart", (e) => {
+      dragRentalId = handle.dataset.rentalDrag;
+      dragFlightId = null;
       e.dataTransfer.effectAllowed = "move";
     });
   });
 
-  document.querySelectorAll(".card").forEach(card => {
+  document.querySelectorAll("[data-card]").forEach(card => {
     card.addEventListener("dragover", (e) => { e.preventDefault(); card.classList.add("drag-over"); });
     card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
     card.addEventListener("drop", async (e) => {
@@ -992,7 +1359,7 @@ function wireDragEvents(activeTrip){
         .filter(f => f.id !== dragFlightId && (f.leg || null) === targetLeg)
         .sort((a,b) => a.position - b.position);
       const targetIndex = siblings.findIndex(f => f.id === card.dataset.card);
-      await reorderFlight(dragged, siblings, targetIndex);
+      await reorderItem("flights", dragged, siblings, targetIndex);
       await refresh();
     });
   });
@@ -1009,7 +1376,24 @@ function wireDragEvents(activeTrip){
       const siblings = (activeTrip.flights || [])
         .filter(f => f.id !== dragFlightId && (f.leg || null) === targetLeg)
         .sort((a,b) => a.position - b.position);
-      await reorderFlight(dragged, siblings, siblings.length);
+      await reorderItem("flights", dragged, siblings, siblings.length);
+      await refresh();
+    });
+  });
+
+  document.querySelectorAll("[data-rental-card]").forEach(card => {
+    card.addEventListener("dragover", (e) => { e.preventDefault(); card.classList.add("drag-over"); });
+    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
+    card.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      card.classList.remove("drag-over");
+      if (!dragRentalId || dragRentalId === card.dataset.rentalCard) return;
+      const { rental: dragged } = findRental(dragRentalId);
+      const siblings = (activeTrip.rentals || [])
+        .filter(r => r.id !== dragRentalId)
+        .sort((a,b) => a.position - b.position);
+      const targetIndex = siblings.findIndex(r => r.id === card.dataset.rentalCard);
+      await reorderItem("rentals", dragged, siblings, targetIndex);
       await refresh();
     });
   });

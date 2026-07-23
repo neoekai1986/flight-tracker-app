@@ -51,10 +51,11 @@ alter table public.trips enable row level security;
 alter table public.trip_collaborators enable row level security;
 alter table public.flights enable row level security;
 alter table public.price_logs enable row level security;
+alter table public.rentals enable row level security;
 
 -- Only logged-in users get any access at all; RLS scopes it further per-row.
-revoke all on public.trips, public.trip_collaborators, public.flights, public.price_logs from anon;
-grant select, insert, update, delete on public.trips, public.flights, public.price_logs to authenticated;
+revoke all on public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals from anon;
+grant select, insert, update, delete on public.trips, public.flights, public.price_logs, public.rentals to authenticated;
 grant select, insert, delete on public.trip_collaborators to authenticated;
 
 -- Ownership can't be reassigned via UPDATE (simpler and airtight vs. expressing
@@ -122,6 +123,20 @@ create policy flights_update on public.flights
   with check ( public.can_access_trip(trip_id) );
 
 create policy flights_delete on public.flights
+  for delete using ( public.can_access_trip(trip_id) );
+
+-- rentals
+create policy rentals_select on public.rentals
+  for select using ( public.can_access_trip(trip_id) );
+
+create policy rentals_insert on public.rentals
+  for insert with check ( public.can_access_trip(trip_id) );
+
+create policy rentals_update on public.rentals
+  for update using ( public.can_access_trip(trip_id) )
+  with check ( public.can_access_trip(trip_id) );
+
+create policy rentals_delete on public.rentals
   for delete using ( public.can_access_trip(trip_id) );
 
 -- price_logs
