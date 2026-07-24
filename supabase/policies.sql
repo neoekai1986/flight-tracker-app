@@ -47,6 +47,7 @@ as $$
   );
 $$;
 
+alter table public.trip_folders enable row level security;
 alter table public.trips enable row level security;
 alter table public.trip_collaborators enable row level security;
 alter table public.flights enable row level security;
@@ -54,8 +55,8 @@ alter table public.price_logs enable row level security;
 alter table public.rentals enable row level security;
 
 -- Only logged-in users get any access at all; RLS scopes it further per-row.
-revoke all on public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals from anon;
-grant select, insert, update, delete on public.trips, public.flights, public.price_logs, public.rentals to authenticated;
+revoke all on public.trip_folders, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals from anon;
+grant select, insert, update, delete on public.trip_folders, public.trips, public.flights, public.price_logs, public.rentals to authenticated;
 grant select, insert, delete on public.trip_collaborators to authenticated;
 
 -- Ownership can't be reassigned via UPDATE (simpler and airtight vs. expressing
@@ -74,6 +75,27 @@ $$;
 create trigger trips_lock_owner
   before update on public.trips
   for each row execute function public.lock_trip_owner();
+
+-- trip_folders
+-- Owner manages folders directly; a collaborator can see (but not rename or
+-- delete) the folder name of any shared trip filed under it.
+create policy trip_folders_select on public.trip_folders
+  for select using (
+    owner_id = auth.uid()
+    or exists (
+      select 1 from public.trips t
+      where t.folder_id = trip_folders.id and public.can_access_trip(t.id)
+    )
+  );
+
+create policy trip_folders_insert on public.trip_folders
+  for insert with check ( owner_id = auth.uid() );
+
+create policy trip_folders_update on public.trip_folders
+  for update using ( owner_id = auth.uid() ) with check ( owner_id = auth.uid() );
+
+create policy trip_folders_delete on public.trip_folders
+  for delete using ( owner_id = auth.uid() );
 
 -- trips
 -- NOTE: the owner check must be a direct column comparison (not a subquery

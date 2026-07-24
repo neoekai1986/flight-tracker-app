@@ -52,6 +52,18 @@
   .tab.active{color:var(--amber);border-bottom-color:var(--amber)}
   .tab:hover{color:var(--ink)}
   .tab-new{color:var(--muted);font-size:18px;padding:10px 14px}
+  .tab-new-folder{color:var(--muted);font-size:13px;padding:10px 14px;white-space:nowrap}
+  .tab-folder{display:flex;align-items:center;gap:2px;border:1px dashed var(--line);
+      border-bottom:none;border-radius:8px 8px 0 0;padding:2px 4px 0;margin-bottom:-1px}
+  .tab-folder.drag-over{border-color:var(--amber)}
+  .tab-folder-label{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);
+      padding:6px 4px 6px 6px;cursor:grab;user-select:none;white-space:nowrap}
+  .tab-folder-label:hover{color:var(--amber)}
+  .tab-folder-del{color:var(--muted);cursor:pointer;font-size:13px;padding:0 8px 0 2px}
+  .tab-folder-del:hover{color:var(--bad)}
+  .tab-folder-tabs{display:flex;gap:2px;flex-wrap:wrap}
+  .tab-ungrouped{display:flex;gap:2px;flex-wrap:wrap}
+  .tab-ungrouped.drag-over{outline:1px dashed var(--amber);border-radius:6px}
 
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px}
   .panel-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
@@ -154,6 +166,7 @@ const MIGRATED_FLAG = "flight-tracker-migrated";
 
 let session = null;
 let trips = [];
+let folders = [];
 let activeTripId = null;
 let authMode = "login"; // login | signup | forgot | reset
 let authError = "", authMsg = "";
@@ -170,6 +183,19 @@ function paidText(f){
   if (f.paid_points != null) parts.push(fmtPoints(f.paid_points));
   return parts.length ? parts.join(" + ") : "—";
 }
+
+// Per-ticket price × passenger count, e.g. "$300.00 + 22,000 pts"
+function flightTotalText(f){
+  const n = f.passengers || 1;
+  const parts = [];
+  if (f.paid_cash != null) parts.push(fmtCash(f.paid_cash * n, f.currency));
+  if (f.paid_points != null) parts.push(fmtPoints(f.paid_points * n));
+  return parts.length ? parts.join(" + ") : "—";
+}
+
+// Outbound/return are paired lanes; standalone and round-trip flights share
+// the single "solo" lane since they render in the same list.
+const legScope = (leg) => (leg === "outbound" || leg === "return") ? leg : "solo";
 
 function findFlight(flightId){
   for (const t of trips) {
@@ -206,12 +232,18 @@ function fmtTime(t){
 
 // Auto-generated flight title: "Dec 4 10:00 PM, BWI → DEN, 22,000 pts"
 // (date/time, depart airport → arrival airport, points or cash paid)
-function flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints){
+// Round trip: "Dec 4 → Dec 8, BWI ⇄ DEN, 22,000 pts"
+function flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate){
   if (!origin || !destination) return "";
   const parts = [];
-  const when = [fmtShortDate(departDate), fmtTime(departTime)].filter(Boolean).join(" ");
-  if (when) parts.push(when);
-  parts.push(`${origin.toUpperCase()} → ${destination.toUpperCase()}`);
+  if (leg === "roundtrip" && returnDate){
+    parts.push(`${fmtShortDate(departDate)} → ${fmtShortDate(returnDate)}`);
+    parts.push(`${origin.toUpperCase()} ⇄ ${destination.toUpperCase()}`);
+  } else {
+    const when = [fmtShortDate(departDate), fmtTime(departTime)].filter(Boolean).join(" ");
+    if (when) parts.push(when);
+    parts.push(`${origin.toUpperCase()} → ${destination.toUpperCase()}`);
+  }
   if (paidPoints != null && paidPoints !== "" && !isNaN(paidPoints)) parts.push(fmtPoints(paidPoints));
   else if (paidCash != null && paidCash !== "" && !isNaN(paidCash)) parts.push(fmtCash(paidCash));
   return parts.join(", ");
@@ -355,16 +387,29 @@ async function loadTrips(){
   return data;
 }
 
+async function loadFolders(){
+  const { data, error } = await supabase
+    .from("trip_folders")
+    .select("*")
+    .order("position", { ascending: true });
+  if (error) { console.error(error); return []; }
+  return data;
+}
+
 async function refresh(){
-  trips = await loadTrips();
+  [trips, folders] = await Promise.all([loadTrips(), loadFolders()]);
   if (!trips.find(t => t.id === activeTripId)) activeTripId = trips[0]?.id || null;
   render();
 }
 
 async function createTrip(fields){
+  const scope = trips.filter(t => (t.folder_id || null) === (fields.folderId || null)).map(t => t.position);
+  const position = scope.length ? Math.max(...scope) + 1000 : 0;
   const { data, error } = await supabase.from("trips").insert({
     owner_id: session.user.id,
     title: fields.title || "New trip",
+    folder_id: fields.folderId || null,
+    position,
   }).select().single();
   if (error) { alert(error.message); return null; }
   return data;
@@ -377,6 +422,33 @@ async function updateTrip(id, patch){
 
 async function deleteTrip(id){
   const { error } = await supabase.from("trips").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function moveTripToFolder(tripId, folderId){
+  const scope = trips.filter(t => t.id !== tripId && (t.folder_id || null) === (folderId || null)).map(t => t.position);
+  const position = scope.length ? Math.max(...scope) + 1000 : 0;
+  const { error } = await supabase.from("trips").update({ folder_id: folderId || null, position }).eq("id", tripId);
+  if (error) alert(error.message);
+}
+
+async function createFolder(title){
+  const scope = folders.map(f => f.position);
+  const position = scope.length ? Math.max(...scope) + 1000 : 0;
+  const { data, error } = await supabase.from("trip_folders").insert({
+    owner_id: session.user.id, title, position
+  }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function renameFolder(id, title){
+  const { error } = await supabase.from("trip_folders").update({ title }).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deleteFolder(id){
+  const { error } = await supabase.from("trip_folders").delete().eq("id", id);
   if (error) alert(error.message);
 }
 
@@ -394,14 +466,16 @@ async function removeCollaborator(id){
 
 async function createFlight(tripId, fields){
   const siblingPositions = (trips.find(t => t.id === tripId)?.flights || [])
-    .filter(f => (f.leg || null) === (fields.leg || null))
+    .filter(f => legScope(f.leg) === legScope(fields.leg))
     .map(f => f.position);
   const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
   const { error } = await supabase.from("flights").insert({
     trip_id: tripId, label: fields.label, leg: fields.leg || null, url: fields.url,
     origin: fields.origin || null, destination: fields.destination || null,
     depart_date: fields.departDate || null, depart_time: fields.departTime || null,
+    return_date: fields.returnDate || null, return_time: fields.returnTime || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
+    passengers: fields.passengers || 1,
     alert_below: fields.alertBelow, notes: fields.notes, position
   });
   if (error) alert(error.message);
@@ -504,9 +578,11 @@ async function bulkCreateTrips(tripBlobs){
         id: flightId, trip_id: tripId, label: f.label, leg: f.leg || null,
         url: f.url, currency: f.currency || "USD",
         origin: f.origin || null, destination: f.destination || null,
-        depart_date: f.depart_date || null,
+        depart_date: f.depart_date || null, depart_time: f.depart_time || null,
+        return_date: f.return_date || null, return_time: f.return_time || null,
         paid_cash: f.paidCash ?? f.paid_cash ?? null,
         paid_points: f.paidPoints ?? f.paid_points ?? null,
+        passengers: f.passengers || 1,
         alert_below: f.alertBelow ?? f.alert_below ?? null,
         notes: f.notes || null, position: byLeg[legKey]
       });
@@ -557,7 +633,14 @@ function renderCard(trip, f){
   const cur = f.currency || "USD";
   const moveOptions = trips.filter(t => t.id !== trip.id)
     .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
-  const metaBits = [`Paid <b>${paidText(f)}</b>`];
+  const passengers = f.passengers || 1;
+  const metaBits = [passengers > 1
+    ? `Paid <b>${paidText(f)}</b> × ${passengers} = <b>${flightTotalText(f)}</b>`
+    : `Paid <b>${paidText(f)}</b>`];
+  if (f.leg === "roundtrip" && f.return_date){
+    const ret = [fmtShortDate(f.return_date), fmtTime(f.return_time)].filter(Boolean).join(" ");
+    metaBits.push(`Return <b>${esc(ret)}</b>`);
+  }
   if (f.alert_below != null) metaBits.push(`Alert below <b>${fmtCash(f.alert_below, cur)}</b>`);
 
   const entries = f.price_logs || [];
@@ -592,7 +675,7 @@ function renderCard(trip, f){
   }
 
   return `
-  <div class="card" data-card="${f.id}" data-leg="${f.leg || ""}" data-trip="${trip.id}">
+  <div class="card" data-card="${f.id}" data-leg="${legScope(f.leg)}" data-trip="${trip.id}">
     <div class="card-title-row">
       <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
       <h3>${esc(f.label)}</h3>
@@ -639,18 +722,30 @@ function renderEditForm(f){
         <option value="">Standalone</option>
         <option value="outbound">Outbound</option>
         <option value="return">Return</option>
+        <option value="roundtrip">Round trip</option>
       </select>
     </label>
+    <div data-f-return-wrap style="display:none">
+      <label class="field">Return date
+        <input type="date" data-f-return-date>
+      </label>
+      <label class="field">Return time
+        <input type="time" data-f-return-time>
+      </label>
+    </div>
     <label class="field span2">Title (auto-generated from airports + date; type to override)
       <input type="text" data-f-label value="">
     </label>
     <label class="field">Currency
       <input type="text" data-f-currency value="">
     </label>
-    <label class="field">Paid (cash)
+    <label class="field">Passengers
+      <input type="number" step="1" min="1" data-f-passengers value="1">
+    </label>
+    <label class="field">Paid (cash, per passenger)
       <input type="number" step="0.01" data-f-paidcash placeholder="e.g. 298">
     </label>
-    <label class="field">Paid (points)
+    <label class="field">Paid (points, per passenger)
       <input type="number" step="1" data-f-paidpoints placeholder="e.g. 22000">
     </label>
     <label class="field">Alert below (cash)
@@ -689,18 +784,30 @@ function addFlightFormHTML(tripId, trip){
         <option value="">Standalone</option>
         <option value="outbound">Outbound</option>
         <option value="return">Return</option>
+        <option value="roundtrip">Round trip</option>
       </select>
     </label>
+    <div data-nf-return-wrap style="display:none">
+      <label class="field">Return date
+        <input type="date" data-nf-return-date value="${trip?.travel_end || ""}">
+      </label>
+      <label class="field">Return time
+        <input type="time" data-nf-return-time>
+      </label>
+    </div>
     <label class="field span2">Title (auto-generated; type to override)
       <input type="text" data-nf-label placeholder="e.g. BWI → MCO, Jan 5">
     </label>
     <label class="field">Currency
       <input type="text" data-nf-currency value="USD">
     </label>
-    <label class="field">Paid (cash)
+    <label class="field">Passengers
+      <input type="number" step="1" min="1" data-nf-passengers value="1">
+    </label>
+    <label class="field">Paid (cash, per passenger)
       <input type="number" step="0.01" data-nf-paidcash placeholder="optional">
     </label>
-    <label class="field">Paid (points)
+    <label class="field">Paid (points, per passenger)
       <input type="number" step="1" data-nf-paidpoints placeholder="optional">
     </label>
     <label class="field">Alert below (cash)
@@ -720,7 +827,7 @@ function renderTripPanel(trip){
   const flights = trip.flights || [];
   const out = flights.filter(f => f.leg === "outbound");
   const ret = flights.filter(f => f.leg === "return");
-  const solo = flights.filter(f => !f.leg);
+  const solo = flights.filter(f => !f.leg || f.leg === "roundtrip");
 
   let pairsHTML = "";
   const pairCount = Math.max(out.length, ret.length);
@@ -734,13 +841,15 @@ function renderTripPanel(trip){
       </div>
     </div>`;
   }
-  const soloHTML = `<div class="solo-list" data-leg-list="" data-trip="${trip.id}">
+  const soloHTML = `<div class="solo-list" data-leg-list="solo" data-trip="${trip.id}">
     ${solo.map(f => renderCard(trip, f)).join("")}
   </div>`;
 
   const rentals = trip.rentals || [];
-  const totalCash = [...flights, ...rentals].reduce((s,x) => s + (x.paid_cash || 0), 0);
-  const totalPoints = [...flights, ...rentals].reduce((s,x) => s + (x.paid_points || 0), 0);
+  const totalCash = flights.reduce((s,f) => s + (f.paid_cash || 0) * (f.passengers || 1), 0)
+    + rentals.reduce((s,r) => s + (r.paid_cash || 0), 0);
+  const totalPoints = flights.reduce((s,f) => s + (f.paid_points || 0) * (f.passengers || 1), 0)
+    + rentals.reduce((s,r) => s + (r.paid_points || 0), 0);
   const totalParts = [];
   if (totalCash) totalParts.push(fmtCash(totalCash));
   if (totalPoints) totalParts.push(fmtPoints(totalPoints));
@@ -809,17 +918,28 @@ function wireAutoTitle(container, sel){
   const cashEl = container.querySelector(sel.paidCash);
   const pointsEl = container.querySelector(sel.paidPoints);
   const labelEl = container.querySelector(sel.label);
+  const legEl = sel.leg ? container.querySelector(sel.leg) : null;
+  const returnDateEl = sel.returnDate ? container.querySelector(sel.returnDate) : null;
+  const returnWrap = sel.returnWrap ? container.querySelector(sel.returnWrap) : null;
 
   const regen = () => {
     if (labelEl.dataset.auto === "0") return;
     const t = flightTitle(originEl.value.trim(), destEl.value.trim(),
       dateEl.value, timeEl.value,
       cashEl.value === "" ? null : parseFloat(cashEl.value),
-      pointsEl.value === "" ? null : parseFloat(pointsEl.value));
+      pointsEl.value === "" ? null : parseFloat(pointsEl.value),
+      legEl ? legEl.value : null, returnDateEl ? returnDateEl.value : null);
     if (t) labelEl.value = t;
+  };
+  const syncReturnVisibility = () => {
+    if (!returnWrap || !legEl) return;
+    returnWrap.style.display = legEl.value === "roundtrip" ? "contents" : "none";
   };
   labelEl.addEventListener("input", () => { labelEl.dataset.auto = "0"; });
   [originEl, destEl, dateEl, timeEl, cashEl, pointsEl].forEach(el => el.addEventListener("input", regen));
+  if (returnDateEl) returnDateEl.addEventListener("input", regen);
+  if (legEl) legEl.addEventListener("change", () => { syncReturnVisibility(); regen(); });
+  syncReturnVisibility();
   urlEl.addEventListener("input", () => {
     const parsed = parseFlightUrl(urlEl.value.trim());
     if (!parsed) return;
@@ -916,6 +1036,13 @@ function renderMetaForm(trip){
     <label class="field">Travel end
       <input type="date" data-m-end value="${trip.travel_end || ""}">
     </label>
+    <label class="field">Folder
+      <select data-m-folder>
+        <option value="">— No folder —</option>
+        ${folders.map(f => `<option value="${f.id}" ${f.id===trip.folder_id?"selected":""}>${esc(f.title)}</option>`).join("")}
+        <option value="__new__">+ New folder…</option>
+      </select>
+    </label>
     <label class="field span2">Attendees (comma-separated)
       <input type="text" data-m-attendees value="${esc((trip.attendees||[]).join(", "))}">
     </label>
@@ -927,6 +1054,39 @@ function renderMetaForm(trip){
       <button class="btn-link" data-meta-cancel="${trip.id}">cancel</button>
     </div>
   </div>`;
+}
+
+function renderTabs(){
+  const byFolder = new Map();
+  const ungrouped = [];
+  for (const t of trips){
+    if (t.folder_id){
+      if (!byFolder.has(t.folder_id)) byFolder.set(t.folder_id, []);
+      byFolder.get(t.folder_id).push(t);
+    } else ungrouped.push(t);
+  }
+  const tabBtn = t => `<button class="tab ${t.id===activeTripId?'active':''}"
+      draggable="true" data-drag-tab="${t.id}" data-tab="${t.id}">${esc(t.title)}</button>`;
+
+  const sortedFolders = [...folders].sort((a,b) => a.position - b.position);
+  const folderHTML = sortedFolders.map(f => {
+    const tripsInFolder = (byFolder.get(f.id) || []).sort((a,b) => a.position - b.position);
+    return `<div class="tab-folder" draggable="true" data-drag-folder="${f.id}" data-folder-drop="${f.id}">
+      <span class="tab-folder-label" data-folder-rename="${f.id}" title="Drag to reorder, click to rename">📁 ${esc(f.title)}</span>
+      <span class="tab-folder-del" data-folder-del="${f.id}" title="Delete folder">×</span>
+      <span class="tab-folder-tabs">${tripsInFolder.map(tabBtn).join("")}</span>
+    </div>`;
+  }).join("");
+
+  const sortedUngrouped = ungrouped.sort((a,b) => a.position - b.position);
+
+  return `
+    <div class="tabs">
+      ${folderHTML}
+      <div class="tab-ungrouped" data-folder-drop="">${sortedUngrouped.map(tabBtn).join("")}</div>
+      <button class="tab tab-new" id="newTripTab" title="New trip">+</button>
+      <button class="tab tab-new-folder" id="newFolderTab" title="New folder">+ folder</button>
+    </div>`;
 }
 
 function render(){
@@ -949,16 +1109,14 @@ function render(){
       <input type="file" id="importFile" accept="application/json" hidden>
     </div>
 
-    <div class="tabs">
-      ${trips.map(t => `<button class="tab ${t.id===activeTripId?'active':''}" data-tab="${t.id}">${esc(t.title)}</button>`).join("")}
-      <button class="tab tab-new" id="newTripTab" title="New trip">+</button>
-    </div>
+    ${renderTabs()}
 
     ${activeTrip ? renderTripPanel(activeTrip) :
       `<div class="empty-state">No trips yet. Click "+" to add your first one, or import saved data above.</div>`}
   `;
 
   wireEvents(activeTrip);
+  wireTabDragEvents();
 }
 
 function wireEvents(activeTrip){
@@ -973,8 +1131,11 @@ function wireEvents(activeTrip){
       notes: t.notes, attendees: t.attendees,
       flights: (t.flights||[]).map(f => ({
         label: f.label, leg: f.leg, url: f.url, currency: f.currency,
-        origin: f.origin, destination: f.destination, depart_date: f.depart_date,
-        paidCash: f.paid_cash, paidPoints: f.paid_points, alertBelow: f.alert_below,
+        origin: f.origin, destination: f.destination,
+        depart_date: f.depart_date, depart_time: f.depart_time,
+        return_date: f.return_date, return_time: f.return_time,
+        paidCash: f.paid_cash, paidPoints: f.paid_points, passengers: f.passengers,
+        alertBelow: f.alert_below,
         notes: f.notes, priceLog: (f.price_logs||[]).map(l => ({date: l.date, price: l.price}))
       })),
       rentals: (t.rentals||[]).map(r => ({
@@ -1020,6 +1181,34 @@ function wireEvents(activeTrip){
     await refresh();
   };
 
+  document.getElementById("newFolderTab").onclick = async () => {
+    const title = prompt("Folder name (e.g. Work trips):");
+    if (!title || !title.trim()) return;
+    await createFolder(title.trim());
+    await refresh();
+  };
+
+  document.querySelectorAll("[data-folder-rename]").forEach(el => {
+    el.addEventListener("click", async () => {
+      const id = el.dataset.folderRename;
+      const folder = folders.find(f => f.id === id);
+      const title = prompt("Rename folder:", folder?.title || "");
+      if (!title || !title.trim() || title.trim() === folder?.title) return;
+      await renameFolder(id, title.trim());
+      await refresh();
+    });
+  });
+
+  document.querySelectorAll("[data-folder-del]").forEach(el => {
+    el.addEventListener("click", async () => {
+      const id = el.dataset.folderDel;
+      const folder = folders.find(f => f.id === id);
+      if (!confirm(`Delete folder "${folder?.title}"? Trips inside it are kept, just ungrouped.`)) return;
+      await deleteFolder(id);
+      await refresh();
+    });
+  });
+
   if (!activeTrip) return;
 
   document.querySelector(`[data-rename-trip="${activeTrip.id}"]`).addEventListener("click", () => {
@@ -1061,6 +1250,17 @@ function wireEvents(activeTrip){
       const attendees = attendeesRaw.split(",").map(s=>s.trim()).filter(Boolean);
       const notes = holder.querySelector(`[data-m-notes]`).value.trim();
       await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, attendees, notes });
+      let folderSel = holder.querySelector(`[data-m-folder]`).value;
+      if (folderSel === "__new__"){
+        const title = prompt("Folder name (e.g. Work trips):");
+        if (title && title.trim()){
+          const f = await createFolder(title.trim());
+          folderSel = f?.id || "";
+        } else folderSel = activeTrip.folder_id || "";
+      }
+      if ((folderSel || null) !== (activeTrip.folder_id || null)){
+        await moveTripToFolder(activeTrip.id, folderSel || null);
+      }
       await refresh();
     });
     document.querySelector(`[data-meta-cancel="${activeTrip.id}"]`)?.addEventListener("click", render);
@@ -1180,6 +1380,9 @@ function wireEvents(activeTrip){
       form.querySelector("[data-f-dest]").value = flight.destination || "";
       form.querySelector("[data-f-date]").value = flight.depart_date || "";
       form.querySelector("[data-f-time]").value = (flight.depart_time || "").slice(0,5);
+      form.querySelector("[data-f-return-date]").value = flight.return_date || "";
+      form.querySelector("[data-f-return-time]").value = (flight.return_time || "").slice(0,5);
+      form.querySelector("[data-f-passengers]").value = flight.passengers || 1;
       form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
       form.querySelector("[data-f-paidpoints]").value = flight.paid_points ?? "";
       form.querySelector("[data-f-alert]").value = flight.alert_below ?? "";
@@ -1189,11 +1392,12 @@ function wireEvents(activeTrip){
       labelEl.dataset.auto =
         (!flight.label || flight.label === flightTitle(flight.origin, flight.destination,
           flight.depart_date, (flight.depart_time || "").slice(0,5),
-          flight.paid_cash, flight.paid_points)) ? "1" : "0";
+          flight.paid_cash, flight.paid_points, flight.leg, flight.return_date)) ? "1" : "0";
       wireAutoTitle(form, { url: "[data-f-url]", origin: "[data-f-origin]",
         dest: "[data-f-dest]", date: "[data-f-date]", time: "[data-f-time]",
         paidCash: "[data-f-paidcash]", paidPoints: "[data-f-paidpoints]",
-        label: "[data-f-label]" });
+        label: "[data-f-label]", leg: "[data-f-leg]",
+        returnDate: "[data-f-return-date]", returnWrap: "[data-f-return-wrap]" });
 
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
@@ -1203,18 +1407,24 @@ function wireEvents(activeTrip){
         const destination = form.querySelector("[data-f-dest]").value.trim().toUpperCase() || null;
         const departDate = form.querySelector("[data-f-date]").value || null;
         const departTime = form.querySelector("[data-f-time]").value || null;
+        const leg = form.querySelector("[data-f-leg]").value || null;
+        const returnDate = leg === "roundtrip" ? (form.querySelector("[data-f-return-date]").value || null) : null;
+        const returnTime = leg === "roundtrip" ? (form.querySelector("[data-f-return-time]").value || null) : null;
         const paidCash = pc === "" ? null : parseFloat(pc);
         const paidPoints = pp === "" ? null : parseFloat(pp);
+        const passengers = parseInt(form.querySelector("[data-f-passengers]").value, 10) || 1;
         await updateFlight(fid, {
           label: form.querySelector("[data-f-label]").value.trim()
-            || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints)
+            || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate)
             || flight.label,
-          leg: form.querySelector("[data-f-leg]").value || null,
+          leg,
           currency: form.querySelector("[data-f-currency]").value.trim() || "USD",
           url: form.querySelector("[data-f-url]").value.trim(),
           origin, destination, depart_date: departDate, depart_time: departTime,
+          return_date: returnDate, return_time: returnTime,
           paid_cash: paidCash,
           paid_points: paidPoints,
+          passengers,
           alert_below: ab === "" ? null : parseFloat(ab),
           notes: form.querySelector("[data-f-notes]").value.trim(),
         });
@@ -1298,33 +1508,102 @@ function wireAddFlightForm(tripId){
   wireAutoTitle(holder, { url: "[data-nf-url]", origin: "[data-nf-origin]",
     dest: "[data-nf-dest]", date: "[data-nf-date]", time: "[data-nf-time]",
     paidCash: "[data-nf-paidcash]", paidPoints: "[data-nf-paidpoints]",
-    label: "[data-nf-label]" });
+    label: "[data-nf-label]", leg: "[data-nf-leg]",
+    returnDate: "[data-nf-return-date]", returnWrap: "[data-nf-return-wrap]" });
   saveBtn.addEventListener("click", async () => {
     const url = holder.querySelector("[data-nf-url]").value.trim();
     const origin = holder.querySelector("[data-nf-origin]").value.trim().toUpperCase() || null;
     const destination = holder.querySelector("[data-nf-dest]").value.trim().toUpperCase() || null;
     const departDate = holder.querySelector("[data-nf-date]").value || null;
     const departTime = holder.querySelector("[data-nf-time]").value || null;
+    const leg = holder.querySelector("[data-nf-leg]").value || null;
+    const returnDate = leg === "roundtrip" ? (holder.querySelector("[data-nf-return-date]").value || null) : null;
+    const returnTime = leg === "roundtrip" ? (holder.querySelector("[data-nf-return-time]").value || null) : null;
     const pc = holder.querySelector("[data-nf-paidcash]").value;
     const pp = holder.querySelector("[data-nf-paidpoints]").value;
     const paidCash = pc === "" ? null : parseFloat(pc);
     const paidPoints = pp === "" ? null : parseFloat(pp);
+    const passengers = parseInt(holder.querySelector("[data-nf-passengers]").value, 10) || 1;
     const label = holder.querySelector("[data-nf-label]").value.trim()
-      || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints);
+      || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate);
     if (!label || !url) { alert("A URL plus either a title or From/To airports are required."); return; }
-    const leg = holder.querySelector("[data-nf-leg]").value || null;
     const currency = holder.querySelector("[data-nf-currency]").value.trim() || "USD";
     const ab = holder.querySelector("[data-nf-alert]").value;
     const notes = holder.querySelector("[data-nf-notes]").value.trim();
     await createFlight(tripId, {
       label, leg, url, currency, origin, destination, departDate, departTime,
-      paidCash, paidPoints,
+      returnDate, returnTime, paidCash, paidPoints, passengers,
       alertBelow: ab === "" ? null : parseFloat(ab),
       notes
     });
     await refresh();
   });
   cancelBtn.addEventListener("click", () => { holder.innerHTML = ""; });
+}
+
+// ---------------- Tab / folder drag and drop ----------------
+
+let dragTripId = null;
+let dragFolderId = null;
+
+function wireTabDragEvents(){
+  document.querySelectorAll("[data-drag-tab]").forEach(tab => {
+    tab.addEventListener("dragstart", (e) => {
+      dragTripId = tab.dataset.dragTab;
+      dragFolderId = null;
+      e.stopPropagation();
+      e.dataTransfer.effectAllowed = "move";
+    });
+    tab.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
+    tab.addEventListener("drop", async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (!dragTripId || dragTripId === tab.dataset.dragTab) return;
+      const target = trips.find(t => t.id === tab.dataset.dragTab);
+      const dragged = trips.find(t => t.id === dragTripId);
+      const targetFolderId = target.folder_id || null;
+      if ((dragged.folder_id || null) !== targetFolderId){
+        await moveTripToFolder(dragTripId, targetFolderId);
+      } else {
+        const siblings = trips
+          .filter(t => t.id !== dragTripId && (t.folder_id || null) === targetFolderId)
+          .sort((a,b) => a.position - b.position);
+        const targetIndex = siblings.findIndex(t => t.id === tab.dataset.dragTab);
+        await reorderItem("trips", dragged, siblings, targetIndex);
+      }
+      dragTripId = null;
+      await refresh();
+    });
+  });
+
+  document.querySelectorAll("[data-folder-drop]").forEach(zone => {
+    zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag-over"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+    zone.addEventListener("drop", async (e) => {
+      e.preventDefault();
+      zone.classList.remove("drag-over");
+      const folderId = zone.dataset.folderDrop || null;
+      if (dragTripId){
+        await moveTripToFolder(dragTripId, folderId);
+        dragTripId = null;
+        await refresh();
+      } else if (dragFolderId && folderId && dragFolderId !== folderId){
+        const dragged = folders.find(f => f.id === dragFolderId);
+        const siblings = folders.filter(f => f.id !== dragFolderId).sort((a,b) => a.position - b.position);
+        const targetIndex = siblings.findIndex(f => f.id === folderId);
+        await reorderItem("trip_folders", dragged, siblings, targetIndex);
+        dragFolderId = null;
+        await refresh();
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-drag-folder]").forEach(handle => {
+    handle.addEventListener("dragstart", (e) => {
+      dragFolderId = handle.dataset.dragFolder;
+      dragTripId = null;
+      e.dataTransfer.effectAllowed = "move";
+    });
+  });
 }
 
 // ---------------- Drag and drop ----------------
@@ -1355,11 +1634,11 @@ function wireDragEvents(activeTrip){
       e.preventDefault();
       card.classList.remove("drag-over");
       if (!dragFlightId || dragFlightId === card.dataset.card) return;
-      const targetLeg = card.dataset.leg || null;
+      const targetLeg = card.dataset.leg;
       const { flight: dragged } = findFlight(dragFlightId);
-      if ((dragged.leg || null) !== targetLeg) return; // no cross-leg drag for now
+      if (legScope(dragged.leg) !== targetLeg) return; // no cross-lane drag for now
       const siblings = (activeTrip.flights || [])
-        .filter(f => f.id !== dragFlightId && (f.leg || null) === targetLeg)
+        .filter(f => f.id !== dragFlightId && legScope(f.leg) === targetLeg)
         .sort((a,b) => a.position - b.position);
       const targetIndex = siblings.findIndex(f => f.id === card.dataset.card);
       await reorderItem("flights", dragged, siblings, targetIndex);
@@ -1373,11 +1652,11 @@ function wireDragEvents(activeTrip){
       if (e.target !== list) return; // let card-level drop handlers take it
       e.preventDefault();
       if (!dragFlightId) return;
-      const targetLeg = list.dataset.legList || null;
+      const targetLeg = list.dataset.legList;
       const { flight: dragged } = findFlight(dragFlightId);
-      if ((dragged.leg || null) !== targetLeg) return;
+      if (legScope(dragged.leg) !== targetLeg) return;
       const siblings = (activeTrip.flights || [])
-        .filter(f => f.id !== dragFlightId && (f.leg || null) === targetLeg)
+        .filter(f => f.id !== dragFlightId && legScope(f.leg) === targetLeg)
         .sort((a,b) => a.position - b.position);
       await reorderItem("flights", dragged, siblings, siblings.length);
       await refresh();
