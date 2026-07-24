@@ -39,14 +39,18 @@ reach rows for trips they own or were invited to by email.
 ## Setting up your own instance
 
 1. Create a free project at [supabase.com](https://supabase.com).
-2. In the SQL Editor, run `supabase/schema.sql`, then `supabase/policies.sql`.
-3. In Authentication → URL Configuration, set your hosting URL as the Site
+2. In Storage, create a bucket named exactly `attachments` (leave "Public
+   bucket" unchecked) — this holds flight/rental screenshots. Create it via
+   the dashboard, not SQL; `insert into storage.buckets` from the SQL Editor
+   is unreliable and can silently abort the rest of a script.
+3. In the SQL Editor, run `supabase/schema.sql`, then `supabase/policies.sql`.
+4. In Authentication → URL Configuration, set your hosting URL as the Site
    URL and add it to Redirect URLs.
-4. (Optional) In Authentication → Sign In / Providers → Email, disable
+5. (Optional) In Authentication → Sign In / Providers → Email, disable
    "Confirm email" if you don't want signup confirmation emails.
-5. Put your project URL and anon/publishable key into the two constants near
+6. Put your project URL and anon/publishable key into the two constants near
    the top of the `<script>` in `index.html`.
-6. Host `index.html` anywhere static (GitHub Pages works fine).
+7. Host `index.html` anywhere static (GitHub Pages works fine).
 
 ## Notes
 

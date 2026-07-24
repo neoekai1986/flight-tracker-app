@@ -55,6 +55,8 @@ create table public.flights (
   paid_cash   numeric,
   paid_points numeric,
   passengers  integer not null default 1 check (passengers >= 1),
+  flight_number     text,
+  confirmation_code text,
   alert_below numeric,
   notes       text,
   position    double precision not null default 0,
@@ -75,6 +77,7 @@ create table public.rentals (
   rental_end   date,
   cancel_by    date,
   reminded_at  timestamptz,  -- set by the reminder job once the 5-days-out email is sent
+  confirmation_code text,
   notes        text,
   position     double precision not null default 0,
   created_at   timestamptz not null default now(),
@@ -89,6 +92,23 @@ create table public.price_logs (
   created_at  timestamptz not null default now()
 );
 
+-- Screenshots attached to a flight or rental (confirmation emails, boarding
+-- passes, listing pages). The actual image bytes live in Storage under the
+-- "attachments" bucket, at path "{trip_id}/{uuid}.{ext}"; this row is the
+-- metadata + OCR text extracted from it client-side (Tesseract.js — no
+-- server call, so ocr_text is best-effort raw text, not verified fields).
+create table public.attachments (
+  id          uuid primary key default gen_random_uuid(),
+  trip_id     uuid not null references public.trips(id) on delete cascade,
+  flight_id   uuid references public.flights(id) on delete cascade,
+  rental_id   uuid references public.rentals(id) on delete cascade,
+  storage_path text not null,
+  filename    text,
+  ocr_text    text,
+  created_at  timestamptz not null default now(),
+  check ( (flight_id is not null)::int + (rental_id is not null)::int = 1 )
+);
+
 create index on public.trip_folders (owner_id, position);
 create index on public.trips (folder_id, position);
 create index on public.trip_collaborators (trip_id);
@@ -98,3 +118,12 @@ create index on public.price_logs (flight_id, date);
 create index on public.rentals (trip_id, position);
 create index rentals_reminder_due on public.rentals (cancel_by)
   where cancel_by is not null and reminded_at is null;
+create index on public.attachments (flight_id);
+create index on public.attachments (rental_id);
+
+-- Screenshot storage: create a bucket named exactly "attachments" via the
+-- Supabase dashboard (Storage > New bucket, "Public bucket" left UNCHECKED).
+-- Creating it via SQL (`insert into storage.buckets`) is unreliable — it can
+-- silently fail or abort the rest of the script depending on the project's
+-- permissions, so this is a manual step. RLS (in policies.sql), not bucket
+-- privacy, is what actually gates access to the files.

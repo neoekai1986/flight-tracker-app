@@ -53,11 +53,13 @@ alter table public.trip_collaborators enable row level security;
 alter table public.flights enable row level security;
 alter table public.price_logs enable row level security;
 alter table public.rentals enable row level security;
+alter table public.attachments enable row level security;
 
 -- Only logged-in users get any access at all; RLS scopes it further per-row.
-revoke all on public.trip_folders, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals from anon;
+revoke all on public.trip_folders, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments from anon;
 grant select, insert, update, delete on public.trip_folders, public.trips, public.flights, public.price_logs, public.rentals to authenticated;
 grant select, insert, delete on public.trip_collaborators to authenticated;
+grant select, insert, update, delete on public.attachments to authenticated;
 
 -- Ownership can't be reassigned via UPDATE (simpler and airtight vs. expressing
 -- this in RLS's WITH CHECK).
@@ -174,3 +176,38 @@ create policy price_logs_update on public.price_logs
 
 create policy price_logs_delete on public.price_logs
   for delete using ( public.can_access_flight(flight_id) );
+
+-- attachments
+create policy attachments_select on public.attachments
+  for select using ( public.can_access_trip(trip_id) );
+
+create policy attachments_insert on public.attachments
+  for insert with check ( public.can_access_trip(trip_id) );
+
+create policy attachments_update on public.attachments
+  for update using ( public.can_access_trip(trip_id) )
+  with check ( public.can_access_trip(trip_id) );
+
+create policy attachments_delete on public.attachments
+  for delete using ( public.can_access_trip(trip_id) );
+
+-- Storage: screenshots live at "{trip_id}/{uuid}.{ext}" — the first path
+-- segment is the trip id, so RLS can scope access the same way every
+-- other table does.
+create policy attachments_storage_select on storage.objects
+  for select using (
+    bucket_id = 'attachments'
+    and public.can_access_trip( (split_part(name, '/', 1))::uuid )
+  );
+
+create policy attachments_storage_insert on storage.objects
+  for insert with check (
+    bucket_id = 'attachments'
+    and public.can_access_trip( (split_part(name, '/', 1))::uuid )
+  );
+
+create policy attachments_storage_delete on storage.objects
+  for delete using (
+    bucket_id = 'attachments'
+    and public.can_access_trip( (split_part(name, '/', 1))::uuid )
+  );

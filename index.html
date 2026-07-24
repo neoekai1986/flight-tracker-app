@@ -114,6 +114,24 @@
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
 
   .log-form{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;align-items:center}
+
+  .attachments-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
+  .att-thumb{position:relative;width:56px;height:56px;border-radius:6px;overflow:hidden;
+      border:1px solid var(--line);cursor:pointer;background:var(--night)}
+  .att-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .att-thumb .att-del{position:absolute;top:0;right:0;background:rgba(15,22,38,.85);color:var(--ink);
+      border:none;font-size:11px;padding:1px 5px;cursor:pointer;border-radius:0 0 0 6px}
+  .att-thumb .att-del:hover{color:var(--bad)}
+  .att-add-btn{display:flex;align-items:center;justify-content:center;width:56px;height:56px;
+      border:1px dashed var(--line);border-radius:6px;cursor:pointer;color:var(--muted);font-size:20px}
+  .att-add-btn:hover{border-color:var(--amber);color:var(--amber)}
+  .att-status{font-size:12px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
+  .att-suggest{background:var(--night);border:1px solid var(--amber);border-radius:6px;
+      padding:8px 10px;font-size:12.5px;margin:6px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  .att-suggest b{color:var(--amber)}
+  .att-text-box{background:var(--night);border:1px solid var(--line);border-radius:6px;padding:8px 10px;
+      font-size:11.5px;font-family:'IBM Plex Mono',monospace;color:var(--muted);white-space:pre-wrap;
+      max-height:140px;overflow-y:auto;margin:6px 0}
   input,select,textarea{background:var(--night);border:1px solid var(--line);
        color:var(--ink);padding:7px 9px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:13px}
   input[type=number]{width:100px}
@@ -276,6 +294,78 @@ function parseFlightUrl(url){
   return null;
 }
 
+// ---------------- Screenshot OCR (client-side, best-effort) ----------------
+
+let tesseractLoadPromise = null;
+function loadTesseract(){
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (!tesseractLoadPromise){
+    tesseractLoadPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      s.onload = () => resolve(window.Tesseract);
+      s.onerror = () => reject(new Error("Couldn't load the OCR library (offline?)."));
+      document.head.appendChild(s);
+    });
+  }
+  return tesseractLoadPromise;
+}
+
+async function runOcr(file, onProgress){
+  const Tesseract = await loadTesseract();
+  const { data } = await Tesseract.recognize(file, "eng", {
+    logger: onProgress ? (m) => onProgress(m) : undefined
+  });
+  return data.text || "";
+}
+
+const MONTHS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
+
+// Best-effort text -> {date, time, flightNumber, confirmationCode}. Every
+// field can be wrong or missing — this only suggests values for the user
+// to review, it never saves anything on its own.
+function parseScreenshotText(text){
+  const out = { date: null, time: null, flightNumber: null, confirmationCode: null };
+  if (!text) return out;
+
+  let m = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (m) out.date = `${m[1]}-${m[2]}-${m[3]}`;
+  if (!out.date){
+    m = text.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2,4})\b/);
+    if (m){
+      let [, mm, dd, yy] = m;
+      if (yy.length === 2) yy = "20" + yy;
+      out.date = `${yy}-${mm.padStart(2,"0")}-${dd.padStart(2,"0")}`;
+    }
+  }
+  if (!out.date){
+    m = text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})?/i);
+    if (m){
+      const mi = MONTHS.indexOf(m[1].toLowerCase());
+      const year = m[3] || new Date().getFullYear();
+      out.date = `${year}-${String(mi+1).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`;
+    }
+  }
+
+  m = text.match(/\b(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)\b/);
+  if (m){
+    let h = parseInt(m[1], 10);
+    const ampm = m[3].toLowerCase();
+    if (ampm === "pm" && h !== 12) h += 12;
+    if (ampm === "am" && h === 12) h = 0;
+    out.time = `${String(h).padStart(2,"0")}:${m[2]}`;
+  }
+
+  m = text.match(/\bflight\s*#?\s*[:\-]?\s*([A-Z]{1,3}\s?\d{2,4})\b/i)
+    || text.match(/\b([A-Z]{2})\s?(\d{2,4})\b/);
+  if (m) out.flightNumber = (m[1] + (m[2] || "")).replace(/\s+/g, "").toUpperCase();
+
+  m = text.match(/\b(?:confirmation|conf(?:irmation)?\.?|record locator|booking)\s*(?:code|#|no\.?)?\s*[:\-]?\s*([A-Z0-9]{5,8})\b/i);
+  if (m) out.confirmationCode = m[1].toUpperCase();
+
+  return out;
+}
+
 // ---------------- Auth screen ----------------
 
 function renderAuth(){
@@ -385,7 +475,7 @@ function renderAuth(){
 async function loadTrips(){
   const { data, error } = await supabase
     .from("trips")
-    .select("*, flights(*, price_logs(*)), rentals(*), trip_collaborators(*)")
+    .select("*, flights(*, price_logs(*), attachments(*)), rentals(*, attachments(*)), trip_collaborators(*)")
     .order("created_at", { ascending: true });
   if (error) { console.error(error); return []; }
   for (const t of data){
@@ -485,6 +575,7 @@ async function createFlight(tripId, fields){
     return_date: fields.returnDate || null, return_time: fields.returnTime || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
     passengers: fields.passengers || 1,
+    flight_number: fields.flightNumber || null, confirmation_code: fields.confirmationCode || null,
     alert_below: fields.alertBelow, notes: fields.notes, position
   });
   if (error) alert(error.message);
@@ -497,7 +588,8 @@ async function createRental(tripId, fields){
     trip_id: tripId, kind: fields.kind || "housing", label: fields.label, url: fields.url || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
     rental_start: fields.rentalStart || null, rental_end: fields.rentalEnd || null,
-    cancel_by: fields.cancelBy || null, notes: fields.notes || null, position
+    cancel_by: fields.cancelBy || null, confirmation_code: fields.confirmationCode || null,
+    notes: fields.notes || null, position
   });
   if (error) alert(error.message);
 }
@@ -520,6 +612,53 @@ async function updateFlight(id, patch){
 async function deleteFlight(id){
   const { error } = await supabase.from("flights").delete().eq("id", id);
   if (error) alert(error.message);
+}
+
+// ---------------- Attachments (screenshots) ----------------
+
+function findAttachmentOwner(attId){
+  for (const t of trips){
+    for (const f of (t.flights || [])){
+      const a = (f.attachments || []).find(x => x.id === attId);
+      if (a) return { trip: t, item: f, kind: "flight", attachment: a };
+    }
+    for (const r of (t.rentals || [])){
+      const a = (r.attachments || []).find(x => x.id === attId);
+      if (a) return { trip: t, item: r, kind: "rental", attachment: a };
+    }
+  }
+  return null;
+}
+
+async function uploadAttachment(tripId, kind, itemId, file){
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+  const path = `${tripId}/${uid()}.${ext}`;
+  const { error: upErr } = await supabase.storage.from("attachments").upload(path, file);
+  if (upErr) { alert(upErr.message); return null; }
+  const { data, error } = await supabase.from("attachments").insert({
+    trip_id: tripId,
+    flight_id: kind === "flight" ? itemId : null,
+    rental_id: kind === "rental" ? itemId : null,
+    storage_path: path, filename: file.name
+  }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function deleteAttachment(att){
+  await supabase.storage.from("attachments").remove([att.storage_path]);
+  const { error } = await supabase.from("attachments").delete().eq("id", att.id);
+  if (error) alert(error.message);
+}
+
+async function attachmentSignedUrl(path){
+  const { data, error } = await supabase.storage.from("attachments").createSignedUrl(path, 3600);
+  if (error) { console.error(error); return null; }
+  return data.signedUrl;
+}
+
+async function saveAttachmentOcrText(id, text){
+  await supabase.from("attachments").update({ ocr_text: text }).eq("id", id);
 }
 
 async function moveFlightToTrip(flightId, newTripId){
@@ -638,6 +777,25 @@ async function importFromLocalStorage(){
 
 // ---------------- Main app rendering ----------------
 
+function renderAttachmentsRow(kind, itemId, attachments){
+  const thumbs = (attachments || []).map(att => `
+    <div class="att-thumb" data-att-view="${att.id}" title="Click to view extracted text">
+      <img data-att-img="${att.id}" data-att-path="${esc(att.storage_path)}" alt="screenshot">
+      <button class="att-del" data-att-del="${att.id}" title="Delete">×</button>
+    </div>`).join("");
+  return `
+    <div class="attachments-row" data-attachments-row="${itemId}">
+      ${thumbs}
+      <label class="att-add-btn" title="Add screenshot">
+        📷
+        <input type="file" accept="image/*" data-att-upload="${kind}:${itemId}" hidden>
+      </label>
+    </div>
+    <div class="att-status" data-att-status="${itemId}"></div>
+    <div data-att-suggest-holder="${itemId}"></div>
+    <div data-att-text-holder="${itemId}"></div>`;
+}
+
 function renderCard(trip, f){
   const cur = f.currency || "USD";
   const moveOptions = trips.filter(t => t.id !== trip.id)
@@ -650,6 +808,8 @@ function renderCard(trip, f){
     const ret = [fmtShortDate(f.return_date), fmtTime(f.return_time)].filter(Boolean).join(" ");
     metaBits.push(`Return <b>${esc(ret)}</b>`);
   }
+  if (f.flight_number) metaBits.push(`Flight <b>${esc(f.flight_number)}</b>`);
+  if (f.confirmation_code) metaBits.push(`Conf. <b>${esc(f.confirmation_code)}</b>`);
   if (f.alert_below != null) metaBits.push(`Alert below <b>${fmtCash(f.alert_below, cur)}</b>`);
 
   const entries = f.price_logs || [];
@@ -691,6 +851,7 @@ function renderCard(trip, f){
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")}</p>
     ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
+    ${renderAttachmentsRow("flight", f.id, f.attachments)}
     <div class="row">
       ${f.url ? `<a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener">Check price →</a>` : ""}
       <button class="btn btn-ghost btn-sm" data-edit-flight="${f.id}">Edit</button>
@@ -750,6 +911,12 @@ function renderEditForm(f){
     </label>
     <label class="field">Passengers
       <input type="number" step="1" min="1" data-f-passengers value="1">
+    </label>
+    <label class="field">Flight number
+      <input type="text" data-f-flightnumber placeholder="e.g. WN1234">
+    </label>
+    <label class="field">Confirmation code
+      <input type="text" data-f-confirmation placeholder="optional">
     </label>
     <label class="field">Paid (cash, per passenger)
       <input type="number" step="0.01" data-f-paidcash placeholder="e.g. 298">
@@ -812,6 +979,12 @@ function addFlightFormHTML(tripId, trip){
     </label>
     <label class="field">Passengers
       <input type="number" step="1" min="1" data-nf-passengers value="1">
+    </label>
+    <label class="field">Flight number
+      <input type="text" data-nf-flightnumber placeholder="e.g. WN1234">
+    </label>
+    <label class="field">Confirmation code
+      <input type="text" data-nf-confirmation placeholder="optional">
     </label>
     <label class="field">Paid (cash, per passenger)
       <input type="number" step="0.01" data-nf-paidcash placeholder="optional">
@@ -978,6 +1151,7 @@ function renderRentalCard(trip, r){
   if (r.rental_start || r.rental_end){
     metaBits.push(`<b>${fmtShortDate(r.rental_start) || "?"} → ${fmtShortDate(r.rental_end) || "?"}</b>`);
   }
+  if (r.confirmation_code) metaBits.push(`Conf. <b>${esc(r.confirmation_code)}</b>`);
   return `
   <div class="card" data-rental-card="${r.id}" data-trip="${trip.id}">
     <div class="card-title-row">
@@ -986,6 +1160,7 @@ function renderRentalCard(trip, r){
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
     ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
+    ${renderAttachmentsRow("rental", r.id, r.attachments)}
     <div class="row" style="margin-bottom:0">
       ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
       <button class="btn btn-ghost btn-sm" data-edit-rental="${r.id}">Edit</button>
@@ -1019,6 +1194,9 @@ function rentalFormHTML(prefix, idAttr, defaults){
     </label>
     <label class="field">Free-cancel deadline
       <input type="date" data-${p}-cancelby>
+    </label>
+    <label class="field">Confirmation code
+      <input type="text" data-${p}-confirmation placeholder="optional">
     </label>
     <label class="field">Paid (cash)
       <input type="number" step="0.01" data-${p}-paidcash placeholder="optional">
@@ -1188,6 +1366,7 @@ function render(){
 
   wireEvents(activeTrip);
   wireTabDragEvents();
+  wireAttachments();
 }
 
 function wireEvents(activeTrip){
@@ -1374,6 +1553,7 @@ function wireEvents(activeTrip){
         rentalStart: holder.querySelector("[data-nr-start]").value || null,
         rentalEnd: holder.querySelector("[data-nr-end]").value || null,
         cancelBy: holder.querySelector("[data-nr-cancelby]").value || null,
+        confirmationCode: holder.querySelector("[data-nr-confirmation]").value.trim() || null,
         paidCash: pc === "" ? null : parseFloat(pc),
         paidPoints: pp === "" ? null : parseFloat(pp),
         notes: holder.querySelector("[data-nr-notes]").value.trim(),
@@ -1397,6 +1577,7 @@ function wireEvents(activeTrip){
       form.querySelector("[data-er-start]").value = rental.rental_start || "";
       form.querySelector("[data-er-end]").value = rental.rental_end || "";
       form.querySelector("[data-er-cancelby]").value = rental.cancel_by || "";
+      form.querySelector("[data-er-confirmation]").value = rental.confirmation_code || "";
       form.querySelector("[data-er-paidcash]").value = rental.paid_cash ?? "";
       form.querySelector("[data-er-paidpoints]").value = rental.paid_points ?? "";
       form.querySelector("[data-er-notes]").value = rental.notes || "";
@@ -1412,6 +1593,7 @@ function wireEvents(activeTrip){
           rental_start: form.querySelector("[data-er-start]").value || null,
           rental_end: form.querySelector("[data-er-end]").value || null,
           cancel_by: newCancelBy,
+          confirmation_code: form.querySelector("[data-er-confirmation]").value.trim() || null,
           paid_cash: pc === "" ? null : parseFloat(pc),
           paid_points: pp === "" ? null : parseFloat(pp),
           notes: form.querySelector("[data-er-notes]").value.trim() || null,
@@ -1454,6 +1636,8 @@ function wireEvents(activeTrip){
       form.querySelector("[data-f-return-date]").value = flight.return_date || "";
       form.querySelector("[data-f-return-time]").value = (flight.return_time || "").slice(0,5);
       form.querySelector("[data-f-passengers]").value = flight.passengers || 1;
+      form.querySelector("[data-f-flightnumber]").value = flight.flight_number || "";
+      form.querySelector("[data-f-confirmation]").value = flight.confirmation_code || "";
       form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
       form.querySelector("[data-f-paidpoints]").value = flight.paid_points ?? "";
       form.querySelector("[data-f-alert]").value = flight.alert_below ?? "";
@@ -1496,6 +1680,8 @@ function wireEvents(activeTrip){
           paid_cash: paidCash,
           paid_points: paidPoints,
           passengers,
+          flight_number: form.querySelector("[data-f-flightnumber]").value.trim() || null,
+          confirmation_code: form.querySelector("[data-f-confirmation]").value.trim() || null,
           alert_below: ab === "" ? null : parseFloat(ab),
           notes: form.querySelector("[data-f-notes]").value.trim(),
         });
@@ -1604,12 +1790,142 @@ function wireAddFlightForm(tripId){
     await createFlight(tripId, {
       label, leg, url: url || null, currency, origin, destination, departDate, departTime,
       returnDate, returnTime, paidCash, paidPoints, passengers,
+      flightNumber: holder.querySelector("[data-nf-flightnumber]").value.trim() || null,
+      confirmationCode: holder.querySelector("[data-nf-confirmation]").value.trim() || null,
       alertBelow: ab === "" ? null : parseFloat(ab),
       notes
     });
     await refresh();
   });
   cancelBtn.addEventListener("click", () => { holder.innerHTML = ""; });
+}
+
+// ---------------- Attachments UI wiring ----------------
+
+function openEditFormIfNeeded(kind, itemId){
+  const formSel = kind === "flight" ? `[data-edit-form="${itemId}"]` : `[data-rental-edit-form="${itemId}"]`;
+  let form = document.querySelector(formSel);
+  if (!form){
+    const editBtn = document.querySelector(
+      kind === "flight" ? `[data-edit-flight="${itemId}"]` : `[data-edit-rental="${itemId}"]`);
+    if (editBtn) editBtn.click();
+    form = document.querySelector(formSel);
+  }
+  return form;
+}
+
+function applySuggestionToFlight(itemId, suggestion){
+  const form = openEditFormIfNeeded("flight", itemId);
+  if (!form) return;
+  const setIfEmpty = (sel, val) => {
+    const el = form.querySelector(sel);
+    if (el && !el.value && val) el.value = val;
+  };
+  setIfEmpty("[data-f-date]", suggestion.date);
+  setIfEmpty("[data-f-time]", suggestion.time);
+  setIfEmpty("[data-f-flightnumber]", suggestion.flightNumber);
+  setIfEmpty("[data-f-confirmation]", suggestion.confirmationCode);
+}
+
+function applySuggestionToRental(itemId, suggestion){
+  const form = openEditFormIfNeeded("rental", itemId);
+  if (!form) return;
+  const el = form.querySelector("[data-er-confirmation]");
+  if (el && !el.value && suggestion.confirmationCode) el.value = suggestion.confirmationCode;
+}
+
+function renderSuggestionBanner(kind, itemId, suggestion){
+  const bits = [];
+  if (suggestion.date) bits.push(`Date <b>${esc(fmtShortDate(suggestion.date))}</b>`);
+  if (suggestion.time) bits.push(`Time <b>${esc(fmtTime(suggestion.time))}</b>`);
+  if (kind === "flight" && suggestion.flightNumber) bits.push(`Flight <b>${esc(suggestion.flightNumber)}</b>`);
+  if (suggestion.confirmationCode) bits.push(`Conf. <b>${esc(suggestion.confirmationCode)}</b>`);
+  if (!bits.length) return "";
+  return `
+    <div class="att-suggest" data-att-suggest="${itemId}">
+      <span>Detected from screenshot: ${bits.join(" &middot; ")}</span>
+      <button class="btn btn-ghost btn-sm" data-att-apply="${itemId}">Apply to form</button>
+      <button class="btn-link" data-att-dismiss="${itemId}">dismiss</button>
+    </div>`;
+}
+
+function wireAttachments(){
+  // Resolve signed URLs for every thumbnail (private bucket — no public URL).
+  document.querySelectorAll("[data-att-img]").forEach(async (img) => {
+    const path = img.dataset.attPath;
+    const url = await attachmentSignedUrl(path);
+    if (url) img.src = url;
+  });
+
+  document.querySelectorAll("[data-att-view]").forEach(thumb => {
+    thumb.addEventListener("click", () => {
+      const attId = thumb.dataset.attView;
+      const found = findAttachmentOwner(attId);
+      if (!found) return;
+      const holder = document.querySelector(`[data-att-text-holder="${found.item.id}"]`);
+      if (!holder) return;
+      if (holder.innerHTML){ holder.innerHTML = ""; return; }
+      const text = found.attachment.ocr_text;
+      holder.innerHTML = `<div class="att-text-box">${esc(text || "No text extracted from this image.")}</div>`;
+    });
+  });
+
+  document.querySelectorAll("[data-att-del]").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const attId = btn.dataset.attDel;
+      const found = findAttachmentOwner(attId);
+      if (!found) return;
+      if (!confirm("Delete this screenshot?")) return;
+      await deleteAttachment(found.attachment);
+      await refresh();
+    });
+  });
+
+  document.querySelectorAll("[data-att-upload]").forEach(input => {
+    input.addEventListener("change", async () => {
+      const file = input.files[0];
+      if (!file) return;
+      const [kind, itemId] = input.dataset.attUpload.split(":");
+      const found = kind === "flight" ? findFlight(itemId) : findRental(itemId);
+      const trip = found?.trip;
+      if (!trip) return;
+      const statusEl = document.querySelector(`[data-att-status="${itemId}"]`);
+      if (statusEl) statusEl.textContent = "Uploading…";
+      const att = await uploadAttachment(trip.id, kind, itemId, file);
+      if (!att) { if (statusEl) statusEl.textContent = ""; return; }
+      // Refresh now so the thumbnail appears right away; OCR runs after,
+      // against fresh DOM nodes (render() just replaced the old ones).
+      await refresh();
+      const freshStatusEl = document.querySelector(`[data-att-status="${itemId}"]`);
+      if (freshStatusEl) freshStatusEl.textContent = "Scanning screenshot for text…";
+      try {
+        const text = await runOcr(file, (m) => {
+          if (freshStatusEl && m.status === "recognizing text"){
+            freshStatusEl.textContent = `Scanning… ${Math.round((m.progress||0)*100)}%`;
+          }
+        });
+        await saveAttachmentOcrText(att.id, text);
+        const owner = findAttachmentOwner(att.id);
+        if (owner) owner.attachment.ocr_text = text; // keep in-memory cache in sync, no full refresh
+        const suggestion = parseScreenshotText(text);
+        if (freshStatusEl) freshStatusEl.textContent = "";
+        const suggestHolder = document.querySelector(`[data-att-suggest-holder="${itemId}"]`);
+        if (suggestHolder){
+          suggestHolder.innerHTML = renderSuggestionBanner(kind, itemId, suggestion);
+          const applyBtn = document.querySelector(`[data-att-apply="${itemId}"]`);
+          if (applyBtn) applyBtn.addEventListener("click", () => {
+            if (kind === "flight") applySuggestionToFlight(itemId, suggestion);
+            else applySuggestionToRental(itemId, suggestion);
+          });
+          const dismissBtn = document.querySelector(`[data-att-dismiss="${itemId}"]`);
+          if (dismissBtn) dismissBtn.addEventListener("click", () => { suggestHolder.innerHTML = ""; });
+        }
+      } catch (err){
+        if (freshStatusEl) freshStatusEl.textContent = "Couldn't scan image (saved anyway): " + err.message;
+      }
+    });
+  });
 }
 
 // ---------------- Tab / folder drag and drop ----------------
