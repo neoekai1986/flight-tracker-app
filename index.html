@@ -182,6 +182,10 @@
       background:var(--night);border:1px solid var(--line);border-radius:8px;padding:12px}
   .edit-grid .span2{grid-column:1 / -1}
   @media (max-width:520px){ .edit-grid{grid-template-columns:1fr} }
+  .split-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
+      font-family:'IBM Plex Mono',monospace;margin-bottom:5px}
+  .split-grid{display:grid;grid-template-columns:1.6fr 0.7fr 0.9fr;gap:6px}
+  @media (max-width:520px){ .split-grid{grid-template-columns:1fr 1fr 1fr} }
 
   table.hist{width:100%;border-collapse:collapse;margin-top:10px;font-family:'IBM Plex Mono',monospace;font-size:12.5px}
   table.hist th{text-align:left;color:var(--muted);font-weight:500;font-size:10.5px;
@@ -777,7 +781,7 @@ async function createRental(tripId, fields){
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
     rental_start: fields.rentalStart || null, rental_end: fields.rentalEnd || null,
     cancel_by: fields.cancelBy || null, confirmation_code: fields.confirmationCode || null,
-    notes: fields.notes || null, position
+    splits: fields.splits || [], notes: fields.notes || null, position
   });
   if (error) alert(error.message);
 }
@@ -935,7 +939,8 @@ async function bulkCreateTrips(tripBlobs){
         paid_cash: r.paidCash ?? r.paid_cash ?? null,
         paid_points: r.paidPoints ?? r.paid_points ?? null,
         rental_start: r.rental_start || null, rental_end: r.rental_end || null,
-        cancel_by: r.cancel_by || null, notes: r.notes || null, position: rentalPos
+        cancel_by: r.cancel_by || null, confirmation_code: r.confirmation_code || null,
+        splits: r.splits || [], notes: r.notes || null, position: rentalPos
       });
       rentalPos += 1000;
     }
@@ -1343,6 +1348,77 @@ function rentalCancelBadge(r){
   return `<span class="status ${cls}">${txt}</span>${r.reminded_at ? ` <span class="status">reminder sent</span>` : ""}`;
 }
 
+const SPLIT_SLOTS = 5;
+
+// A split entry gives either a percent of paid_cash or a flat amount —
+// whichever the user filled in. These derive the other value for display.
+function splitDollar(entry, total){
+  if (entry.amount != null) return entry.amount;
+  if (entry.percent != null && total != null) return total * entry.percent / 100;
+  return null;
+}
+function splitPercent(entry, total){
+  if (entry.percent != null) return entry.percent;
+  if (entry.amount != null && total) return entry.amount / total * 100;
+  return null;
+}
+
+function rentalSplitText(r){
+  const splits = (r.splits || []).filter(s => s.name);
+  if (!splits.length) return "";
+  const total = r.paid_cash;
+  return splits.map(s => {
+    const dollar = splitDollar(s, total);
+    const pct = splitPercent(s, total);
+    let val = "";
+    if (dollar != null && pct != null) val = ` ${fmtCash(dollar, r.currency)} (${Math.round(pct)}%)`;
+    else if (dollar != null) val = ` ${fmtCash(dollar, r.currency)}`;
+    else if (pct != null) val = ` ${Math.round(pct)}%`;
+    return `${esc(s.name)}${val}`;
+  }).join(" &middot; ");
+}
+
+// Gathers the 5 name/percent/amount rows from an open form into a splits array.
+function gatherSplits(container, prefix){
+  const splits = [];
+  for (let i = 0; i < SPLIT_SLOTS; i++){
+    const name = container.querySelector(`[data-${prefix}-split-name="${i}"]`).value.trim();
+    if (!name) continue;
+    const pctRaw = container.querySelector(`[data-${prefix}-split-pct="${i}"]`).value;
+    const amtRaw = container.querySelector(`[data-${prefix}-split-amt="${i}"]`).value;
+    splits.push({
+      name,
+      percent: pctRaw === "" ? null : parseFloat(pctRaw),
+      amount: amtRaw === "" ? null : parseFloat(amtRaw),
+    });
+  }
+  return splits;
+}
+
+function splitRowsHTML(prefix){
+  let rows = "";
+  for (let i = 0; i < SPLIT_SLOTS; i++){
+    rows += `
+      <input type="text" placeholder="Name" data-${prefix}-split-name="${i}">
+      <input type="number" step="0.1" placeholder="%" data-${prefix}-split-pct="${i}">
+      <input type="number" step="0.01" placeholder="$" data-${prefix}-split-amt="${i}">`;
+  }
+  return `
+    <div class="span2">
+      <div class="split-label">Who paid what (up to ${SPLIT_SLOTS} — % or $ each)</div>
+      <div class="split-grid">${rows}</div>
+    </div>`;
+}
+
+function fillSplitRows(form, prefix, splits){
+  for (let i = 0; i < SPLIT_SLOTS; i++){
+    const s = (splits || [])[i] || {};
+    form.querySelector(`[data-${prefix}-split-name="${i}"]`).value = s.name || "";
+    form.querySelector(`[data-${prefix}-split-pct="${i}"]`).value = s.percent ?? "";
+    form.querySelector(`[data-${prefix}-split-amt="${i}"]`).value = s.amount ?? "";
+  }
+}
+
 function renderRentalCard(trip, r){
   const icon = r.kind === "car" ? "🚗" : "🏠";
   const metaBits = [`Paid <b>${paidText(r)}</b>`];
@@ -1358,6 +1434,7 @@ function renderRentalCard(trip, r){
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
     ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
+    ${rentalSplitText(r) ? `<p class="meta-line">Split: ${rentalSplitText(r)}</p>` : ""}
     ${renderAttachmentsRow("rental", r.id, r.attachments)}
     <div class="row" style="margin-bottom:0">
       ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
@@ -1409,6 +1486,7 @@ function rentalFormHTML(prefix, idAttr, defaults){
     <label class="field span2">Notes
       <textarea data-${p}-notes placeholder="optional"></textarea>
     </label>
+    ${splitRowsHTML(p)}
     <div class="span2 row" style="margin:0">
       <button class="btn btn-sm" data-${p}-save>Save</button>
       <button class="btn-link" data-${p}-cancel>cancel</button>
@@ -1607,7 +1685,8 @@ function wireEvents(activeTrip){
         kind: r.kind, label: r.label, url: r.url, currency: r.currency,
         paidCash: r.paid_cash, paidPoints: r.paid_points,
         rental_start: r.rental_start, rental_end: r.rental_end,
-        cancel_by: r.cancel_by, notes: r.notes
+        cancel_by: r.cancel_by, confirmation_code: r.confirmation_code,
+        splits: r.splits, notes: r.notes
       }))
     })) }, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -1773,6 +1852,7 @@ function wireEvents(activeTrip){
         confirmationCode: holder.querySelector("[data-nr-confirmation]").value.trim() || null,
         paidCash: pc === "" ? null : parseFloat(pc),
         paidPoints: pp === "" ? null : parseFloat(pp),
+        splits: gatherSplits(holder, "nr"),
         notes: holder.querySelector("[data-nr-notes]").value.trim(),
       });
       await refresh();
@@ -1799,6 +1879,7 @@ function wireEvents(activeTrip){
       form.querySelector("[data-er-paidcash]").value = rental.paid_cash ?? "";
       form.querySelector("[data-er-paidpoints]").value = rental.paid_points ?? "";
       form.querySelector("[data-er-notes]").value = rental.notes || "";
+      fillSplitRows(form, "er", rental.splits);
       form.querySelector("[data-er-cancel]").addEventListener("click", render);
       form.querySelector("[data-er-save]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-er-paidcash]").value;
@@ -1814,6 +1895,7 @@ function wireEvents(activeTrip){
           confirmation_code: form.querySelector("[data-er-confirmation]").value.trim() || null,
           paid_cash: pc === "" ? null : parseFloat(pc),
           paid_points: pp === "" ? null : parseFloat(pp),
+          splits: gatherSplits(form, "er"),
           notes: form.querySelector("[data-er-notes]").value.trim() || null,
         };
         // A changed deadline should get a fresh reminder email.
@@ -2306,7 +2388,13 @@ function wireDragEvents(activeTrip){
 
 supabase.auth.onAuthStateChange((event, newSession) => {
   if (event === "PASSWORD_RECOVERY"){ authMode = "reset"; render(); return; }
+  const prevUserId = session?.user?.id || null;
   session = newSession;
+  const nextUserId = newSession?.user?.id || null;
+  // Same user still signed in (or still signed out): this is a background
+  // token refresh (e.g. Supabase re-validates on tab focus), not a real
+  // sign-in/out — don't re-render, or any open add/edit form gets wiped.
+  if (nextUserId === prevUserId) return;
   if (session) refresh(); else render();
 });
 

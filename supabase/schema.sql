@@ -78,6 +78,10 @@ create table public.rentals (
   cancel_by    date,
   reminded_at  timestamptz,  -- set by the reminder job once the 5-days-out email is sent
   confirmation_code text,
+  -- Up to 5 "who paid what" entries: [{name, percent, amount}, ...]. Each
+  -- entry gives either a percent of paid_cash or a flat amount (whichever
+  -- the user filled in) — informational only, not enforced to sum to 100%.
+  splits       jsonb not null default '[]'::jsonb,
   notes        text,
   position     double precision not null default 0,
   created_at   timestamptz not null default now(),
