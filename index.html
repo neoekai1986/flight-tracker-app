@@ -76,6 +76,14 @@
       background:var(--night);border:1px solid var(--line);border-radius:8px;
       padding:10px 14px;margin:12px 0 16px}
 
+  .stats-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+      padding:10px 16px;min-width:120px}
+  .stat-label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+      color:var(--muted);margin-bottom:3px}
+  .stat-val{font-family:'IBM Plex Mono',monospace;font-size:16px;color:var(--ink)}
+  .stat.stat-total .stat-val{color:var(--amber)}
+
   .meta-block{background:var(--night);border:1px solid var(--line);border-radius:8px;
       padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--muted)}
   .meta-block b{color:var(--ink)}
@@ -683,7 +691,7 @@ function renderCard(trip, f){
     <p class="meta-line">${metaBits.join(" &middot; ")}</p>
     ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
     <div class="row">
-      <a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener">Check price →</a>
+      ${f.url ? `<a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener">Check price →</a>` : ""}
       <button class="btn btn-ghost btn-sm" data-edit-flight="${f.id}">Edit</button>
       <button class="btn-link" data-del-flight="${f.id}">delete flight</button>
       ${moveOptions ? `<select data-move-flight="${f.id}" title="Move to trip">
@@ -702,7 +710,7 @@ function renderCard(trip, f){
 function renderEditForm(f){
   return `
   <div class="edit-grid" data-edit-form="${f.id}">
-    <label class="field span2">URL (airports &amp; date auto-fill from Southwest/Kayak links)
+    <label class="field span2">URL (optional; airports &amp; date auto-fill from Southwest/Kayak links)
       <input type="text" data-f-url value="">
     </label>
     <label class="field">From (airport)
@@ -764,7 +772,7 @@ function renderEditForm(f){
 function addFlightFormHTML(tripId, trip){
   return `
   <div class="edit-grid">
-    <label class="field span2">URL (paste a Southwest/Kayak link — airports &amp; date auto-fill)
+    <label class="field span2">URL (optional; paste a Southwest/Kayak link — airports &amp; date auto-fill)
       <input type="text" data-nf-url placeholder="paste search URL">
     </label>
     <label class="field">From (airport)
@@ -1056,6 +1064,44 @@ function renderMetaForm(trip){
   </div>`;
 }
 
+// "2026-12-04" -> "2026-12-08" inclusive day count = 5
+function tripDayCount(trip){
+  if (!trip.travel_start || !trip.travel_end) return 0;
+  const [ys,ms,ds] = trip.travel_start.split("-").map(Number);
+  const [ye,me,de] = trip.travel_end.split("-").map(Number);
+  const days = Math.round((new Date(ye,me-1,de) - new Date(ys,ms-1,ds)) / 86400000) + 1;
+  return days > 0 ? days : 0;
+}
+
+function renderStatsBar(){
+  let totalDays = 0, flightCash = 0, flightPoints = 0, rentalCash = 0, rentalPoints = 0;
+  for (const t of trips){
+    totalDays += tripDayCount(t);
+    for (const f of (t.flights || [])){
+      const n = f.passengers || 1;
+      flightCash += (f.paid_cash || 0) * n;
+      flightPoints += (f.paid_points || 0) * n;
+    }
+    for (const r of (t.rentals || [])){
+      rentalCash += r.paid_cash || 0;
+      rentalPoints += r.paid_points || 0;
+    }
+  }
+  const costText = (cash, points) => {
+    const parts = [];
+    if (cash) parts.push(fmtCash(cash));
+    if (points) parts.push(fmtPoints(points));
+    return parts.length ? parts.join(" + ") : "—";
+  };
+  return `
+    <div class="stats-bar">
+      <div class="stat"><span class="stat-label">Trip days</span><span class="stat-val">${totalDays}</span></div>
+      <div class="stat"><span class="stat-label">Flights</span><span class="stat-val">${costText(flightCash, flightPoints)}</span></div>
+      <div class="stat"><span class="stat-label">Rentals</span><span class="stat-val">${costText(rentalCash, rentalPoints)}</span></div>
+      <div class="stat stat-total"><span class="stat-label">Total cost</span><span class="stat-val">${costText(flightCash+rentalCash, flightPoints+rentalPoints)}</span></div>
+    </div>`;
+}
+
 function renderTabs(){
   const byFolder = new Map();
   const ungrouped = [];
@@ -1108,6 +1154,8 @@ function render(){
       <button class="btn btn-ghost" id="importBtn">Import JSON</button>
       <input type="file" id="importFile" accept="application/json" hidden>
     </div>
+
+    ${renderStatsBar()}
 
     ${renderTabs()}
 
@@ -1419,7 +1467,7 @@ function wireEvents(activeTrip){
             || flight.label,
           leg,
           currency: form.querySelector("[data-f-currency]").value.trim() || "USD",
-          url: form.querySelector("[data-f-url]").value.trim(),
+          url: form.querySelector("[data-f-url]").value.trim() || null,
           origin, destination, depart_date: departDate, depart_time: departTime,
           return_date: returnDate, return_time: returnTime,
           paid_cash: paidCash,
@@ -1526,12 +1574,12 @@ function wireAddFlightForm(tripId){
     const passengers = parseInt(holder.querySelector("[data-nf-passengers]").value, 10) || 1;
     const label = holder.querySelector("[data-nf-label]").value.trim()
       || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate);
-    if (!label || !url) { alert("A URL plus either a title or From/To airports are required."); return; }
+    if (!label) { alert("A title, or From/To airports to auto-generate one, is required."); return; }
     const currency = holder.querySelector("[data-nf-currency]").value.trim() || "USD";
     const ab = holder.querySelector("[data-nf-alert]").value;
     const notes = holder.querySelector("[data-nf-notes]").value.trim();
     await createFlight(tripId, {
-      label, leg, url, currency, origin, destination, departDate, departTime,
+      label, leg, url: url || null, currency, origin, destination, departDate, departTime,
       returnDate, returnTime, paidCash, paidPoints, passengers,
       alertBelow: ab === "" ? null : parseFloat(ab),
       notes
