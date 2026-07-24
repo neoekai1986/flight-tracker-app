@@ -176,6 +176,7 @@ let session = null;
 let trips = [];
 let folders = [];
 let activeTripId = null;
+let statsFilter = "all"; // "all" | "ungrouped" | a folder id
 let authMode = "login"; // login | signup | forgot | reset
 let authError = "", authMsg = "";
 
@@ -1074,8 +1075,14 @@ function tripDayCount(trip){
 }
 
 function renderStatsBar(){
+  const scoped = trips.filter(t => {
+    if (statsFilter === "all") return true;
+    if (statsFilter === "ungrouped") return !t.folder_id;
+    return t.folder_id === statsFilter;
+  });
+
   let totalDays = 0, flightCash = 0, flightPoints = 0, rentalCash = 0, rentalPoints = 0;
-  for (const t of trips){
+  for (const t of scoped){
     totalDays += tripDayCount(t);
     for (const f of (t.flights || [])){
       const n = f.passengers || 1;
@@ -1093,12 +1100,23 @@ function renderStatsBar(){
     if (points) parts.push(fmtPoints(points));
     return parts.length ? parts.join(" + ") : "—";
   };
+
+  const sortedFolders = [...folders].sort((a,b) => a.position - b.position);
+  const optionsHTML = `
+    <option value="all" ${statsFilter==="all"?"selected":""}>All trips</option>
+    ${sortedFolders.map(f => `<option value="${f.id}" ${statsFilter===f.id?"selected":""}>${esc(f.title)}</option>`).join("")}
+    <option value="ungrouped" ${statsFilter==="ungrouped"?"selected":""}>Ungrouped</option>`;
+
   return `
     <div class="stats-bar">
       <div class="stat"><span class="stat-label">Trip days</span><span class="stat-val">${totalDays}</span></div>
       <div class="stat"><span class="stat-label">Flights</span><span class="stat-val">${costText(flightCash, flightPoints)}</span></div>
       <div class="stat"><span class="stat-label">Rentals</span><span class="stat-val">${costText(rentalCash, rentalPoints)}</span></div>
       <div class="stat stat-total"><span class="stat-label">Total cost</span><span class="stat-val">${costText(flightCash+rentalCash, flightPoints+rentalPoints)}</span></div>
+      <div class="stat stat-filter">
+        <span class="stat-label">Showing</span>
+        <select id="statsFilterSelect">${optionsHTML}</select>
+      </div>
     </div>`;
 }
 
@@ -1162,6 +1180,11 @@ function render(){
     ${activeTrip ? renderTripPanel(activeTrip) :
       `<div class="empty-state">No trips yet. Click "+" to add your first one, or import saved data above.</div>`}
   `;
+
+  document.getElementById("statsFilterSelect").addEventListener("change", (e) => {
+    statsFilter = e.target.value;
+    render();
+  });
 
   wireEvents(activeTrip);
   wireTabDragEvents();
