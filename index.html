@@ -1232,7 +1232,7 @@ function renderTripPanel(trip){
 
   const rentals = trip.rentals || [];
   const totalCash = flights.reduce((s,f) => s + (f.paid_cash || 0) * (f.passengers || 1), 0)
-    + rentals.reduce((s,r) => s + (r.paid_cash || 0), 0);
+    + rentals.reduce((s,r) => s + (rentalOurPortion(r) || 0), 0);
   const totalPoints = flights.reduce((s,f) => s + (f.paid_points || 0) * (f.passengers || 1), 0)
     + rentals.reduce((s,r) => s + (r.paid_points || 0), 0);
   const totalParts = [];
@@ -1363,6 +1363,16 @@ function splitPercent(entry, total){
   return null;
 }
 
+// paid_cash minus whatever the named split entries covered — what we
+// actually spent, net of reimbursement/other people's contributions.
+function rentalOurPortion(r){
+  if (r.paid_cash == null) return null;
+  const othersTotal = (r.splits || [])
+    .filter(s => s.name)
+    .reduce((sum, s) => sum + (splitDollar(s, r.paid_cash) || 0), 0);
+  return r.paid_cash - othersTotal;
+}
+
 function rentalSplitText(r){
   const splits = (r.splits || []).filter(s => s.name);
   if (!splits.length) return "";
@@ -1421,7 +1431,11 @@ function fillSplitRows(form, prefix, splits){
 
 function renderRentalCard(trip, r){
   const icon = r.kind === "car" ? "🚗" : "🏠";
+  const hasSplits = (r.splits || []).some(s => s.name);
   const metaBits = [`Paid <b>${paidText(r)}</b>`];
+  if (hasSplits && r.paid_cash != null){
+    metaBits.push(`Your share <b>${fmtCash(rentalOurPortion(r), r.currency)}</b>`);
+  }
   if (r.rental_start || r.rental_end){
     metaBits.push(`<b>${fmtShortDate(r.rental_start) || "?"} → ${fmtShortDate(r.rental_end) || "?"}</b>`);
   }
@@ -1552,7 +1566,7 @@ function renderStatsBar(){
       flightPoints += (f.paid_points || 0) * n;
     }
     for (const r of (t.rentals || [])){
-      rentalCash += r.paid_cash || 0;
+      rentalCash += rentalOurPortion(r) || 0;
       rentalPoints += r.paid_points || 0;
     }
   }
