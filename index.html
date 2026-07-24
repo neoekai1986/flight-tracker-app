@@ -122,6 +122,9 @@
   .att-thumb .att-del{position:absolute;top:0;right:0;background:rgba(15,22,38,.85);color:var(--ink);
       border:none;font-size:11px;padding:1px 5px;cursor:pointer;border-radius:0 0 0 6px}
   .att-thumb .att-del:hover{color:var(--bad)}
+  .att-thumb .att-text-btn{position:absolute;bottom:0;left:0;background:rgba(15,22,38,.85);color:var(--ink);
+      border:none;font-size:11px;line-height:1;padding:2px 4px;cursor:pointer;border-radius:0 6px 0 0}
+  .att-thumb .att-text-btn:hover{color:var(--amber)}
   .att-add-btn{display:flex;align-items:center;justify-content:center;width:56px;height:56px;
       border:1px dashed var(--line);border-radius:6px;cursor:pointer;color:var(--muted);font-size:20px}
   .att-add-btn:hover{border-color:var(--amber);color:var(--amber)}
@@ -779,9 +782,11 @@ async function importFromLocalStorage(){
 
 function renderAttachmentsRow(kind, itemId, attachments){
   const thumbs = (attachments || []).map(att => `
-    <div class="att-thumb" data-att-view="${att.id}" title="Click to view extracted text">
-      <img data-att-img="${att.id}" data-att-path="${esc(att.storage_path)}" alt="screenshot">
+    <div class="att-thumb" data-att-id="${att.id}">
+      <img data-att-img="${att.id}" data-att-path="${esc(att.storage_path)}"
+        data-att-open="${att.id}" alt="screenshot" title="Click to view full size">
       <button class="att-del" data-att-del="${att.id}" title="Delete">×</button>
+      <button class="att-text-btn" data-att-view-text="${att.id}" title="View extracted text">📄</button>
     </div>`).join("");
   return `
     <div class="attachments-row" data-attachments-row="${itemId}">
@@ -1857,9 +1862,24 @@ function wireAttachments(){
     if (url) img.src = url;
   });
 
-  document.querySelectorAll("[data-att-view]").forEach(thumb => {
-    thumb.addEventListener("click", () => {
-      const attId = thumb.dataset.attView;
+  document.querySelectorAll("[data-att-open]").forEach(img => {
+    img.addEventListener("click", async () => {
+      // Open the tab synchronously (still inside the click's user-gesture
+      // trust window), then redirect it once the signed URL resolves —
+      // opening after an `await` gets silently popup-blocked in most browsers.
+      const newTab = window.open("", "_blank"); // no noopener: need the ref to redirect it below
+      const attId = img.dataset.attOpen;
+      const found = findAttachmentOwner(attId);
+      if (!found) { newTab?.close(); return; }
+      const url = await attachmentSignedUrl(found.attachment.storage_path);
+      if (url && newTab) newTab.location.href = url;
+      else newTab?.close();
+    });
+  });
+
+  document.querySelectorAll("[data-att-view-text]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const attId = btn.dataset.attViewText;
       const found = findAttachmentOwner(attId);
       if (!found) return;
       const holder = document.querySelector(`[data-att-text-holder="${found.item.id}"]`);
@@ -1872,7 +1892,6 @@ function wireAttachments(){
 
   document.querySelectorAll("[data-att-del]").forEach(btn => {
     btn.addEventListener("click", async (e) => {
-      e.stopPropagation();
       const attId = btn.dataset.attDel;
       const found = findAttachmentOwner(attId);
       if (!found) return;
