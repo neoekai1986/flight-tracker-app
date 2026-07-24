@@ -135,6 +135,23 @@
   .att-text-box{background:var(--night);border:1px solid var(--line);border-radius:6px;padding:8px 10px;
       font-size:11.5px;font-family:'IBM Plex Mono',monospace;color:var(--muted);white-space:pre-wrap;
       max-height:140px;overflow-y:auto;margin:6px 0}
+
+  .daterange-btn{font-size:11.5px}
+  .daterange-popover{position:absolute;z-index:50;background:var(--panel);border:1px solid var(--line);
+      border-radius:8px;padding:10px;box-shadow:0 8px 24px rgba(0,0,0,.4);width:220px;
+      font-family:'IBM Plex Mono',monospace}
+  .cal-nav{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;margin-bottom:8px}
+  .cal-nav .btn-link{font-size:14px;padding:0 6px}
+  .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;text-align:center}
+  .cal-dow{color:var(--muted);font-size:10px;margin-bottom:2px}
+  .cal-day{background:transparent;border:none;color:var(--ink);font-size:12px;padding:5px 0;
+      border-radius:4px;cursor:pointer;font-family:'IBM Plex Mono',monospace}
+  .cal-day:hover{background:var(--panel2)}
+  .cal-day.cal-empty{cursor:default}
+  .cal-day.cal-empty:hover{background:transparent}
+  .cal-day.in-range{background:var(--panel2)}
+  .cal-day.range-start,.cal-day.range-end{background:var(--amber);color:var(--night);font-weight:600}
+  .cal-actions{text-align:right;margin-top:6px}
   input,select,textarea{background:var(--night);border:1px solid var(--line);
        color:var(--ink);padding:7px 9px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:13px}
   input[type=number]{width:100px}
@@ -295,6 +312,138 @@ function parseFlightUrl(url){
     if (kayak) return { origin: kayak[1].toUpperCase(), destination: kayak[2].toUpperCase(), departDate: kayak[3] };
   } catch {}
   return null;
+}
+
+// ---------------- Date range picker ----------------
+// A small calendar popover so a start/end date pair (trip dates, rental
+// dates, round-trip depart/return) can be picked in two clicks on one
+// calendar, instead of juggling two separate native date inputs.
+
+function fmtISO(year, month, day){ // month is 0-indexed
+  return `${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+}
+
+function parseISODate(iso){
+  if (!iso) return null;
+  const [y,m,d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m-1, d);
+}
+
+let activeDateRangePopover = null;
+let dateRangeDocListener = null;
+
+function closeDateRangePopover(){
+  if (activeDateRangePopover){ activeDateRangePopover.remove(); activeDateRangePopover = null; }
+  if (dateRangeDocListener){ document.removeEventListener("click", dateRangeDocListener, true); dateRangeDocListener = null; }
+}
+
+function renderCalMonth(year, month, rangeStart, rangeEnd){
+  const first = new Date(year, month, 1);
+  const startWeekday = first.getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const monthLabel = first.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+  let cells = "";
+  for (let i = 0; i < startWeekday; i++) cells += `<span class="cal-day cal-empty"></span>`;
+  for (let d = 1; d <= daysInMonth; d++){
+    const cur = new Date(year, month, d);
+    let cls = "cal-day";
+    if (rangeStart && cur.getTime() === rangeStart.getTime()) cls += " range-start";
+    if (rangeEnd && cur.getTime() === rangeEnd.getTime()) cls += " range-end";
+    if (rangeStart && rangeEnd && cur > rangeStart && cur < rangeEnd) cls += " in-range";
+    cells += `<button type="button" class="${cls}" data-cal-day="${fmtISO(year, month, d)}">${d}</button>`;
+  }
+  return `
+    <div class="cal-nav">
+      <button type="button" class="btn-link" data-cal-prev>‹</button>
+      <span>${monthLabel}</span>
+      <button type="button" class="btn-link" data-cal-next>›</button>
+    </div>
+    <div class="cal-grid cal-dow">
+      <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+    </div>
+    <div class="cal-grid">${cells}</div>
+    <div class="cal-actions"><button type="button" class="btn-link" data-cal-clear>clear</button></div>`;
+}
+
+function openDateRangePicker(anchorBtn, startInput, endInput){
+  closeDateRangePopover();
+  let rangeStart = parseISODate(startInput.value);
+  let rangeEnd = parseISODate(endInput.value);
+  const initial = rangeStart || new Date();
+  let viewYear = initial.getFullYear(), viewMonth = initial.getMonth();
+
+  const pop = document.createElement("div");
+  pop.className = "daterange-popover";
+  document.body.appendChild(pop);
+  activeDateRangePopover = pop;
+
+  const position = () => {
+    const r = anchorBtn.getBoundingClientRect();
+    pop.style.top = `${r.bottom + window.scrollY + 4}px`;
+    pop.style.left = `${r.left + window.scrollX}px`;
+  };
+
+  const setValues = () => {
+    startInput.value = rangeStart ? fmtISO(rangeStart.getFullYear(), rangeStart.getMonth(), rangeStart.getDate()) : "";
+    endInput.value = rangeEnd ? fmtISO(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate()) : "";
+    startInput.dispatchEvent(new Event("input", { bubbles: true }));
+    endInput.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
+  const redraw = () => {
+    pop.innerHTML = renderCalMonth(viewYear, viewMonth, rangeStart, rangeEnd);
+    position();
+    pop.querySelector("[data-cal-prev]").addEventListener("click", () => {
+      viewMonth--; if (viewMonth < 0){ viewMonth = 11; viewYear--; }
+      redraw();
+    });
+    pop.querySelector("[data-cal-next]").addEventListener("click", () => {
+      viewMonth++; if (viewMonth > 11){ viewMonth = 0; viewYear++; }
+      redraw();
+    });
+    pop.querySelector("[data-cal-clear]").addEventListener("click", () => {
+      rangeStart = null; rangeEnd = null;
+      setValues();
+      redraw();
+    });
+    pop.querySelectorAll("[data-cal-day]").forEach(cell => {
+      cell.addEventListener("click", () => {
+        const clicked = parseISODate(cell.dataset.calDay);
+        if (!rangeStart || rangeEnd){
+          rangeStart = clicked; rangeEnd = null;
+        } else if (clicked < rangeStart){
+          rangeEnd = rangeStart; rangeStart = clicked;
+        } else {
+          rangeEnd = clicked;
+        }
+        setValues();
+        if (rangeStart && rangeEnd){ closeDateRangePopover(); return; }
+        redraw();
+      });
+    });
+  };
+  redraw();
+
+  dateRangeDocListener = (e) => {
+    if (!pop.contains(e.target) && e.target !== anchorBtn) closeDateRangePopover();
+  };
+  setTimeout(() => document.addEventListener("click", dateRangeDocListener, true), 0);
+}
+
+function wireDateRangeButtons(){
+  document.querySelectorAll("[data-dr-btn]").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const container = btn.closest(
+        "[data-edit-form], [data-add-flight-form], [data-rental-edit-form], [data-add-rental-form], [data-meta-edit]"
+      ) || btn.parentElement;
+      const startInput = container.querySelector(btn.dataset.drStart);
+      const endInput = container.querySelector(btn.dataset.drEnd);
+      if (!startInput || !endInput) return;
+      openDateRangePicker(btn, startInput, endInput);
+    });
+  });
 }
 
 // ---------------- Screenshot OCR (client-side, best-effort) ----------------
@@ -907,6 +1056,10 @@ function renderEditForm(f){
       <label class="field">Return time
         <input type="time" data-f-return-time>
       </label>
+      <div class="span2" style="margin-top:-6px">
+        <button type="button" class="btn-link daterange-btn" data-dr-btn
+          data-dr-start="[data-f-date]" data-dr-end="[data-f-return-date]">📅 pick depart/return on one calendar</button>
+      </div>
     </div>
     <label class="field span2">Title (auto-generated from airports + date; type to override)
       <input type="text" data-f-label value="">
@@ -975,6 +1128,10 @@ function addFlightFormHTML(tripId, trip){
       <label class="field">Return time
         <input type="time" data-nf-return-time>
       </label>
+      <div class="span2" style="margin-top:-6px">
+        <button type="button" class="btn-link daterange-btn" data-dr-btn
+          data-dr-start="[data-nf-date]" data-dr-end="[data-nf-return-date]">📅 pick depart/return on one calendar</button>
+      </div>
     </div>
     <label class="field span2">Title (auto-generated; type to override)
       <input type="text" data-nf-label placeholder="e.g. BWI → MCO, Jan 5">
@@ -1197,6 +1354,10 @@ function rentalFormHTML(prefix, idAttr, defaults){
     <label class="field">Rental end
       <input type="date" data-${p}-end value="${d.rentalEnd || ""}">
     </label>
+    <div class="span2" style="margin-top:-6px">
+      <button type="button" class="btn-link daterange-btn" data-dr-btn
+        data-dr-start="[data-${p}-start]" data-dr-end="[data-${p}-end]">📅 pick both dates on one calendar</button>
+    </div>
     <label class="field">Free-cancel deadline
       <input type="date" data-${p}-cancelby>
     </label>
@@ -1228,6 +1389,10 @@ function renderMetaForm(trip){
     <label class="field">Travel end
       <input type="date" data-m-end value="${trip.travel_end || ""}">
     </label>
+    <div class="span2" style="margin-top:-6px">
+      <button type="button" class="btn-link daterange-btn" data-dr-btn
+        data-dr-start="[data-m-start]" data-dr-end="[data-m-end]">📅 pick both dates on one calendar</button>
+    </div>
     <label class="field">Folder
       <select data-m-folder>
         <option value="">— No folder —</option>
@@ -1496,6 +1661,7 @@ function wireEvents(activeTrip){
   document.querySelector(`[data-edit-meta="${activeTrip.id}"]`).addEventListener("click", () => {
     const holder = document.querySelector(`[data-meta-form="${activeTrip.id}"]`);
     holder.innerHTML = holder.innerHTML ? "" : renderMetaForm(activeTrip);
+    wireDateRangeButtons();
     const saveBtn = document.querySelector(`[data-meta-save="${activeTrip.id}"]`);
     if (!saveBtn) return;
     saveBtn.addEventListener("click", async () => {
@@ -1546,6 +1712,7 @@ function wireEvents(activeTrip){
     holder.innerHTML = rentalFormHTML("nr", "", {
       rentalStart: activeTrip.travel_start, rentalEnd: activeTrip.travel_end
     });
+    wireDateRangeButtons();
     holder.querySelector("[data-nr-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
     holder.querySelector("[data-nr-save]").addEventListener("click", async () => {
       const label = holder.querySelector("[data-nr-label]").value.trim();
@@ -1575,6 +1742,7 @@ function wireEvents(activeTrip){
       const wrap = document.createElement("div");
       wrap.innerHTML = rentalFormHTML("er", `data-rental-edit-form="${rid}"`);
       card.replaceWith(wrap.firstElementChild);
+      wireDateRangeButtons();
       const form = document.querySelector(`[data-rental-edit-form="${rid}"]`);
       form.querySelector("[data-er-kind]").value = rental.kind;
       form.querySelector("[data-er-label]").value = rental.label || "";
@@ -1629,6 +1797,7 @@ function wireEvents(activeTrip){
       const wrap = document.createElement("div");
       wrap.innerHTML = renderEditForm(flight);
       card.replaceWith(wrap.firstElementChild);
+      wireDateRangeButtons();
       const form = document.querySelector(`[data-edit-form="${fid}"]`);
       form.querySelector("[data-f-label]").value = flight.label || "";
       form.querySelector("[data-f-leg]").value = flight.leg || "";
@@ -1767,6 +1936,7 @@ function wireAddFlightForm(tripId){
   const saveBtn = holder.querySelector("[data-nf-save]");
   const cancelBtn = holder.querySelector("[data-nf-cancel]");
   if (!saveBtn) return;
+  wireDateRangeButtons();
   wireAutoTitle(holder, { url: "[data-nf-url]", origin: "[data-nf-origin]",
     dest: "[data-nf-dest]", date: "[data-nf-date]", time: "[data-nf-time]",
     paidCash: "[data-nf-paidcash]", paidPoints: "[data-nf-paidpoints]",
