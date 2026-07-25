@@ -104,6 +104,26 @@
   .stat-val{font-family:'IBM Plex Mono',monospace;font-size:16px;color:var(--ink)}
   .stat.stat-total .stat-val{color:var(--amber)}
 
+  .calendar-view{margin-bottom:20px}
+  .cal-year-block{margin-bottom:14px}
+  .cal-year-block:last-child{margin-bottom:0}
+  .cal-year-label{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--amber);
+      margin-bottom:8px;letter-spacing:.05em}
+  .cal-month-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  @media (max-width:640px){ .cal-month-grid{grid-template-columns:repeat(2,1fr)} }
+  .cal-month-cell{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+      padding:8px 10px;min-height:56px}
+  .cal-month-label{font-size:11px;color:var(--muted);text-transform:uppercase;
+      letter-spacing:.08em;margin-bottom:6px;font-family:'IBM Plex Mono',monospace}
+  .cal-trip-chip{display:block;width:100%;text-align:left;background:var(--panel2);
+      border:1px solid var(--line);color:var(--ink);font-size:12px;padding:3px 8px;
+      border-radius:6px;margin-bottom:4px;cursor:pointer;font-family:'IBM Plex Mono',monospace}
+  .cal-trip-chip:last-child{margin-bottom:0}
+  .cal-trip-chip:hover{border-color:var(--amber);color:var(--amber)}
+  .cal-month-empty{font-size:12px;color:var(--muted)}
+  .cal-undated{font-size:12px;color:var(--muted);margin-top:2px}
+  .cal-undated .cal-trip-chip{display:inline-block;width:auto;margin:0 6px 4px 0}
+
   .meta-block{background:var(--night);border:1px solid var(--line);border-radius:8px;
       padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--muted)}
   .meta-block b{color:var(--ink)}
@@ -1550,12 +1570,16 @@ function tripDayCount(trip){
   return days > 0 ? days : 0;
 }
 
-function renderStatsBar(){
-  const scoped = trips.filter(t => {
+function scopedTrips(){
+  return trips.filter(t => {
     if (statsFilter === "all") return true;
     if (statsFilter === "ungrouped") return !t.folder_id;
     return t.folder_id === statsFilter;
   });
+}
+
+function renderStatsBar(){
+  const scoped = scopedTrips();
 
   let totalDays = 0, flightCash = 0, flightPoints = 0, rentalCash = 0, rentalPoints = 0;
   for (const t of scoped){
@@ -1594,6 +1618,46 @@ function renderStatsBar(){
         <select id="statsFilterSelect">${optionsHTML}</select>
       </div>
     </div>`;
+}
+
+const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function renderCalendarView(){
+  const scoped = scopedTrips();
+  const byYear = new Map();
+  const undated = [];
+  for (const t of scoped){
+    const dateStr = t.travel_start || t.travel_end;
+    if (!dateStr){ undated.push(t); continue; }
+    const year = Number(dateStr.slice(0, 4));
+    const month = Number(dateStr.slice(5, 7)) - 1;
+    if (!byYear.has(year)) byYear.set(year, Array.from({ length: 12 }, () => []));
+    byYear.get(year)[month].push(t);
+  }
+  if (!byYear.size && !undated.length) return "";
+
+  const tripChip = t => `<button type="button" class="cal-trip-chip" data-cal-goto="${t.id}">${esc(t.title)}</button>`;
+
+  const years = [...byYear.keys()].sort((a, b) => a - b);
+  const yearBlocks = years.map(year => {
+    const months = byYear.get(year);
+    const cells = months.map((tripsInMonth, i) => `
+      <div class="cal-month-cell">
+        <div class="cal-month-label">${MONTH_ABBR[i]}</div>
+        ${tripsInMonth.length ? tripsInMonth.map(tripChip).join("") : `<span class="cal-month-empty">—</span>`}
+      </div>`).join("");
+    return `
+      <div class="cal-year-block">
+        <div class="cal-year-label">${year}</div>
+        <div class="cal-month-grid">${cells}</div>
+      </div>`;
+  }).join("");
+
+  const undatedHTML = undated.length
+    ? `<div class="cal-undated">Undated: ${undated.map(tripChip).join("")}</div>`
+    : "";
+
+  return `<div class="calendar-view">${yearBlocks}${undatedHTML}</div>`;
 }
 
 function renderTabs(){
@@ -1654,6 +1718,8 @@ function render(){
 
     ${renderStatsBar()}
 
+    ${renderCalendarView()}
+
     ${renderTabs()}
 
     ${activeTrip ? renderTripPanel(activeTrip) :
@@ -1669,6 +1735,13 @@ function render(){
     currentSkin = e.target.value;
     localStorage.setItem(SKIN_KEY, currentSkin);
     applySkin(currentSkin);
+  });
+
+  document.querySelectorAll("[data-cal-goto]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeTripId = btn.dataset.calGoto;
+      render();
+    });
   });
 
   wireEvents(activeTrip);
