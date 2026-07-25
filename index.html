@@ -270,6 +270,9 @@ function applySkin(id){
 let currentSkin = localStorage.getItem(SKIN_KEY) || "amber";
 applySkin(currentSkin);
 
+const TABS_HIDDEN_KEY = "flight-tracker-tabs-hidden";
+let tabsHidden = localStorage.getItem(TABS_HIDDEN_KEY) === "1";
+
 let session = null;
 let trips = [];
 let folders = [];
@@ -1661,6 +1664,13 @@ function renderCalendarView(){
 }
 
 function renderTabs(){
+  if (tabsHidden){
+    return `
+    <div class="tabs tabs-collapsed">
+      <button class="tab tab-new" id="newTripTab" title="New trip">+</button>
+      <button class="tab tab-new-folder" id="newFolderTab" title="New folder">+ folder</button>
+    </div>`;
+  }
   const byFolder = new Map();
   const ungrouped = [];
   for (const t of trips){
@@ -1710,6 +1720,7 @@ function render(){
       <select id="skinSelect" class="btn-ghost btn-sm" title="Color theme">
         ${SKINS.map(s => `<option value="${s.id}" ${s.id===currentSkin?"selected":""}>${esc(s.label)}</option>`).join("")}
       </select>
+      <button class="btn btn-ghost btn-sm" id="toggleTabsBtn">${tabsHidden ? "Show tabs" : "Hide tabs"}</button>
       ${showImport ? `<button class="btn btn-ghost" id="importLocalBtn">Import from this browser's saved data</button>` : ""}
       <button class="btn btn-ghost" id="exportBtn">Export all</button>
       <button class="btn btn-ghost" id="importBtn">Import JSON</button>
@@ -1735,6 +1746,12 @@ function render(){
     currentSkin = e.target.value;
     localStorage.setItem(SKIN_KEY, currentSkin);
     applySkin(currentSkin);
+  });
+
+  document.getElementById("toggleTabsBtn").addEventListener("click", () => {
+    tabsHidden = !tabsHidden;
+    localStorage.setItem(TABS_HIDDEN_KEY, tabsHidden ? "1" : "0");
+    render();
   });
 
   document.querySelectorAll("[data-cal-goto]").forEach(btn => {
