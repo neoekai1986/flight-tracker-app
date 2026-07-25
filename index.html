@@ -974,6 +974,33 @@ async function bulkCreateTrips(tripBlobs){
   if (rentalRows.length){ const { error } = await supabase.from("rentals").insert(rentalRows); if (error) throw error; }
 }
 
+function exportAllTrips(){
+  const blob = new Blob([JSON.stringify({ groups: trips.map(t => ({
+    title: t.title, travel_start: t.travel_start, travel_end: t.travel_end,
+    notes: t.notes, attendees: t.attendees,
+    flights: (t.flights||[]).map(f => ({
+      label: f.label, leg: f.leg, url: f.url, currency: f.currency,
+      origin: f.origin, destination: f.destination,
+      depart_date: f.depart_date, depart_time: f.depart_time,
+      return_date: f.return_date, return_time: f.return_time,
+      paidCash: f.paid_cash, paidPoints: f.paid_points, passengers: f.passengers,
+      alertBelow: f.alert_below,
+      notes: f.notes, priceLog: (f.price_logs||[]).map(l => ({date: l.date, price: l.price}))
+    })),
+    rentals: (t.rentals||[]).map(r => ({
+      kind: r.kind, label: r.label, url: r.url, currency: r.currency,
+      paidCash: r.paid_cash, paidPoints: r.paid_points,
+      rental_start: r.rental_start, rental_end: r.rental_end,
+      cancel_by: r.cancel_by, confirmation_code: r.confirmation_code,
+      splits: r.splits, notes: r.notes
+    }))
+  })) }, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = `flight-tracker-backup-${new Date().toISOString().slice(0,10)}.json`;
+  a.click(); URL.revokeObjectURL(url);
+}
+
 async function importFromLocalStorage(){
   let raw;
   try { raw = JSON.parse(localStorage.getItem(OLD_LOCAL_KEY)); } catch { raw = null; }
@@ -1721,9 +1748,12 @@ function render(){
         ${SKINS.map(s => `<option value="${s.id}" ${s.id===currentSkin?"selected":""}>${esc(s.label)}</option>`).join("")}
       </select>
       <button class="btn btn-ghost btn-sm" id="toggleTabsBtn">${tabsHidden ? "Show tabs" : "Hide tabs"}</button>
-      ${showImport ? `<button class="btn btn-ghost" id="importLocalBtn">Import from this browser's saved data</button>` : ""}
-      <button class="btn btn-ghost" id="exportBtn">Export all</button>
-      <button class="btn btn-ghost" id="importBtn">Import JSON</button>
+      <select id="moreActionsSelect" class="btn-ghost btn-sm" title="More actions">
+        <option value="">More actions ▾</option>
+        ${showImport ? `<option value="importLocal">Import from this browser's saved data</option>` : ""}
+        <option value="export">Export all</option>
+        <option value="importJson">Import JSON</option>
+      </select>
       <input type="file" id="importFile" accept="application/json" hidden>
     </div>
 
@@ -1769,37 +1799,14 @@ function render(){
 function wireEvents(activeTrip){
   document.getElementById("logoutBtn").onclick = async () => { await supabase.auth.signOut(); };
 
-  const importLocalBtn = document.getElementById("importLocalBtn");
-  if (importLocalBtn) importLocalBtn.onclick = importFromLocalStorage;
+  document.getElementById("moreActionsSelect").addEventListener("change", (e) => {
+    const action = e.target.value;
+    e.target.value = "";
+    if (action === "importLocal") importFromLocalStorage();
+    else if (action === "export") exportAllTrips();
+    else if (action === "importJson") document.getElementById("importFile").click();
+  });
 
-  document.getElementById("exportBtn").onclick = () => {
-    const blob = new Blob([JSON.stringify({ groups: trips.map(t => ({
-      title: t.title, travel_start: t.travel_start, travel_end: t.travel_end,
-      notes: t.notes, attendees: t.attendees,
-      flights: (t.flights||[]).map(f => ({
-        label: f.label, leg: f.leg, url: f.url, currency: f.currency,
-        origin: f.origin, destination: f.destination,
-        depart_date: f.depart_date, depart_time: f.depart_time,
-        return_date: f.return_date, return_time: f.return_time,
-        paidCash: f.paid_cash, paidPoints: f.paid_points, passengers: f.passengers,
-        alertBelow: f.alert_below,
-        notes: f.notes, priceLog: (f.price_logs||[]).map(l => ({date: l.date, price: l.price}))
-      })),
-      rentals: (t.rentals||[]).map(r => ({
-        kind: r.kind, label: r.label, url: r.url, currency: r.currency,
-        paidCash: r.paid_cash, paidPoints: r.paid_points,
-        rental_start: r.rental_start, rental_end: r.rental_end,
-        cancel_by: r.cancel_by, confirmation_code: r.confirmation_code,
-        splits: r.splits, notes: r.notes
-      }))
-    })) }, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `flight-tracker-backup-${new Date().toISOString().slice(0,10)}.json`;
-    a.click(); URL.revokeObjectURL(url);
-  };
-
-  document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
   document.getElementById("importFile").onchange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
