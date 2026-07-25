@@ -276,6 +276,7 @@ let tabsHidden = localStorage.getItem(TABS_HIDDEN_KEY) === "1";
 let session = null;
 let trips = [];
 let folders = [];
+let categories = [];
 let activeTripId = null;
 let statsFilter = "all"; // "all" | "ungrouped" | a folder id
 let authMode = "login"; // login | signup | forgot | reset
@@ -710,8 +711,17 @@ async function loadFolders(){
   return data;
 }
 
+async function loadCategories(){
+  const { data, error } = await supabase
+    .from("trip_categories")
+    .select("*")
+    .order("title", { ascending: true });
+  if (error) { console.error(error); return []; }
+  return data;
+}
+
 async function refresh(){
-  [trips, folders] = await Promise.all([loadTrips(), loadFolders()]);
+  [trips, folders, categories] = await Promise.all([loadTrips(), loadFolders(), loadCategories()]);
   if (!trips.find(t => t.id === activeTripId)) activeTripId = trips[0]?.id || null;
   render();
 }
@@ -751,6 +761,14 @@ async function createFolder(title){
   const position = scope.length ? Math.max(...scope) + 1000 : 0;
   const { data, error } = await supabase.from("trip_folders").insert({
     owner_id: session.user.id, title, position
+  }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function createCategory(title){
+  const { data, error } = await supabase.from("trip_categories").insert({
+    owner_id: session.user.id, title
   }).select().single();
   if (error) { alert(error.message); return null; }
   return data;
@@ -1551,6 +1569,13 @@ function renderMetaForm(trip){
         <option value="__new__">+ New folder…</option>
       </select>
     </label>
+    <label class="field">Category
+      <select data-m-category>
+        <option value="">— No category —</option>
+        ${categories.map(c => `<option value="${c.id}" ${c.id===trip.category_id?"selected":""}>${esc(c.title)}</option>`).join("")}
+        <option value="__new__">+ New category…</option>
+      </select>
+    </label>
     <label class="field span2">Attendees (comma-separated)
       <input type="text" data-m-attendees value="${esc((trip.attendees||[]).join(", "))}">
     </label>
@@ -1585,16 +1610,22 @@ function renderStatsBar(){
   const scoped = scopedTrips();
 
   let totalDays = 0, flightCash = 0, flightPoints = 0, rentalCash = 0, rentalPoints = 0;
+  const byCategory = new Map(); // category id (or "none") -> {cash, points}
   for (const t of scoped){
     totalDays += tripDayCount(t);
+    const catKey = t.category_id || "none";
+    if (!byCategory.has(catKey)) byCategory.set(catKey, { cash: 0, points: 0 });
+    const catBucket = byCategory.get(catKey);
     for (const f of (t.flights || [])){
       const n = f.passengers || 1;
-      flightCash += (f.paid_cash || 0) * n;
-      flightPoints += (f.paid_points || 0) * n;
+      const cash = (f.paid_cash || 0) * n, points = (f.paid_points || 0) * n;
+      flightCash += cash; flightPoints += points;
+      catBucket.cash += cash; catBucket.points += points;
     }
     for (const r of (t.rentals || [])){
-      rentalCash += rentalOurPortion(r) || 0;
-      rentalPoints += r.paid_points || 0;
+      const cash = rentalOurPortion(r) || 0, points = r.paid_points || 0;
+      rentalCash += cash; rentalPoints += points;
+      catBucket.cash += cash; catBucket.points += points;
     }
   }
   const costText = (cash, points) => {
@@ -1610,12 +1641,24 @@ function renderStatsBar(){
     ${sortedFolders.map(f => `<option value="${f.id}" ${statsFilter===f.id?"selected":""}>${esc(f.title)}</option>`).join("")}
     <option value="ungrouped" ${statsFilter==="ungrouped"?"selected":""}>Ungrouped</option>`;
 
+  const categoryCards = categories
+    .filter(c => byCategory.has(c.id))
+    .map(c => {
+      const b = byCategory.get(c.id);
+      return `<div class="stat"><span class="stat-label">${esc(c.title)}</span><span class="stat-val">${costText(b.cash, b.points)}</span></div>`;
+    }).join("");
+  const noneBucket = byCategory.get("none");
+  const noneCard = noneBucket
+    ? `<div class="stat"><span class="stat-label">Uncategorized</span><span class="stat-val">${costText(noneBucket.cash, noneBucket.points)}</span></div>`
+    : "";
+
   return `
     <div class="stats-bar">
       <div class="stat"><span class="stat-label">Trip days</span><span class="stat-val">${totalDays}</span></div>
       <div class="stat"><span class="stat-label">Flights</span><span class="stat-val">${costText(flightCash, flightPoints)}</span></div>
       <div class="stat"><span class="stat-label">Rentals</span><span class="stat-val">${costText(rentalCash, rentalPoints)}</span></div>
       <div class="stat stat-total"><span class="stat-label">Total cost</span><span class="stat-val">${costText(flightCash+rentalCash, flightPoints+rentalPoints)}</span></div>
+      ${categoryCards}${noneCard}
       <div class="stat stat-filter">
         <span class="stat-label">Showing</span>
         <select id="statsFilterSelect">${optionsHTML}</select>
@@ -1909,6 +1952,17 @@ function wireEvents(activeTrip){
       }
       if ((folderSel || null) !== (activeTrip.folder_id || null)){
         await moveTripToFolder(activeTrip.id, folderSel || null);
+      }
+      let categorySel = holder.querySelector(`[data-m-category]`).value;
+      if (categorySel === "__new__"){
+        const title = prompt("Category name (e.g. Ski trip):");
+        if (title && title.trim()){
+          const c = await createCategory(title.trim());
+          categorySel = c?.id || "";
+        } else categorySel = activeTrip.category_id || "";
+      }
+      if ((categorySel || null) !== (activeTrip.category_id || null)){
+        await updateTrip(activeTrip.id, { category_id: categorySel || null });
       }
       await refresh();
     });

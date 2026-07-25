@@ -48,6 +48,7 @@ as $$
 $$;
 
 alter table public.trip_folders enable row level security;
+alter table public.trip_categories enable row level security;
 alter table public.trips enable row level security;
 alter table public.trip_collaborators enable row level security;
 alter table public.flights enable row level security;
@@ -56,8 +57,8 @@ alter table public.rentals enable row level security;
 alter table public.attachments enable row level security;
 
 -- Only logged-in users get any access at all; RLS scopes it further per-row.
-revoke all on public.trip_folders, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments from anon;
-grant select, insert, update, delete on public.trip_folders, public.trips, public.flights, public.price_logs, public.rentals to authenticated;
+revoke all on public.trip_folders, public.trip_categories, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments from anon;
+grant select, insert, update, delete on public.trip_folders, public.trip_categories, public.trips, public.flights, public.price_logs, public.rentals to authenticated;
 grant select, insert, delete on public.trip_collaborators to authenticated;
 grant select, insert, update, delete on public.attachments to authenticated;
 
@@ -97,6 +98,25 @@ create policy trip_folders_update on public.trip_folders
   for update using ( owner_id = auth.uid() ) with check ( owner_id = auth.uid() );
 
 create policy trip_folders_delete on public.trip_folders
+  for delete using ( owner_id = auth.uid() );
+
+-- trip_categories (same access pattern as trip_folders)
+create policy trip_categories_select on public.trip_categories
+  for select using (
+    owner_id = auth.uid()
+    or exists (
+      select 1 from public.trips t
+      where t.category_id = trip_categories.id and public.can_access_trip(t.id)
+    )
+  );
+
+create policy trip_categories_insert on public.trip_categories
+  for insert with check ( owner_id = auth.uid() );
+
+create policy trip_categories_update on public.trip_categories
+  for update using ( owner_id = auth.uid() ) with check ( owner_id = auth.uid() );
+
+create policy trip_categories_delete on public.trip_categories
   for delete using ( owner_id = auth.uid() );
 
 -- trips
