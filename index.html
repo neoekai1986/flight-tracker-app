@@ -103,6 +103,9 @@
       color:var(--muted);margin-bottom:3px}
   .stat-val{font-family:'IBM Plex Mono',monospace;font-size:16px;color:var(--ink)}
   .stat.stat-total .stat-val{color:var(--amber)}
+  .stat.stat-clickable{cursor:pointer}
+  .stat.stat-clickable:hover{border-color:var(--amber)}
+  .stat.stat-active{border-color:var(--amber);border-width:2px;padding:9px 15px}
 
   .calendar-view{margin-bottom:20px}
   .cal-year-block{margin-bottom:14px}
@@ -121,6 +124,8 @@
   .cal-trip-chip:last-child{margin-bottom:0}
   .cal-trip-chip:hover{border-color:var(--amber);color:var(--amber)}
   .cal-trip-chip.selected{border-color:var(--amber);background:var(--amber);color:var(--btn-ink)}
+  .cal-trip-chip.cal-highlight{border-color:var(--amber);background:var(--amber);color:var(--btn-ink)}
+  .cal-trip-chip.cal-dim{opacity:.35}
   .cal-month-empty{font-size:12px;color:var(--muted)}
   .cal-undated{font-size:12px;color:var(--muted);margin-top:2px}
   .cal-undated .cal-trip-chip{display:inline-block;width:auto;margin:0 6px 4px 0}
@@ -279,6 +284,8 @@ let tabsHidden = localStorage.getItem(TABS_HIDDEN_KEY) === "1";
 
 let bulkSelectMode = false;
 let selectedTripIds = new Set();
+
+let highlightCategoryId = null; // null = none; "none" = uncategorized; else a category id
 
 let session = null;
 let trips = [];
@@ -1679,11 +1686,15 @@ function renderStatsBar(){
     .filter(c => byCategory.has(c.id))
     .map(c => {
       const b = byCategory.get(c.id);
-      return `<div class="stat"><span class="stat-label">${esc(c.title)}</span><span class="stat-val">${costText(b.cash, b.points)}</span></div>`;
+      const active = highlightCategoryId === c.id;
+      return `<div class="stat stat-clickable${active ? " stat-active" : ""}" data-cat-highlight="${c.id}">
+        <span class="stat-label">${esc(c.title)}</span><span class="stat-val">${costText(b.cash, b.points)}</span></div>`;
     }).join("");
   const noneBucket = byCategory.get("none");
+  const noneActive = highlightCategoryId === "none";
   const noneCard = noneBucket
-    ? `<div class="stat"><span class="stat-label">Uncategorized</span><span class="stat-val">${costText(noneBucket.cash, noneBucket.points)}</span></div>`
+    ? `<div class="stat stat-clickable${noneActive ? " stat-active" : ""}" data-cat-highlight="none">
+        <span class="stat-label">Uncategorized</span><span class="stat-val">${costText(noneBucket.cash, noneBucket.points)}</span></div>`
     : "";
 
   return `
@@ -1716,7 +1727,15 @@ function renderCalendarView(){
   }
   if (!byYear.size && !undated.length) return "";
 
-  const tripChip = t => `<button type="button" class="cal-trip-chip${selectedTripIds.has(t.id) ? " selected" : ""}" data-cal-goto="${t.id}">${esc(t.title)}</button>`;
+  const tripChip = t => {
+    let cls = "cal-trip-chip";
+    if (selectedTripIds.has(t.id)) cls += " selected";
+    if (highlightCategoryId){
+      const matches = highlightCategoryId === "none" ? !t.category_id : t.category_id === highlightCategoryId;
+      cls += matches ? " cal-highlight" : " cal-dim";
+    }
+    return `<button type="button" class="${cls}" data-cal-goto="${t.id}">${esc(t.title)}</button>`;
+  };
 
   const years = [...byYear.keys()].sort((a, b) => a - b);
   const yearBlocks = years.map(year => {
@@ -1851,6 +1870,14 @@ function render(){
     bulkSelectMode = !bulkSelectMode;
     selectedTripIds.clear();
     render();
+  });
+
+  document.querySelectorAll("[data-cat-highlight]").forEach(el => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.catHighlight;
+      highlightCategoryId = highlightCategoryId === id ? null : id;
+      render();
+    });
   });
 
   document.querySelectorAll("[data-cal-goto]").forEach(btn => {
