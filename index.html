@@ -120,9 +120,13 @@
       border-radius:6px;margin-bottom:4px;cursor:pointer;font-family:'IBM Plex Mono',monospace}
   .cal-trip-chip:last-child{margin-bottom:0}
   .cal-trip-chip:hover{border-color:var(--amber);color:var(--amber)}
+  .cal-trip-chip.selected{border-color:var(--amber);background:var(--amber);color:var(--btn-ink)}
   .cal-month-empty{font-size:12px;color:var(--muted)}
   .cal-undated{font-size:12px;color:var(--muted);margin-top:2px}
   .cal-undated .cal-trip-chip{display:inline-block;width:auto;margin:0 6px 4px 0}
+  .bulk-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);
+      border:1px solid var(--amber);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:13px}
+  .bulk-bar-count{color:var(--muted);font-family:'IBM Plex Mono',monospace;font-size:12px}
 
   .meta-block{background:var(--night);border:1px solid var(--line);border-radius:8px;
       padding:12px 14px;margin-bottom:16px;font-size:13px;color:var(--muted)}
@@ -272,6 +276,9 @@ applySkin(currentSkin);
 
 const TABS_HIDDEN_KEY = "flight-tracker-tabs-hidden";
 let tabsHidden = localStorage.getItem(TABS_HIDDEN_KEY) === "1";
+
+let bulkSelectMode = false;
+let selectedTripIds = new Set();
 
 let session = null;
 let trips = [];
@@ -1709,7 +1716,7 @@ function renderCalendarView(){
   }
   if (!byYear.size && !undated.length) return "";
 
-  const tripChip = t => `<button type="button" class="cal-trip-chip" data-cal-goto="${t.id}">${esc(t.title)}</button>`;
+  const tripChip = t => `<button type="button" class="cal-trip-chip${selectedTripIds.has(t.id) ? " selected" : ""}" data-cal-goto="${t.id}">${esc(t.title)}</button>`;
 
   const years = [...byYear.keys()].sort((a, b) => a - b);
   const yearBlocks = years.map(year => {
@@ -1730,7 +1737,19 @@ function renderCalendarView(){
     ? `<div class="cal-undated">Undated: ${undated.map(tripChip).join("")}</div>`
     : "";
 
-  return `<div class="calendar-view">${yearBlocks}${undatedHTML}</div>`;
+  const bulkBar = bulkSelectMode ? `
+    <div class="bulk-bar">
+      <span class="bulk-bar-count">${selectedTripIds.size} selected</span>
+      <select id="bulkCategorySelect">
+        <option value="">Assign category…</option>
+        ${categories.map(c => `<option value="${c.id}">${esc(c.title)}</option>`).join("")}
+        <option value="__new__">+ New category…</option>
+      </select>
+      <button class="btn btn-sm" id="bulkApplyBtn">Apply</button>
+      <button class="btn-link" id="bulkClearBtn">Clear selection</button>
+    </div>` : "";
+
+  return `<div class="calendar-view">${bulkBar}${yearBlocks}${undatedHTML}</div>`;
 }
 
 function renderTabs(){
@@ -1791,6 +1810,7 @@ function render(){
         ${SKINS.map(s => `<option value="${s.id}" ${s.id===currentSkin?"selected":""}>${esc(s.label)}</option>`).join("")}
       </select>
       <button class="btn btn-ghost btn-sm" id="toggleTabsBtn">${tabsHidden ? "Show tabs" : "Hide tabs"}</button>
+      <button class="btn btn-ghost btn-sm" id="toggleBulkSelectBtn">${bulkSelectMode ? "Done selecting" : "Select trips"}</button>
       <select id="moreActionsSelect" class="btn-ghost btn-sm" title="More actions">
         <option value="">More actions ▾</option>
         ${showImport ? `<option value="importLocal">Import from this browser's saved data</option>` : ""}
@@ -1827,11 +1847,43 @@ function render(){
     render();
   });
 
+  document.getElementById("toggleBulkSelectBtn").addEventListener("click", () => {
+    bulkSelectMode = !bulkSelectMode;
+    selectedTripIds.clear();
+    render();
+  });
+
   document.querySelectorAll("[data-cal-goto]").forEach(btn => {
     btn.addEventListener("click", () => {
-      activeTripId = btn.dataset.calGoto;
-      render();
+      const id = btn.dataset.calGoto;
+      if (bulkSelectMode){
+        if (selectedTripIds.has(id)) selectedTripIds.delete(id); else selectedTripIds.add(id);
+        render();
+      } else {
+        activeTripId = id;
+        render();
+      }
     });
+  });
+
+  document.getElementById("bulkClearBtn")?.addEventListener("click", () => {
+    selectedTripIds.clear();
+    render();
+  });
+
+  document.getElementById("bulkApplyBtn")?.addEventListener("click", async () => {
+    let categoryId = document.getElementById("bulkCategorySelect").value;
+    if (!categoryId){ alert("Choose a category first."); return; }
+    if (categoryId === "__new__"){
+      const title = prompt("Category name (e.g. Ski trip):");
+      if (!title || !title.trim()) return;
+      const c = await createCategory(title.trim());
+      if (!c) return;
+      categoryId = c.id;
+    }
+    await Promise.all([...selectedTripIds].map(id => updateTrip(id, { category_id: categoryId })));
+    selectedTripIds.clear();
+    await refresh();
   });
 
   wireEvents(activeTrip);
