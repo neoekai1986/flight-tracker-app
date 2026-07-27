@@ -124,6 +124,47 @@ create table public.attachments (
   check ( (flight_id is not null)::int + (rental_id is not null)::int = 1 )
 );
 
+-- Wish List Planning: a shared space (separate from trips) where family
+-- members pitch destination ideas — each entry is a "1-minute elevator
+-- pitch" with a photo, why-visit blurb, and a things-to-do list.
+create table public.wishlist_boards (
+  id          uuid primary key default gen_random_uuid(),
+  owner_id    uuid not null references auth.users(id) on delete cascade,
+  title       text not null default 'Family Vacation Wishlist',
+  created_at  timestamptz not null default now()
+);
+
+create table public.wishlist_collaborators (
+  id          uuid primary key default gen_random_uuid(),
+  board_id    uuid not null references public.wishlist_boards(id) on delete cascade,
+  email       citext not null,
+  invited_by  uuid not null references auth.users(id),
+  created_at  timestamptz not null default now(),
+  unique (board_id, email)
+);
+
+-- One row per user, reused across every entry they submit on any board.
+create table public.wishlist_profiles (
+  user_id       uuid primary key references auth.users(id) on delete cascade,
+  display_name  text,
+  avatar_path   text,
+  updated_at    timestamptz not null default now()
+);
+
+create table public.wishlist_entries (
+  id            uuid primary key default gen_random_uuid(),
+  board_id      uuid not null references public.wishlist_boards(id) on delete cascade,
+  created_by    uuid not null references auth.users(id),
+  title         text not null,
+  location      text,
+  photo_path    text,
+  blurb         text,
+  things_to_do  text,
+  position      double precision not null default 0,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
 create index on public.trip_folders (owner_id, position);
 create index on public.trip_categories (owner_id);
 create index on public.trips (folder_id, position);
@@ -137,6 +178,9 @@ create index rentals_reminder_due on public.rentals (cancel_by)
   where cancel_by is not null and reminded_at is null;
 create index on public.attachments (flight_id);
 create index on public.attachments (rental_id);
+create index on public.wishlist_collaborators (board_id);
+create index on public.wishlist_collaborators (email);
+create index on public.wishlist_entries (board_id, position);
 
 -- Screenshot storage: create a bucket named exactly "attachments" via the
 -- Supabase dashboard (Storage > New bucket, "Public bucket" left UNCHECKED).
@@ -144,3 +188,6 @@ create index on public.attachments (rental_id);
 -- silently fail or abort the rest of the script depending on the project's
 -- permissions, so this is a manual step. RLS (in policies.sql), not bucket
 -- privacy, is what actually gates access to the files.
+--
+-- Wish List Planning needs a second bucket, named exactly "wishlist", created
+-- the same manual way (dashboard, not SQL) — private, RLS-gated.

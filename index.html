@@ -42,6 +42,11 @@
   .sub{color:var(--muted);font-size:14px;margin-bottom:20px;line-height:1.5}
 
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;align-items:center}
+  .section-nav{display:flex;gap:6px;margin-bottom:20px;border-bottom:1px solid var(--line)}
+  .section-tab{background:transparent;border:none;color:var(--muted);padding:10px 16px;font-size:14px;
+      font-family:'IBM Plex Mono',monospace;cursor:pointer;border-bottom:2px solid transparent}
+  .section-tab.active{color:var(--amber);border-bottom-color:var(--amber)}
+  .section-tab:hover{color:var(--ink)}
   .btn{display:inline-block;background:var(--amber);color:var(--btn-ink);font-weight:600;
        text-decoration:none;padding:9px 16px;border-radius:6px;font-size:14px;border:none;cursor:pointer}
   .btn:hover{opacity:.9}
@@ -161,6 +166,21 @@
   .meta-line b{color:var(--ink);font-weight:600}
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+
+  .wishlist-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-top:16px}
+  .wishlist-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+      overflow:hidden;display:flex;flex-direction:column}
+  .wishlist-photo{width:100%;height:160px;background:var(--night) center/cover no-repeat}
+  .wishlist-card-body{padding:14px 16px;display:flex;flex-direction:column;gap:6px}
+  .wishlist-author{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+  .wishlist-avatar{display:inline-block;width:24px;height:24px;border-radius:50%;flex-shrink:0;
+      background:var(--night) center/cover no-repeat;border:1px solid var(--line)}
+  .wishlist-author-name{font-size:12px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
+  .wishlist-card h3{font-size:16px;font-weight:600;margin:0}
+  .wishlist-location{font-size:12.5px;color:var(--muted)}
+  .wishlist-blurb{font-size:13px;color:var(--ink);line-height:1.5}
+  .wishlist-todo{font-size:12.5px;color:var(--muted);padding-left:18px;margin:4px 0}
+  .wishlist-todo li{margin-bottom:2px}
 
   .log-form{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;align-items:center}
 
@@ -287,11 +307,19 @@ let selectedTripIds = new Set();
 
 let highlightCategoryId = null; // null = none; "none" = uncategorized; else a category id
 
+const SECTION_KEY = "flight-tracker-section";
+let activeSection = localStorage.getItem(SECTION_KEY) || "trips"; // "trips" | "wishlist"
+
 let session = null;
 let trips = [];
 let folders = [];
 let categories = [];
 let activeTripId = null;
+
+let wishlistBoards = [];
+let activeWishlistBoardId = null;
+let wishlistProfiles = new Map(); // user_id -> {display_name, avatar_path}
+let wishlistLoaded = false;
 let statsFilter = "all"; // "all" | "ungrouped" | a folder id
 let authMode = "login"; // login | signup | forgot | reset
 let authError = "", authMsg = "";
@@ -738,6 +766,110 @@ async function refresh(){
   [trips, folders, categories] = await Promise.all([loadTrips(), loadFolders(), loadCategories()]);
   if (!trips.find(t => t.id === activeTripId)) activeTripId = trips[0]?.id || null;
   render();
+}
+
+// ---------------- Wish List Planning data layer ----------------
+
+async function loadWishlistBoards(){
+  const { data, error } = await supabase
+    .from("wishlist_boards")
+    .select("*, wishlist_collaborators(*), wishlist_entries(*)")
+    .order("created_at", { ascending: true });
+  if (error) { console.error(error); return []; }
+  for (const b of data) (b.wishlist_entries || []).sort((a, b2) => a.position - b2.position);
+  return data;
+}
+
+async function loadWishlistProfiles(){
+  const { data, error } = await supabase.from("wishlist_profiles").select("*");
+  if (error) { console.error(error); return []; }
+  return data;
+}
+
+async function refreshWishlist(){
+  const [boards, profiles] = await Promise.all([loadWishlistBoards(), loadWishlistProfiles()]);
+  wishlistBoards = boards;
+  wishlistProfiles = new Map(profiles.map(p => [p.user_id, p]));
+  wishlistLoaded = true;
+  if (!wishlistBoards.find(b => b.id === activeWishlistBoardId)) activeWishlistBoardId = wishlistBoards[0]?.id || null;
+  render();
+}
+
+async function createWishlistBoard(title){
+  const { data, error } = await supabase.from("wishlist_boards").insert({
+    owner_id: session.user.id, title
+  }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function addWishlistCollaborator(boardId, email){
+  const { error } = await supabase.from("wishlist_collaborators").insert({
+    board_id: boardId, email: email.trim().toLowerCase(), invited_by: session.user.id
+  });
+  if (error) alert(error.message);
+}
+
+async function removeWishlistCollaborator(id){
+  const { error } = await supabase.from("wishlist_collaborators").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function upsertWishlistProfile(fields){
+  const { error } = await supabase.from("wishlist_profiles").upsert({
+    user_id: session.user.id,
+    display_name: fields.displayName,
+    avatar_path: fields.avatarPath,
+    updated_at: new Date().toISOString()
+  });
+  if (error) alert(error.message);
+}
+
+async function createWishlistEntry(boardId, fields){
+  const siblingPositions = (wishlistBoards.find(b => b.id === boardId)?.wishlist_entries || []).map(e => e.position);
+  const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
+  const { data, error } = await supabase.from("wishlist_entries").insert({
+    board_id: boardId, created_by: session.user.id,
+    title: fields.title, location: fields.location || null,
+    photo_path: fields.photoPath || null,
+    blurb: fields.blurb || null, things_to_do: fields.thingsToDo || null,
+    position
+  }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function updateWishlistEntry(id, patch){
+  const { error } = await supabase.from("wishlist_entries").update(patch).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deleteWishlistEntry(id){
+  const { error } = await supabase.from("wishlist_entries").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function uploadWishlistPhoto(boardId, file){
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+  const path = `${boardId}/${uid()}.${ext}`;
+  const { error } = await supabase.storage.from("wishlist").upload(path, file);
+  if (error) { alert(error.message); return null; }
+  return path;
+}
+
+async function uploadWishlistAvatar(file){
+  const ext = (file.name.split(".").pop() || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+  const path = `avatars/${session.user.id}.${ext}`;
+  const { error } = await supabase.storage.from("wishlist").upload(path, file, { upsert: true });
+  if (error) { alert(error.message); return null; }
+  return path;
+}
+
+async function wishlistSignedUrl(path){
+  if (!path) return null;
+  const { data, error } = await supabase.storage.from("wishlist").createSignedUrl(path, 3600);
+  if (error) { console.error(error); return null; }
+  return data.signedUrl;
 }
 
 async function createTrip(fields){
@@ -1813,7 +1945,33 @@ function renderTabs(){
 
 function render(){
   if (!session){ renderAuth(); return; }
+  if (activeSection === "wishlist"){
+    if (!wishlistLoaded){ refreshWishlist(); return; }
+    renderWishlistPage();
+    return;
+  }
+  renderTripsSection();
+}
 
+function renderSectionNav(){
+  return `
+    <div class="section-nav">
+      <button class="section-tab ${activeSection==='trips'?'active':''}" data-section="trips">✈️ Trip Planner</button>
+      <button class="section-tab ${activeSection==='wishlist'?'active':''}" data-section="wishlist">🌍 Wish List Planning</button>
+    </div>`;
+}
+
+function wireSectionNav(){
+  document.querySelectorAll("[data-section]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeSection = btn.dataset.section;
+      localStorage.setItem(SECTION_KEY, activeSection);
+      render();
+    });
+  });
+}
+
+function renderTripsSection(){
   document.getElementById("subtext").textContent =
     "Sites like Southwest block automated price lookups, so check prices yourself and log what you see.";
 
@@ -1821,6 +1979,7 @@ function render(){
   const showImport = !!localStorage.getItem(OLD_LOCAL_KEY) && !localStorage.getItem(MIGRATED_FLAG);
 
   root.innerHTML = `
+    ${renderSectionNav()}
     <div class="toolbar">
       <span style="color:var(--muted);font-size:13px">${esc(session.user.email)}</span>
       <button class="btn btn-ghost btn-sm" id="logoutBtn">Log out</button>
@@ -1913,9 +2072,285 @@ function render(){
     await refresh();
   });
 
+  wireSectionNav();
   wireEvents(activeTrip);
   wireTabDragEvents();
   wireAttachments();
+}
+
+// ---------------- Wish List Planning UI ----------------
+
+function renderWishlistPage(){
+  document.getElementById("subtext").textContent =
+    "Family destination pitches — a 1-minute elevator pitch for why we should go here.";
+
+  root.innerHTML = `
+    <div class="toolbar">
+      <span style="color:var(--muted);font-size:13px">${esc(session.user.email)}</span>
+      <button class="btn btn-ghost btn-sm" id="logoutBtn">Log out</button>
+      <div class="spacer"></div>
+      <select id="skinSelect" class="btn-ghost btn-sm" title="Color theme">
+        ${SKINS.map(s => `<option value="${s.id}" ${s.id===currentSkin?"selected":""}>${esc(s.label)}</option>`).join("")}
+      </select>
+    </div>
+
+    ${renderSectionNav()}
+
+    ${renderWishlistBody()}
+  `;
+
+  wireSectionNav();
+  document.getElementById("logoutBtn").onclick = async () => { await supabase.auth.signOut(); };
+  document.getElementById("skinSelect").addEventListener("change", (e) => {
+    currentSkin = e.target.value;
+    localStorage.setItem(SKIN_KEY, currentSkin);
+    applySkin(currentSkin);
+  });
+
+  wireWishlistBody();
+}
+
+function renderWishlistBody(){
+  if (!wishlistBoards.length){
+    return `
+      <div class="empty-state">
+        <p style="margin-bottom:12px">No wishlist board yet — create one to start collecting destination pitches from the family.</p>
+        <button class="btn btn-sm" id="createWishlistBoardBtn">Create wishlist board</button>
+      </div>`;
+  }
+
+  const board = wishlistBoards.find(b => b.id === activeWishlistBoardId) || wishlistBoards[0];
+  const isOwner = board.owner_id === session.user.id;
+  const entries = board.wishlist_entries || [];
+  const collabs = board.wishlist_collaborators || [];
+
+  const boardSwitcher = wishlistBoards.length > 1 ? `
+    <select id="wishlistBoardSelect">
+      ${wishlistBoards.map(b => `<option value="${b.id}" ${b.id===board.id?"selected":""}>${esc(b.title)}</option>`).join("")}
+    </select>` : "";
+
+  return `
+    <div class="panel">
+      <div class="panel-head">
+        <h2>${esc(board.title)}</h2>
+        ${boardSwitcher}
+        <button class="btn btn-ghost btn-sm" id="wishlistProfileBtn">Your photo &amp; name</button>
+        <button class="btn btn-sm" id="addWishlistEntryBtn">+ Add pitch</button>
+      </div>
+
+      <div class="share-block">
+        <div class="collab-list">
+          ${collabs.map(c => `<span class="collab-chip">${esc(c.email)}
+            ${isOwner ? `<span class="btn-link" data-remove-wishlist-collab="${c.id}">×</span>` : ""}</span>`).join("")}
+        </div>
+        ${isOwner ? `<div class="row" style="margin-top:6px">
+          <input type="email" placeholder="Invite by email" data-wishlist-invite-email>
+          <button class="btn btn-ghost btn-sm" id="wishlistInviteBtn">Invite</button>
+        </div>` : `<p class="empty-hist">Shared by the board owner.</p>`}
+      </div>
+
+      <div data-wishlist-profile-form></div>
+      <div data-wishlist-add-form></div>
+
+      <div class="wishlist-grid">
+        ${entries.length ? entries.map(e => renderWishlistCard(e)).join("") : `<p class="empty-hist">No pitches yet — be the first!</p>`}
+      </div>
+    </div>`;
+}
+
+function renderWishlistCard(entry){
+  const profile = wishlistProfiles.get(entry.created_by) || {};
+  const isMine = entry.created_by === session.user.id;
+  const authorName = profile.display_name || (isMine ? "You" : "Family member");
+  const thingsList = (entry.things_to_do || "").split("\n").map(s => s.trim()).filter(Boolean);
+  return `
+    <div class="wishlist-card" data-wishlist-card="${entry.id}">
+      <div class="wishlist-photo" data-wishlist-photo="${entry.id}" data-photo-path="${esc(entry.photo_path||"")}"></div>
+      <div class="wishlist-card-body">
+        <div class="wishlist-author">
+          <span class="wishlist-avatar" data-wishlist-avatar="${entry.created_by}" data-avatar-path="${esc(profile.avatar_path||"")}"></span>
+          <span class="wishlist-author-name">${esc(authorName)}</span>
+        </div>
+        <h3>${esc(entry.title)}</h3>
+        ${entry.location ? `<p class="wishlist-location">📍 ${esc(entry.location)}</p>` : ""}
+        ${entry.blurb ? `<p class="wishlist-blurb">${esc(entry.blurb)}</p>` : ""}
+        ${thingsList.length ? `<ul class="wishlist-todo">${thingsList.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
+        ${isMine ? `<div class="row" style="margin-top:8px">
+          <button class="btn btn-ghost btn-sm" data-edit-wishlist-entry="${entry.id}">Edit</button>
+          <button class="btn-link" data-del-wishlist-entry="${entry.id}">delete</button>
+        </div>` : ""}
+      </div>
+    </div>`;
+}
+
+function wishlistEntryFormHTML(prefix, idAttr){
+  const p = prefix; // "nw" (new) or "ew" (edit)
+  return `
+    <div class="edit-grid" ${idAttr || ""}>
+      <label class="field span2">Title
+        <input type="text" data-${p}-title placeholder="e.g. Kyoto, Japan">
+      </label>
+      <label class="field span2">Location
+        <input type="text" data-${p}-location placeholder="e.g. Kyoto, Japan">
+      </label>
+      <label class="field span2">Location photo
+        <input type="file" accept="image/*" data-${p}-photo>
+      </label>
+      <label class="field span2">Why we should go (your elevator pitch)
+        <textarea data-${p}-blurb placeholder="What makes this place special?"></textarea>
+      </label>
+      <label class="field span2">Things to do (one per line)
+        <textarea data-${p}-todo placeholder="Visit the bamboo grove&#10;Try a kaiseki dinner"></textarea>
+      </label>
+      <div class="span2 row" style="margin:0">
+        <button class="btn btn-sm" data-${p}-save>Save</button>
+        <button class="btn-link" data-${p}-cancel>cancel</button>
+      </div>
+    </div>`;
+}
+
+function wishlistProfileFormHTML(me){
+  return `
+    <div class="edit-grid">
+      <label class="field span2">Your name
+        <input type="text" data-wp-name value="${esc(me.display_name || "")}">
+      </label>
+      <label class="field span2">Your photo
+        <input type="file" accept="image/*" data-wp-photo>
+      </label>
+      <div class="span2 row" style="margin:0">
+        <button class="btn btn-sm" data-wp-save>Save</button>
+        <button class="btn-link" data-wp-cancel>cancel</button>
+      </div>
+    </div>`;
+}
+
+function wireWishlistBody(){
+  const createBtn = document.getElementById("createWishlistBoardBtn");
+  if (createBtn){
+    createBtn.addEventListener("click", async () => {
+      const b = await createWishlistBoard("Family Vacation Wishlist");
+      if (b) activeWishlistBoardId = b.id;
+      await refreshWishlist();
+    });
+    return;
+  }
+
+  document.getElementById("wishlistBoardSelect")?.addEventListener("change", (e) => {
+    activeWishlistBoardId = e.target.value;
+    render();
+  });
+
+  const board = wishlistBoards.find(b => b.id === activeWishlistBoardId);
+  if (!board) return;
+
+  document.getElementById("wishlistInviteBtn")?.addEventListener("click", async () => {
+    const input = document.querySelector("[data-wishlist-invite-email]");
+    const email = input.value.trim();
+    if (!email) return;
+    await addWishlistCollaborator(board.id, email);
+    await refreshWishlist();
+  });
+
+  document.querySelectorAll("[data-remove-wishlist-collab]").forEach(el => {
+    el.addEventListener("click", async () => {
+      await removeWishlistCollaborator(el.dataset.removeWishlistCollab);
+      await refreshWishlist();
+    });
+  });
+
+  document.getElementById("wishlistProfileBtn").addEventListener("click", () => {
+    const holder = document.querySelector("[data-wishlist-profile-form]");
+    if (holder.innerHTML){ holder.innerHTML = ""; return; }
+    const me = wishlistProfiles.get(session.user.id) || {};
+    holder.innerHTML = wishlistProfileFormHTML(me);
+    holder.querySelector("[data-wp-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
+    holder.querySelector("[data-wp-save]").addEventListener("click", async () => {
+      const name = holder.querySelector("[data-wp-name]").value.trim();
+      const file = holder.querySelector("[data-wp-photo]").files[0];
+      let avatarPath = me.avatar_path || null;
+      if (file){
+        const p = await uploadWishlistAvatar(file);
+        if (p) avatarPath = p;
+      }
+      await upsertWishlistProfile({ displayName: name || null, avatarPath });
+      await refreshWishlist();
+    });
+  });
+
+  document.getElementById("addWishlistEntryBtn").addEventListener("click", () => {
+    const holder = document.querySelector("[data-wishlist-add-form]");
+    if (holder.innerHTML){ holder.innerHTML = ""; return; }
+    holder.innerHTML = wishlistEntryFormHTML("nw");
+    holder.querySelector("[data-nw-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
+    holder.querySelector("[data-nw-save]").addEventListener("click", async () => {
+      const title = holder.querySelector("[data-nw-title]").value.trim();
+      if (!title){ alert("Title is required."); return; }
+      const location = holder.querySelector("[data-nw-location]").value.trim();
+      const blurb = holder.querySelector("[data-nw-blurb]").value.trim();
+      const thingsToDo = holder.querySelector("[data-nw-todo]").value.trim();
+      const file = holder.querySelector("[data-nw-photo]").files[0];
+      const entry = await createWishlistEntry(board.id, { title, location, blurb, thingsToDo });
+      if (entry && file){
+        const path = await uploadWishlistPhoto(board.id, file);
+        if (path) await updateWishlistEntry(entry.id, { photo_path: path });
+      }
+      await refreshWishlist();
+    });
+  });
+
+  document.querySelectorAll("[data-edit-wishlist-entry]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.editWishlistEntry;
+      const entry = (board.wishlist_entries || []).find(e => e.id === id);
+      const card = document.querySelector(`[data-wishlist-card="${id}"]`);
+      const wrap = document.createElement("div");
+      wrap.innerHTML = wishlistEntryFormHTML("ew", `data-wishlist-edit-form="${id}"`);
+      card.replaceWith(wrap.firstElementChild);
+      const form = document.querySelector(`[data-wishlist-edit-form="${id}"]`);
+      form.querySelector("[data-ew-title]").value = entry.title || "";
+      form.querySelector("[data-ew-location]").value = entry.location || "";
+      form.querySelector("[data-ew-blurb]").value = entry.blurb || "";
+      form.querySelector("[data-ew-todo]").value = entry.things_to_do || "";
+      form.querySelector("[data-ew-cancel]").addEventListener("click", render);
+      form.querySelector("[data-ew-save]").addEventListener("click", async () => {
+        const title = form.querySelector("[data-ew-title]").value.trim() || entry.title;
+        const location = form.querySelector("[data-ew-location]").value.trim();
+        const blurb = form.querySelector("[data-ew-blurb]").value.trim();
+        const thingsToDo = form.querySelector("[data-ew-todo]").value.trim();
+        const file = form.querySelector("[data-ew-photo]").files[0];
+        const patch = { title, location, blurb, things_to_do: thingsToDo };
+        if (file){
+          const path = await uploadWishlistPhoto(board.id, file);
+          if (path) patch.photo_path = path;
+        }
+        await updateWishlistEntry(id, patch);
+        await refreshWishlist();
+      });
+    });
+  });
+
+  document.querySelectorAll("[data-del-wishlist-entry]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this pitch?")) return;
+      await deleteWishlistEntry(btn.dataset.delWishlistEntry);
+      await refreshWishlist();
+    });
+  });
+
+  document.querySelectorAll("[data-wishlist-photo]").forEach(async (el) => {
+    const path = el.dataset.photoPath;
+    if (!path) return;
+    const url = await wishlistSignedUrl(path);
+    if (url) el.style.backgroundImage = `url(${url})`;
+  });
+
+  document.querySelectorAll("[data-wishlist-avatar]").forEach(async (el) => {
+    const path = el.dataset.avatarPath;
+    if (!path) return;
+    const url = await wishlistSignedUrl(path);
+    if (url) el.style.backgroundImage = `url(${url})`;
+  });
 }
 
 function wireEvents(activeTrip){
