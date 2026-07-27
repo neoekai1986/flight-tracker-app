@@ -167,10 +167,10 @@
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
 
-  .wishlist-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px;margin-top:16px}
+  .wishlist-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:16px}
   .wishlist-card{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
       overflow:hidden;display:flex;flex-direction:column}
-  .wishlist-photo{width:100%;height:160px;background:var(--night) center/cover no-repeat}
+  .wishlist-photo{width:100%;height:280px;background:var(--night) center/cover no-repeat}
   .wishlist-card-body{padding:14px 16px;display:flex;flex-direction:column;gap:6px}
   .wishlist-author{display:flex;align-items:center;gap:8px;margin-bottom:2px}
   .wishlist-avatar{display:inline-block;width:24px;height:24px;border-radius:50%;flex-shrink:0;
@@ -181,6 +181,25 @@
   .wishlist-blurb{font-size:13px;color:var(--ink);line-height:1.5}
   .wishlist-todo{font-size:12.5px;color:var(--muted);padding-left:18px;margin:4px 0}
   .wishlist-todo li{margin-bottom:2px}
+
+  .photo-picker{border:1px dashed var(--line);border-radius:8px;padding:8px;display:flex;
+      align-items:center;gap:10px;cursor:text}
+  .photo-picker:focus{outline:none;border-color:var(--amber)}
+  .photo-picker-preview{width:48px;height:48px;border-radius:6px;flex-shrink:0;
+      background:var(--night) center/cover no-repeat;border:1px solid var(--line)}
+  .photo-picker-avatar-preview{border-radius:50%}
+  .photo-picker-actions{display:flex;flex-direction:column;gap:2px}
+  .photo-picker-hint{font-size:11.5px;color:var(--muted)}
+
+  .crop-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;
+      display:flex;align-items:center;justify-content:center}
+  .crop-box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;
+      display:flex;flex-direction:column;align-items:center;gap:12px}
+  .crop-viewport{position:relative;overflow:hidden;background:var(--night);
+      border-radius:6px;border:1px solid var(--line);touch-action:none}
+  .crop-viewport img{position:absolute;top:0;left:0;transform-origin:0 0;user-select:none;
+      pointer-events:none;max-width:none}
+  .crop-zoom{width:100%}
 
   .log-form{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;align-items:center}
 
@@ -225,7 +244,7 @@
        color:var(--ink);padding:7px 9px;border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:13px}
   input[type=number]{width:100px}
   textarea{width:100%;font-family:Inter,sans-serif;font-size:13px;resize:vertical;min-height:50px}
-  label.field{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted);
+  .field{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted);
       letter-spacing:.05em;text-transform:uppercase;font-family:'IBM Plex Mono',monospace}
   .edit-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:10px 0;
       background:var(--night);border:1px solid var(--line);border-radius:8px;padding:12px}
@@ -2193,9 +2212,16 @@ function wishlistEntryFormHTML(prefix, idAttr){
       <label class="field span2">Location
         <input type="text" data-${p}-location placeholder="e.g. Kyoto, Japan">
       </label>
-      <label class="field span2">Location photo
-        <input type="file" accept="image/*" data-${p}-photo>
-      </label>
+      <div class="field span2">Location photo
+        <div class="photo-picker" data-${p}-photo-picker tabindex="0">
+          <div class="photo-picker-preview" data-${p}-photo-preview></div>
+          <div class="photo-picker-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-${p}-photo-browse>Choose photo</button>
+            <span class="photo-picker-hint">or paste an image (⌘V / Ctrl+V)</span>
+          </div>
+        </div>
+        <input type="file" accept="image/*" data-${p}-photo hidden>
+      </div>
       <label class="field span2">Why we should go (your elevator pitch)
         <textarea data-${p}-blurb placeholder="What makes this place special?"></textarea>
       </label>
@@ -2215,14 +2241,159 @@ function wishlistProfileFormHTML(me){
       <label class="field span2">Your name
         <input type="text" data-wp-name value="${esc(me.display_name || "")}">
       </label>
-      <label class="field span2">Your photo
-        <input type="file" accept="image/*" data-wp-photo>
-      </label>
+      <div class="field span2">Your photo
+        <div class="photo-picker" data-wp-photo-picker tabindex="0">
+          <div class="photo-picker-preview photo-picker-avatar-preview" data-wp-photo-preview></div>
+          <div class="photo-picker-actions">
+            <button type="button" class="btn btn-ghost btn-sm" data-wp-photo-browse>Choose photo</button>
+            <span class="photo-picker-hint">Pick from your library, then crop to fit</span>
+          </div>
+        </div>
+        <input type="file" accept="image/*" data-wp-photo hidden>
+      </div>
       <div class="span2 row" style="margin:0">
         <button class="btn btn-sm" data-wp-save>Save</button>
         <button class="btn-link" data-wp-cancel>cancel</button>
       </div>
     </div>`;
+}
+
+// Shows a drag-to-position/zoom-to-crop overlay for `file`, cropped to a
+// vw x vh viewport and exported at outW x outH. Resolves the cropped File,
+// or null if the user cancels.
+function openImageCropper(file, outW, outH, vw, vh){
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const overlay = document.createElement("div");
+      overlay.className = "crop-overlay";
+      overlay.innerHTML = `
+        <div class="crop-box">
+          <div class="crop-viewport" style="width:${vw}px;height:${vh}px">
+            <img src="${reader.result}">
+          </div>
+          <input type="range" class="crop-zoom" min="100" max="300" value="100">
+          <div class="row" style="margin:0">
+            <button type="button" class="btn btn-sm" data-crop-use>Use photo</button>
+            <button type="button" class="btn-link" data-crop-cancel>Cancel</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const viewport = overlay.querySelector(".crop-viewport");
+      const img = overlay.querySelector("img");
+      const zoom = overlay.querySelector(".crop-zoom");
+      let scale = 1, minScale = 1, offsetX = 0, offsetY = 0;
+      let dragging = false, lastX = 0, lastY = 0;
+
+      function applyTransform(){
+        img.style.width = img.naturalWidth * scale + "px";
+        img.style.height = img.naturalHeight * scale + "px";
+        img.style.transform = `translate(${offsetX}px,${offsetY}px)`;
+      }
+      function clamp(){
+        const iw = img.naturalWidth * scale, ih = img.naturalHeight * scale;
+        offsetX = Math.min(0, Math.max(vw - iw, offsetX));
+        offsetY = Math.min(0, Math.max(vh - ih, offsetY));
+      }
+      img.onload = () => {
+        minScale = Math.max(vw / img.naturalWidth, vh / img.naturalHeight);
+        scale = minScale;
+        offsetX = (vw - img.naturalWidth * scale) / 2;
+        offsetY = (vh - img.naturalHeight * scale) / 2;
+        clamp();
+        applyTransform();
+      };
+
+      function startDrag(x, y){ dragging = true; lastX = x; lastY = y; }
+      function moveDrag(x, y){
+        if (!dragging) return;
+        offsetX += x - lastX; offsetY += y - lastY;
+        lastX = x; lastY = y;
+        clamp();
+        applyTransform();
+      }
+      function endDrag(){ dragging = false; }
+
+      viewport.addEventListener("mousedown", e => { startDrag(e.clientX, e.clientY); e.preventDefault(); });
+      window.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
+      window.addEventListener("mouseup", endDrag);
+      viewport.addEventListener("touchstart", e => { const t = e.touches[0]; startDrag(t.clientX, t.clientY); }, { passive: true });
+      viewport.addEventListener("touchmove", e => { const t = e.touches[0]; moveDrag(t.clientX, t.clientY); }, { passive: true });
+      viewport.addEventListener("touchend", endDrag);
+
+      zoom.addEventListener("input", () => {
+        const oldScale = scale;
+        scale = minScale * (zoom.value / 100);
+        const cx = vw / 2, cy = vh / 2;
+        offsetX = cx - (cx - offsetX) * (scale / oldScale);
+        offsetY = cy - (cy - offsetY) * (scale / oldScale);
+        clamp();
+        applyTransform();
+      });
+
+      function cleanup(result){ overlay.remove(); resolve(result); }
+      overlay.querySelector("[data-crop-cancel]").addEventListener("click", () => cleanup(null));
+      overlay.querySelector("[data-crop-use]").addEventListener("click", () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = outW; canvas.height = outH;
+        const ctx = canvas.getContext("2d");
+        const sx = -offsetX / scale, sy = -offsetY / scale;
+        const sw = vw / scale, sh = vh / scale;
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH);
+        canvas.toBlob(blob => {
+          const cropped = new File([blob], (file.name || "photo").replace(/\.[^.]+$/, "") + ".jpg", { type: "image/jpeg" });
+          cleanup(cropped);
+        }, "image/jpeg", 0.9);
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Wires a "Choose photo" button + paste-an-image support for one photo-picker
+// field inside `container` (data-${prefix}-photo-picker/-preview/-browse/-photo).
+// If `cropConfig` is set, every selected/pasted image is cropped to
+// cropConfig.vw x cropConfig.vh (display) / outW x outH (export) before use.
+// Returns { getFile() } — null until the user picks something new.
+function setupPhotoField(container, { prefix, cropConfig, existingPath }){
+  const picker = container.querySelector(`[data-${prefix}-photo-picker]`);
+  const preview = container.querySelector(`[data-${prefix}-photo-preview]`);
+  const browseBtn = container.querySelector(`[data-${prefix}-photo-browse]`);
+  const input = container.querySelector(`[data-${prefix}-photo]`);
+  let pendingFile = null;
+
+  if (existingPath){
+    wishlistSignedUrl(existingPath).then(url => {
+      if (url && !pendingFile) preview.style.backgroundImage = `url("${url}")`;
+    });
+  }
+
+  async function handleFile(file){
+    if (!file) return;
+    if (cropConfig){
+      const cropped = await openImageCropper(file, cropConfig.outW, cropConfig.outH, cropConfig.vw, cropConfig.vh);
+      if (!cropped) return;
+      file = cropped;
+    }
+    pendingFile = file;
+    preview.style.backgroundImage = `url("${URL.createObjectURL(file)}")`;
+  }
+
+  browseBtn.addEventListener("click", () => input.click());
+  input.addEventListener("change", () => handleFile(input.files[0]));
+  picker.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items || [];
+    for (const item of items){
+      if (item.type.startsWith("image/")){
+        e.preventDefault();
+        handleFile(item.getAsFile());
+        break;
+      }
+    }
+  });
+
+  return { getFile: () => pendingFile };
 }
 
 function wireWishlistBody(){
@@ -2264,10 +2435,15 @@ function wireWishlistBody(){
     if (holder.innerHTML){ holder.innerHTML = ""; return; }
     const me = wishlistProfiles.get(session.user.id) || {};
     holder.innerHTML = wishlistProfileFormHTML(me);
+    const photoField = setupPhotoField(holder, {
+      prefix: "wp",
+      cropConfig: { outW: 512, outH: 512, vw: 220, vh: 220 },
+      existingPath: me.avatar_path
+    });
     holder.querySelector("[data-wp-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
     holder.querySelector("[data-wp-save]").addEventListener("click", async () => {
       const name = holder.querySelector("[data-wp-name]").value.trim();
-      const file = holder.querySelector("[data-wp-photo]").files[0];
+      const file = photoField.getFile();
       let avatarPath = me.avatar_path || null;
       if (file){
         const p = await uploadWishlistAvatar(file);
@@ -2282,6 +2458,7 @@ function wireWishlistBody(){
     const holder = document.querySelector("[data-wishlist-add-form]");
     if (holder.innerHTML){ holder.innerHTML = ""; return; }
     holder.innerHTML = wishlistEntryFormHTML("nw");
+    const photoField = setupPhotoField(holder, { prefix: "nw", cropConfig: null });
     holder.querySelector("[data-nw-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
     holder.querySelector("[data-nw-save]").addEventListener("click", async () => {
       const title = holder.querySelector("[data-nw-title]").value.trim();
@@ -2289,7 +2466,7 @@ function wireWishlistBody(){
       const location = holder.querySelector("[data-nw-location]").value.trim();
       const blurb = holder.querySelector("[data-nw-blurb]").value.trim();
       const thingsToDo = holder.querySelector("[data-nw-todo]").value.trim();
-      const file = holder.querySelector("[data-nw-photo]").files[0];
+      const file = photoField.getFile();
       const entry = await createWishlistEntry(board.id, { title, location, blurb, thingsToDo });
       if (entry && file){
         const path = await uploadWishlistPhoto(board.id, file);
@@ -2312,13 +2489,14 @@ function wireWishlistBody(){
       form.querySelector("[data-ew-location]").value = entry.location || "";
       form.querySelector("[data-ew-blurb]").value = entry.blurb || "";
       form.querySelector("[data-ew-todo]").value = entry.things_to_do || "";
+      const photoField = setupPhotoField(form, { prefix: "ew", cropConfig: null, existingPath: entry.photo_path });
       form.querySelector("[data-ew-cancel]").addEventListener("click", render);
       form.querySelector("[data-ew-save]").addEventListener("click", async () => {
         const title = form.querySelector("[data-ew-title]").value.trim() || entry.title;
         const location = form.querySelector("[data-ew-location]").value.trim();
         const blurb = form.querySelector("[data-ew-blurb]").value.trim();
         const thingsToDo = form.querySelector("[data-ew-todo]").value.trim();
-        const file = form.querySelector("[data-ew-photo]").files[0];
+        const file = photoField.getFile();
         const patch = { title, location, blurb, things_to_do: thingsToDo };
         if (file){
           const path = await uploadWishlistPhoto(board.id, file);
