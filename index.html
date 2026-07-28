@@ -101,6 +101,18 @@
       background:var(--night);border:1px solid var(--line);border-radius:8px;
       padding:10px 14px;margin:12px 0 16px}
 
+  .watch-badge{font-size:11px;color:var(--amber);border:1px solid var(--amber);border-radius:20px;
+      padding:2px 8px;white-space:nowrap}
+
+  .watching-block{font-size:13px;color:var(--muted);background:var(--night);
+      border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin:12px 0 16px}
+  .planning-estimate{font-family:'IBM Plex Mono',monospace;font-size:15px;color:var(--amber);margin-top:4px}
+
+  .plan-select-wrap{display:flex;align-items:flex-start;gap:8px}
+  .plan-select-wrap > div{flex:1;min-width:0}
+  .plan-checkbox{padding-top:14px}
+  .plan-checkbox input{width:16px;height:16px;cursor:pointer}
+
   .stats-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
   .stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;
       padding:10px 16px;min-width:120px}
@@ -325,6 +337,11 @@ let bulkSelectMode = false;
 let selectedTripIds = new Set();
 
 let highlightCategoryId = null; // null = none; "none" = uncategorized; else a category id
+
+// Ad-hoc "what would this combination cost" scratchpad for planning-status
+// trips — trip.id -> Set of "flight:id"/"rental:id" keys. Never persisted;
+// resets on reload, survives re-renders since it's a module-level var.
+let planningSelections = new Map();
 
 const SECTION_KEY = "flight-tracker-section";
 let activeSection = localStorage.getItem(SECTION_KEY) || "trips"; // "trips" | "wishlist"
@@ -1276,6 +1293,7 @@ function renderCard(trip, f){
     <div class="card-title-row">
       <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
       <h3>${esc(f.label)}</h3>
+      ${f.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")}</p>
     ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
@@ -1283,6 +1301,8 @@ function renderCard(trip, f){
     <div class="row">
       ${f.url ? `<a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener">Check price →</a>` : ""}
       <button class="btn btn-ghost btn-sm" data-edit-flight="${f.id}">Edit</button>
+      <button class="btn-ghost btn-sm" data-toggle-flight-status="${f.id}" data-next-status="${f.status === "watching" ? "booked" : "watching"}">
+        ${f.status === "watching" ? "Mark booked" : "Mark watching"}</button>
       <button class="btn-link" data-del-flight="${f.id}">delete flight</button>
       ${moveOptions ? `<select data-move-flight="${f.id}" title="Move to trip">
         <option value="">Move to…</option>
@@ -1441,11 +1461,28 @@ function addFlightFormHTML(tripId, trip){
   </div>`;
 }
 
+// Wraps a rendered flight/rental card with a select checkbox when the trip
+// is in "planning" status, so shift-click range-select can price out a
+// combination without any of it rolling into the real cost totals.
+// Wraps a watching-status flight/rental card with a select checkbox, so
+// shift-click range-select can price out a combination of not-yet-booked
+// options without any of it counting toward the real totals.
+function withPlanCheckbox(trip, kind, id, cardHTML){
+  const key = `${kind}:${id}`;
+  const checked = planningSelections.get(trip.id)?.has(key) ? "checked" : "";
+  return `<div class="plan-select-wrap">
+      <label class="plan-checkbox"><input type="checkbox" data-plan-check="${key}" data-plan-trip="${trip.id}" ${checked}></label>
+      <div>${cardHTML}</div>
+    </div>`;
+}
+
 function renderTripPanel(trip){
   const flights = trip.flights || [];
-  const out = flights.filter(f => f.leg === "outbound");
-  const ret = flights.filter(f => f.leg === "return");
-  const solo = flights.filter(f => !f.leg || f.leg === "roundtrip");
+  const bookedFlights = flights.filter(f => f.status !== "watching");
+  const watchingFlights = flights.filter(f => f.status === "watching");
+  const out = bookedFlights.filter(f => f.leg === "outbound");
+  const ret = bookedFlights.filter(f => f.leg === "return");
+  const solo = bookedFlights.filter(f => !f.leg || f.leg === "roundtrip");
 
   let pairsHTML = "";
   const pairCount = Math.max(out.length, ret.length);
@@ -1464,13 +1501,29 @@ function renderTripPanel(trip){
   </div>`;
 
   const rentals = trip.rentals || [];
-  const totalCash = flights.reduce((s,f) => s + (f.paid_cash || 0) * (f.passengers || 1), 0)
-    + rentals.reduce((s,r) => s + (rentalOurPortion(r) || 0), 0);
-  const totalPoints = flights.reduce((s,f) => s + (f.paid_points || 0) * (f.passengers || 1), 0)
-    + rentals.reduce((s,r) => s + (r.paid_points || 0), 0);
+  const bookedRentals = rentals.filter(r => r.status !== "watching");
+  const watchingRentals = rentals.filter(r => r.status === "watching");
+
+  const totalCash = bookedFlights.reduce((s,f) => s + (f.paid_cash || 0) * (f.passengers || 1), 0)
+    + bookedRentals.reduce((s,r) => s + (rentalOurPortion(r) || 0), 0);
+  const totalPoints = bookedFlights.reduce((s,f) => s + (f.paid_points || 0) * (f.passengers || 1), 0)
+    + bookedRentals.reduce((s,r) => s + (r.paid_points || 0), 0);
   const totalParts = [];
   if (totalCash) totalParts.push(fmtCash(totalCash));
   if (totalPoints) totalParts.push(fmtPoints(totalPoints));
+
+  const hasWatching = watchingFlights.length > 0 || watchingRentals.length > 0;
+  const watchingHTML = hasWatching
+    ? `<div class="section-head">Watching (not yet booked)</div>
+       <div class="watching-block">Not counted in your totals. Check off items below (shift-click to
+          select a range) to price out a combination.
+          <div class="planning-estimate" data-plan-estimate="${trip.id}">Selected: —</div>
+        </div>
+       <div class="solo-list" data-watching-list="${trip.id}">
+         ${watchingFlights.map(f => withPlanCheckbox(trip, "flight", f.id, renderCard(trip, f))).join("")}
+         ${watchingRentals.map(r => withPlanCheckbox(trip, "rental", r.id, renderRentalCard(trip, r))).join("")}
+       </div>`
+    : "";
 
   const isOwner = trip.owner_id === session.user.id;
   const collabs = trip.trip_collaborators || [];
@@ -1514,14 +1567,16 @@ function renderTripPanel(trip){
 
       <div data-add-flight-form="${trip.id}"></div>
       <div data-add-rental-form="${trip.id}"></div>
-      ${flights.length ? `<div class="section-head">Flights</div>` : ""}
+      ${bookedFlights.length ? `<div class="section-head">Flights</div>` : ""}
       ${pairsHTML}${soloHTML}
-      ${!flights.length ? `<p class="empty-hist">No flights in this trip yet.</p>` : ""}
+      ${!bookedFlights.length ? `<p class="empty-hist">No booked flights in this trip yet.</p>` : ""}
 
-      ${rentals.length ? `<div class="section-head">Rentals</div>
+      ${bookedRentals.length ? `<div class="section-head">Rentals</div>
         <div class="solo-list" data-rental-list="${trip.id}">
-          ${rentals.map(r => renderRentalCard(trip, r)).join("")}
+          ${bookedRentals.map(r => renderRentalCard(trip, r)).join("")}
         </div>` : ""}
+
+      ${watchingHTML}
     </div>`;
 }
 
@@ -1678,6 +1733,7 @@ function renderRentalCard(trip, r){
     <div class="card-title-row">
       <span class="drag-handle" draggable="true" data-rental-drag="${r.id}" title="Drag to reorder">⠿</span>
       <h3>${icon} ${esc(r.label)}</h3>
+      ${r.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
     ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
@@ -1686,6 +1742,8 @@ function renderRentalCard(trip, r){
     <div class="row" style="margin-bottom:0">
       ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
       <button class="btn btn-ghost btn-sm" data-edit-rental="${r.id}">Edit</button>
+      <button class="btn-ghost btn-sm" data-toggle-rental-status="${r.id}" data-next-status="${r.status === "watching" ? "booked" : "watching"}">
+        ${r.status === "watching" ? "Mark booked" : "Mark watching"}</button>
       <button class="btn-link" data-del-rental="${r.id}">delete rental</button>
     </div>
   </div>`;
@@ -1809,12 +1867,14 @@ function renderStatsBar(){
     if (!byCategory.has(catKey)) byCategory.set(catKey, { cash: 0, points: 0 });
     const catBucket = byCategory.get(catKey);
     for (const f of (t.flights || [])){
+      if (f.status === "watching") continue; // still comparing options — excluded from cost totals
       const n = f.passengers || 1;
       const cash = (f.paid_cash || 0) * n, points = (f.paid_points || 0) * n;
       flightCash += cash; flightPoints += points;
       catBucket.cash += cash; catBucket.points += points;
     }
     for (const r of (t.rentals || [])){
+      if (r.status === "watching") continue;
       const cash = rentalOurPortion(r) || 0, points = r.paid_points || 0;
       rentalCash += cash; rentalPoints += points;
       catBucket.cash += cash; catBucket.points += points;
@@ -2531,6 +2591,54 @@ function wireWishlistBody(){
   });
 }
 
+// Recomputes the "Selected: ..." estimate for a planning-status trip from
+// whatever's currently checked, and paints it in place — no refresh()/render()
+// round-trip, since this is purely a local scratchpad.
+function updatePlanningEstimate(trip){
+  const selected = planningSelections.get(trip.id) || new Set();
+  let cash = 0, points = 0;
+  for (const f of (trip.flights || [])){
+    if (f.status !== "watching" || !selected.has(`flight:${f.id}`)) continue;
+    const n = f.passengers || 1;
+    cash += (f.paid_cash || 0) * n; points += (f.paid_points || 0) * n;
+  }
+  for (const r of (trip.rentals || [])){
+    if (r.status !== "watching" || !selected.has(`rental:${r.id}`)) continue;
+    cash += rentalOurPortion(r) || 0; points += r.paid_points || 0;
+  }
+  const parts = [];
+  if (cash) parts.push(fmtCash(cash));
+  if (points) parts.push(fmtPoints(points));
+  const el = document.querySelector(`[data-plan-estimate="${trip.id}"]`);
+  if (el) el.textContent = "Selected: " + (parts.length ? parts.join(" + ") : "—");
+}
+
+// Wires the plan-select checkboxes for one trip's panel: click toggles one,
+// shift-click toggles every checkbox between the last-clicked one and this
+// one (Finder-style range select), matching the DOM order the cards render in.
+function wirePlanningSelection(trip){
+  const boxes = Array.from(document.querySelectorAll(`[data-plan-check][data-plan-trip="${trip.id}"]`));
+  let lastIndex = null;
+  boxes.forEach((box, idx) => {
+    box.addEventListener("click", (e) => {
+      const set = planningSelections.get(trip.id) || new Set();
+      planningSelections.set(trip.id, set);
+      if (e.shiftKey && lastIndex !== null){
+        const [start, end] = [lastIndex, idx].sort((a, b) => a - b);
+        const shouldCheck = box.checked;
+        for (let i = start; i <= end; i++){
+          boxes[i].checked = shouldCheck;
+          if (shouldCheck) set.add(boxes[i].dataset.planCheck); else set.delete(boxes[i].dataset.planCheck);
+        }
+      } else {
+        if (box.checked) set.add(box.dataset.planCheck); else set.delete(box.dataset.planCheck);
+      }
+      lastIndex = idx;
+      updatePlanningEstimate(trip);
+    });
+  });
+}
+
 function wireEvents(activeTrip){
   document.getElementById("logoutBtn").onclick = async () => { await supabase.auth.signOut(); };
 
@@ -2600,6 +2708,23 @@ function wireEvents(activeTrip){
   });
 
   if (!activeTrip) return;
+
+  document.querySelectorAll("[data-toggle-flight-status]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await updateFlight(btn.dataset.toggleFlightStatus, { status: btn.dataset.nextStatus });
+      await refresh();
+    });
+  });
+
+  document.querySelectorAll("[data-toggle-rental-status]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await updateRental(btn.dataset.toggleRentalStatus, { status: btn.dataset.nextStatus });
+      await refresh();
+    });
+  });
+
+  wirePlanningSelection(activeTrip);
+  updatePlanningEstimate(activeTrip);
 
   document.querySelector(`[data-rename-trip="${activeTrip.id}"]`).addEventListener("click", () => {
     const h2 = document.querySelector(`[data-title="${activeTrip.id}"]`);

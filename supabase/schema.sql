@@ -55,6 +55,10 @@ create table public.flights (
   -- null = standalone one-way; outbound/return = paired one-way legs shown
   -- side by side; roundtrip = a single booking covering both directions.
   leg         text check (leg in ('outbound','return','roundtrip')),
+  -- "booked": counts toward this trip's total and every summary stat.
+  -- "watching": still comparing options — shown in its own "Watching" section
+  -- and excluded from all cost rollups until promoted to booked.
+  status      text not null default 'booked' check (status in ('booked','watching')),
   url         text,
   origin      text,   -- airport code, e.g. BWI — used to auto-generate the label
   destination text,   -- airport code, e.g. DEN
@@ -80,6 +84,8 @@ create table public.rentals (
   trip_id      uuid not null references public.trips(id) on delete cascade,
   kind         text not null default 'housing' check (kind in ('car','housing')),
   label        text not null,
+  -- Same booked/watching split as flights.status — see the comment there.
+  status       text not null default 'booked' check (status in ('booked','watching')),
   url          text,
   currency     text not null default 'USD',
   paid_cash    numeric,
