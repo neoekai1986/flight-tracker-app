@@ -120,9 +120,7 @@
       color:var(--muted);margin-bottom:3px}
   .stat-val{font-family:'IBM Plex Mono',monospace;font-size:16px;color:var(--ink)}
   .stat.stat-total .stat-val{color:var(--amber)}
-  .stat.stat-clickable{cursor:pointer}
-  .stat.stat-clickable:hover{border-color:var(--amber)}
-  .stat.stat-active{border-color:var(--amber);border-width:2px;padding:9px 15px}
+  .stat.stat-filter{display:flex;align-items:center;gap:8px}
 
   .cancel-list{display:flex;flex-direction:column;gap:6px;margin-bottom:20px}
   .cancel-row{display:flex;align-items:center;gap:12px;background:var(--panel);
@@ -139,8 +137,13 @@
   .calendar-view{margin-bottom:20px}
   .cal-year-block{margin-bottom:14px}
   .cal-year-block:last-child{margin-bottom:0}
+  .cal-year-header{display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;
+      user-select:none}
   .cal-year-label{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--amber);
-      margin-bottom:8px;letter-spacing:.05em}
+      letter-spacing:.05em}
+  .cal-year-caret{color:var(--amber);font-size:11px;display:inline-block;
+      transition:transform .15s ease}
+  .cal-year-caret.collapsed{transform:rotate(-90deg)}
   .cal-month-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
   @media (max-width:640px){ .cal-month-grid{grid-template-columns:repeat(2,1fr)} }
   .cal-month-cell{background:var(--panel);border:1px solid var(--line);border-radius:8px;
@@ -349,6 +352,9 @@ applySkin(currentSkin);
 
 const TABS_HIDDEN_KEY = "flight-tracker-tabs-hidden";
 let tabsHidden = localStorage.getItem(TABS_HIDDEN_KEY) === "1";
+
+const COLLAPSED_CAL_YEARS_KEY = "flight-tracker-collapsed-cal-years";
+let collapsedCalYears = new Set(JSON.parse(localStorage.getItem(COLLAPSED_CAL_YEARS_KEY) || "[]"));
 
 let bulkSelectMode = false;
 let selectedTripIds = new Set();
@@ -1910,20 +1916,13 @@ function renderStatsBar(){
     ${sortedFolders.map(f => `<option value="${f.id}" ${statsFilter===f.id?"selected":""}>${esc(f.title)}</option>`).join("")}
     <option value="ungrouped" ${statsFilter==="ungrouped"?"selected":""}>Ungrouped</option>`;
 
-  const categoryCards = categories
-    .filter(c => byCategory.has(c.id))
-    .map(c => {
-      const b = byCategory.get(c.id);
-      const active = highlightCategoryId === c.id;
-      return `<div class="stat stat-clickable${active ? " stat-active" : ""}" data-cat-highlight="${c.id}">
-        <span class="stat-label">${esc(c.title)}</span><span class="stat-val">${costText(b.cash, b.points)}</span></div>`;
-    }).join("");
   const noneBucket = byCategory.get("none");
-  const noneActive = highlightCategoryId === "none";
-  const noneCard = noneBucket
-    ? `<div class="stat stat-clickable${noneActive ? " stat-active" : ""}" data-cat-highlight="none">
-        <span class="stat-label">Uncategorized</span><span class="stat-val">${costText(noneBucket.cash, noneBucket.points)}</span></div>`
-    : "";
+  const categoryOptionsHTML = `
+    <option value="">All categories</option>
+    ${categories.filter(c => byCategory.has(c.id))
+      .map(c => `<option value="${c.id}" ${highlightCategoryId===c.id?"selected":""}>${esc(c.title)}</option>`).join("")}
+    ${noneBucket ? `<option value="none" ${highlightCategoryId==="none"?"selected":""}>Uncategorized</option>` : ""}`;
+  const selectedCatBucket = highlightCategoryId ? byCategory.get(highlightCategoryId) : null;
 
   return `
     <div class="stats-bar">
@@ -1931,7 +1930,11 @@ function renderStatsBar(){
       <div class="stat"><span class="stat-label">Flights</span><span class="stat-val">${costText(flightCash, flightPoints)}</span></div>
       <div class="stat"><span class="stat-label">Rentals</span><span class="stat-val">${costText(rentalCash, rentalPoints)}</span></div>
       <div class="stat stat-total"><span class="stat-label">Total cost</span><span class="stat-val">${costText(flightCash+rentalCash, flightPoints+rentalPoints)}</span></div>
-      ${categoryCards}${noneCard}
+      <div class="stat stat-filter">
+        <span class="stat-label">Category</span>
+        <select id="categoryHighlightSelect">${categoryOptionsHTML}</select>
+        ${selectedCatBucket ? `<span class="stat-val">${costText(selectedCatBucket.cash, selectedCatBucket.points)}</span>` : ""}
+      </div>
       <div class="stat stat-filter">
         <span class="stat-label">Showing</span>
         <select id="statsFilterSelect">${optionsHTML}</select>
@@ -1999,6 +2002,7 @@ function renderCalendarView(){
   const years = [...byYear.keys()].sort((a, b) => a - b);
   const yearBlocks = years.map(year => {
     const months = byYear.get(year);
+    const collapsed = collapsedCalYears.has(year);
     const cells = months.map((tripsInMonth, i) => `
       <div class="cal-month-cell">
         <div class="cal-month-label">${MONTH_ABBR[i]}</div>
@@ -2006,8 +2010,11 @@ function renderCalendarView(){
       </div>`).join("");
     return `
       <div class="cal-year-block">
-        <div class="cal-year-label">${year}</div>
-        <div class="cal-month-grid">${cells}</div>
+        <div class="cal-year-header" data-cal-year-toggle="${year}">
+          <span class="cal-year-caret${collapsed ? " collapsed" : ""}">▾</span>
+          <span class="cal-year-label">${year}</span>
+        </div>
+        ${collapsed ? "" : `<div class="cal-month-grid">${cells}</div>`}
       </div>`;
   }).join("");
 
@@ -2154,18 +2161,24 @@ function renderTripsSection(){
     render();
   });
 
+  document.querySelectorAll("[data-cal-year-toggle]").forEach(el => {
+    el.addEventListener("click", () => {
+      const year = Number(el.dataset.calYearToggle);
+      if (collapsedCalYears.has(year)) collapsedCalYears.delete(year); else collapsedCalYears.add(year);
+      localStorage.setItem(COLLAPSED_CAL_YEARS_KEY, JSON.stringify([...collapsedCalYears]));
+      render();
+    });
+  });
+
   document.getElementById("toggleBulkSelectBtn").addEventListener("click", () => {
     bulkSelectMode = !bulkSelectMode;
     selectedTripIds.clear();
     render();
   });
 
-  document.querySelectorAll("[data-cat-highlight]").forEach(el => {
-    el.addEventListener("click", () => {
-      const id = el.dataset.catHighlight;
-      highlightCategoryId = highlightCategoryId === id ? null : id;
-      render();
-    });
+  document.getElementById("categoryHighlightSelect").addEventListener("change", (e) => {
+    highlightCategoryId = e.target.value || null;
+    render();
   });
 
   document.querySelectorAll("[data-cal-goto]").forEach(btn => {
