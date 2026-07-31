@@ -124,6 +124,18 @@
   .stat.stat-clickable:hover{border-color:var(--amber)}
   .stat.stat-active{border-color:var(--amber);border-width:2px;padding:9px 15px}
 
+  .cancel-list{display:flex;flex-direction:column;gap:6px;margin-bottom:20px}
+  .cancel-row{display:flex;align-items:center;gap:12px;background:var(--panel);
+      border:1px solid var(--line);border-radius:8px;padding:8px 14px;cursor:pointer;font-size:13px}
+  .cancel-row:hover{border-color:var(--amber)}
+  .cancel-row.cancel-soon{border-color:var(--amber);background:color-mix(in srgb, var(--amber) 12%, var(--panel))}
+  .cancel-date{font-family:'IBM Plex Mono',monospace;color:var(--ink);min-width:70px}
+  .cancel-days{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--muted);
+      min-width:64px}
+  .cancel-row.cancel-soon .cancel-days{color:var(--amber);font-weight:600}
+  .cancel-label{color:var(--ink);flex:1;min-width:0}
+  .cancel-trip{color:var(--muted);font-size:12px;white-space:nowrap}
+
   .calendar-view{margin-bottom:20px}
   .cal-year-block{margin-bottom:14px}
   .cal-year-block:last-child{margin-bottom:0}
@@ -1922,6 +1934,37 @@ function renderStatsBar(){
     </div>`;
 }
 
+function renderCancelDeadlines(){
+  const today = new Date(); today.setHours(0,0,0,0);
+  const rows = [];
+  for (const t of scopedTrips()){
+    for (const r of (t.rentals || [])){
+      if (!r.cancel_by || r.status === "watching") continue;
+      const [y,m,d] = r.cancel_by.split("-").map(Number);
+      const cancelDate = new Date(y, m-1, d);
+      const daysLeft = Math.round((cancelDate - today) / 86400000);
+      if (daysLeft < 0) continue; // window already passed
+      rows.push({ trip: t, rental: r, daysLeft });
+    }
+  }
+  if (!rows.length) return "";
+  rows.sort((a,b) => a.daysLeft - b.daysLeft);
+
+  const rowsHTML = rows.map(({ trip, rental, daysLeft }) => {
+    const soon = daysLeft <= 30;
+    return `<div class="cancel-row${soon ? " cancel-soon" : ""}" data-cal-goto="${trip.id}">
+      <span class="cancel-date">${fmtShortDate(rental.cancel_by)}</span>
+      <span class="cancel-days">${daysLeft === 0 ? "today" : daysLeft + "d left"}</span>
+      <span class="cancel-label">${esc(rental.label)}</span>
+      <span class="cancel-trip">${esc(trip.title)}</span>
+    </div>`;
+  }).join("");
+
+  return `
+    <div class="section-head">Upcoming cancel-by dates</div>
+    <div class="cancel-list">${rowsHTML}</div>`;
+}
+
 const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 function renderCalendarView(){
@@ -2078,6 +2121,8 @@ function renderTripsSection(){
     </div>
 
     ${renderStatsBar()}
+
+    ${renderCancelDeadlines()}
 
     ${renderCalendarView()}
 
