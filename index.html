@@ -183,6 +183,11 @@
 
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
   .card.drag-over{border-color:var(--amber)}
+  .card.flash-highlight{animation:flash-highlight 2s ease-out}
+  @keyframes flash-highlight{
+    0%, 15%{border-color:var(--amber);box-shadow:0 0 0 3px color-mix(in srgb, var(--amber) 35%, transparent)}
+    100%{border-color:var(--line);box-shadow:0 0 0 0 transparent}
+  }
   .card h3{font-size:15px;font-weight:600;margin-bottom:4px}
   .drag-handle{cursor:grab;color:var(--muted);font-size:13px;margin-right:6px;user-select:none}
   .card-title-row{display:flex;align-items:center}
@@ -1952,7 +1957,7 @@ function renderCancelDeadlines(){
 
   const rowsHTML = rows.map(({ trip, rental, daysLeft }) => {
     const soon = daysLeft <= 30;
-    return `<div class="cancel-row${soon ? " cancel-soon" : ""}" data-cal-goto="${trip.id}">
+    return `<div class="cancel-row${soon ? " cancel-soon" : ""}" data-cal-goto="${trip.id}" data-rental-target="${rental.id}">
       <span class="cancel-date">${fmtShortDate(rental.cancel_by)}</span>
       <span class="cancel-days">${daysLeft === 0 ? "today" : daysLeft + "d left"}</span>
       <span class="cancel-label">${esc(rental.label)}</span>
@@ -2173,6 +2178,22 @@ function renderTripsSection(){
         activeTripId = id;
         render();
       }
+    });
+  });
+
+  // Cancel-deadline rows also jump straight to the specific rental card
+  // (not just its trip) — runs after the data-cal-goto listener above has
+  // already switched trips and re-rendered, so it queries the fresh DOM.
+  document.querySelectorAll("[data-rental-target]").forEach(el => {
+    el.addEventListener("click", () => {
+      const rentalId = el.dataset.rentalTarget;
+      requestAnimationFrame(() => {
+        const card = document.querySelector(`[data-rental-card="${rentalId}"]`);
+        if (!card) return;
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+        card.classList.add("flash-highlight");
+        setTimeout(() => card.classList.remove("flash-highlight"), 2000);
+      });
     });
   });
 
