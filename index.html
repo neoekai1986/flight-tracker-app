@@ -113,6 +113,14 @@
   .plan-checkbox{padding-top:14px}
   .plan-checkbox input{width:16px;height:16px;cursor:pointer}
 
+  .watching-columns{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:640px){ .watching-columns{grid-template-columns:1fr} }
+  .watching-lane-col{display:flex;flex-direction:column;gap:16px}
+  .watching-lane{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+      padding:12px;display:flex;flex-direction:column;gap:14px}
+  .watching-lane-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+      color:var(--muted);font-family:'IBM Plex Mono',monospace}
+
   .stats-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
   .stat{background:var(--panel);border:1px solid var(--line);border-radius:8px;
       padding:10px 16px;min-width:120px}
@@ -1538,16 +1546,28 @@ function renderTripPanel(trip){
   if (totalCash) totalParts.push(fmtCash(totalCash));
   if (totalPoints) totalParts.push(fmtPoints(totalPoints));
 
+  const watchingHousing = watchingRentals.filter(r => r.kind !== "car");
+  const watchingCars = watchingRentals.filter(r => r.kind === "car");
   const hasWatching = watchingFlights.length > 0 || watchingRentals.length > 0;
+  const watchingLane = (label, items, kind, renderFn) => `
+    <div class="watching-lane">
+      <div class="watching-lane-label">${label}</div>
+      ${items.length
+        ? items.map(item => withPlanCheckbox(trip, kind, item.id, renderFn(trip, item))).join("")
+        : `<p class="empty-hist">None</p>`}
+    </div>`;
   const watchingHTML = hasWatching
     ? `<div class="section-head">Watching (not yet booked)</div>
        <div class="watching-block">Not counted in your totals. Check off items below (shift-click to
           select a range) to price out a combination.
           <div class="planning-estimate" data-plan-estimate="${trip.id}">Selected: —</div>
         </div>
-       <div class="solo-list" data-watching-list="${trip.id}">
-         ${watchingFlights.map(f => withPlanCheckbox(trip, "flight", f.id, renderCard(trip, f))).join("")}
-         ${watchingRentals.map(r => withPlanCheckbox(trip, "rental", r.id, renderRentalCard(trip, r))).join("")}
+       <div class="watching-columns" data-watching-list="${trip.id}">
+         ${watchingLane("✈️ Flights", watchingFlights, "flight", renderCard)}
+         <div class="watching-lane-col">
+           ${watchingLane("🏠 Housing", watchingHousing, "rental", renderRentalCard)}
+           ${watchingLane("🚗 Cars", watchingCars, "rental", renderRentalCard)}
+         </div>
        </div>`
     : "";
 
