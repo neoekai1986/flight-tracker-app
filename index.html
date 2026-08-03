@@ -113,12 +113,13 @@
   .plan-checkbox{padding-top:14px}
   .plan-checkbox input{width:16px;height:16px;cursor:pointer}
 
-  .watching-columns{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  @media (max-width:640px){ .watching-columns{grid-template-columns:1fr} }
-  .watching-lane-col{display:flex;flex-direction:column;gap:16px}
-  .watching-lane{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+  .lane-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media (max-width:640px){ .lane-grid{grid-template-columns:1fr} }
+  .lane-col{display:flex;flex-direction:column;gap:16px}
+  .lane{background:var(--panel);border:1px solid var(--line);border-radius:8px;
       padding:12px;display:flex;flex-direction:column;gap:14px}
-  .watching-lane-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+  .lane.lane-warn{border-color:var(--bad);background:color-mix(in srgb, var(--bad) 14%, var(--panel))}
+  .lane-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
       color:var(--muted);font-family:'IBM Plex Mono',monospace}
 
   .stats-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
@@ -1546,12 +1547,18 @@ function renderTripPanel(trip){
   if (totalCash) totalParts.push(fmtCash(totalCash));
   if (totalPoints) totalParts.push(fmtPoints(totalPoints));
 
+  const bookedHousing = bookedRentals.filter(r => r.kind !== "car");
+  const bookedCars = bookedRentals.filter(r => r.kind === "car");
+  const hasBookedFlight = bookedFlights.length > 0;
+  const housingWarn = hasBookedFlight && bookedHousing.length === 0;
+  const carsWarn = hasBookedFlight && bookedCars.length === 0;
+
   const watchingHousing = watchingRentals.filter(r => r.kind !== "car");
   const watchingCars = watchingRentals.filter(r => r.kind === "car");
   const hasWatching = watchingFlights.length > 0 || watchingRentals.length > 0;
   const watchingLane = (label, items, kind, renderFn) => `
-    <div class="watching-lane">
-      <div class="watching-lane-label">${label}</div>
+    <div class="lane">
+      <div class="lane-label">${label}</div>
       ${items.length
         ? items.map(item => withPlanCheckbox(trip, kind, item.id, renderFn(trip, item))).join("")
         : `<p class="empty-hist">None</p>`}
@@ -1562,9 +1569,9 @@ function renderTripPanel(trip){
           select a range) to price out a combination.
           <div class="planning-estimate" data-plan-estimate="${trip.id}">Selected: —</div>
         </div>
-       <div class="watching-columns" data-watching-list="${trip.id}">
+       <div class="lane-grid" data-watching-list="${trip.id}">
          ${watchingLane("✈️ Flights", watchingFlights, "flight", renderCard)}
-         <div class="watching-lane-col">
+         <div class="lane-col">
            ${watchingLane("🏠 Housing", watchingHousing, "rental", renderRentalCard)}
            ${watchingLane("🚗 Cars", watchingCars, "rental", renderRentalCard)}
          </div>
@@ -1613,14 +1620,30 @@ function renderTripPanel(trip){
 
       <div data-add-flight-form="${trip.id}"></div>
       <div data-add-rental-form="${trip.id}"></div>
-      ${bookedFlights.length ? `<div class="section-head">Flights</div>` : ""}
-      ${pairsHTML}${soloHTML}
-      ${!bookedFlights.length ? `<p class="empty-hist">No booked flights in this trip yet.</p>` : ""}
 
-      ${bookedRentals.length ? `<div class="section-head">Rentals</div>
-        <div class="solo-list" data-rental-list="${trip.id}">
-          ${bookedRentals.map(r => renderRentalCard(trip, r)).join("")}
-        </div>` : ""}
+      <div class="lane-grid">
+        <div class="lane">
+          <div class="lane-label">✈️ Flights</div>
+          ${pairsHTML}${soloHTML}
+          ${!bookedFlights.length ? `<p class="empty-hist">No flights booked yet.</p>` : ""}
+        </div>
+        <div class="lane-col">
+          <div class="lane${housingWarn ? " lane-warn" : ""}">
+            <div class="lane-label">🏠 Housing</div>
+            <div class="solo-list" data-rental-list="${trip.id}" data-rental-kind="housing">
+              ${bookedHousing.map(r => renderRentalCard(trip, r)).join("")}
+            </div>
+            ${!bookedHousing.length ? `<p class="empty-hist">No housing booked yet.</p>` : ""}
+          </div>
+          <div class="lane${carsWarn ? " lane-warn" : ""}">
+            <div class="lane-label">🚗 Cars</div>
+            <div class="solo-list" data-rental-list="${trip.id}" data-rental-kind="car">
+              ${bookedCars.map(r => renderRentalCard(trip, r)).join("")}
+            </div>
+            ${!bookedCars.length ? `<p class="empty-hist">No car booked yet.</p>` : ""}
+          </div>
+        </div>
+      </div>
 
       ${watchingHTML}
     </div>`;
