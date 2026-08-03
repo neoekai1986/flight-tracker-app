@@ -185,7 +185,7 @@
   @media (max-width:640px){ .pair-row{grid-template-columns:1fr} }
 
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
-  .card.card-booked{border-color:var(--good)}
+  .card.card-booked{border-color:var(--good);background:color-mix(in srgb, var(--good) 14%, var(--panel2))}
   .card.card-watching{background:color-mix(in srgb, var(--amber) 16%, var(--panel2))}
   .card.drag-over{border-color:var(--amber)}
   .card.flash-highlight{animation:flash-highlight 2s ease-out}
@@ -218,7 +218,7 @@
 
   .photo-picker{border:1px dashed var(--line);border-radius:8px;padding:8px;display:flex;
       align-items:center;gap:10px;cursor:text}
-  .photo-picker:focus{outline:none;border-color:var(--amber)}
+  .photo-picker:focus, .photo-picker:focus-within{outline:none;border-color:var(--amber)}
   .photo-picker-preview{width:48px;height:48px;border-radius:6px;flex-shrink:0;
       background:var(--night) center/cover no-repeat;border:1px solid var(--line)}
   .photo-picker-avatar-preview{border-radius:50%}
@@ -1257,7 +1257,7 @@ function renderAttachmentsRow(kind, itemId, attachments){
   return `
     <div class="attachments-row" data-attachments-row="${itemId}">
       ${thumbs}
-      <div class="att-add-btn" tabindex="0" data-att-picker="${kind}:${itemId}" title="Add screenshot — click, or paste an image (⌘V/Ctrl+V)">
+      <div class="att-add-btn" tabindex="0" data-att-picker="${kind}:${itemId}" title="Click here, then paste a copied image (⌘V/Ctrl+V) — click again to browse files instead">
         📷
       </div>
       <input type="file" accept="image/*" data-att-upload="${kind}:${itemId}" hidden>
@@ -3270,8 +3270,17 @@ function wireAttachments(){
   });
 
   document.querySelectorAll("[data-att-picker]").forEach(picker => {
+    // mousedown fires before focus changes, so this captures whether the box
+    // was ALREADY focused going into this click. First click just focuses it
+    // (ready to paste, shown via the amber focus ring) instead of immediately
+    // grabbing the OS file dialog — clicking a focused box browses files.
+    picker.addEventListener("mousedown", () => {
+      picker.dataset.wasFocused = document.activeElement === picker ? "1" : "0";
+    });
     picker.addEventListener("click", () => {
-      document.querySelector(`[data-att-upload="${picker.dataset.attPicker}"]`)?.click();
+      if (picker.dataset.wasFocused === "1"){
+        document.querySelector(`[data-att-upload="${picker.dataset.attPicker}"]`)?.click();
+      }
     });
     picker.addEventListener("paste", (e) => {
       const items = e.clipboardData?.items || [];
