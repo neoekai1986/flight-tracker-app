@@ -185,6 +185,8 @@
   @media (max-width:640px){ .pair-row{grid-template-columns:1fr} }
 
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+  .card.card-booked{border-color:var(--good)}
+  .card.card-watching{background:color-mix(in srgb, var(--amber) 16%, var(--panel2))}
   .card.drag-over{border-color:var(--amber)}
   .card.flash-highlight{animation:flash-highlight 2s ease-out}
   @keyframes flash-highlight{
@@ -1313,7 +1315,7 @@ function renderCard(trip, f){
   }
 
   return `
-  <div class="card" data-card="${f.id}" data-leg="${legScope(f.leg)}" data-trip="${trip.id}">
+  <div class="card${f.status === "watching" ? " card-watching" : " card-booked"}" data-card="${f.id}" data-leg="${legScope(f.leg)}" data-trip="${trip.id}">
     <div class="card-title-row">
       <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
       <h3>${esc(f.label)}</h3>
@@ -1753,7 +1755,7 @@ function renderRentalCard(trip, r){
   }
   if (r.confirmation_code) metaBits.push(`Conf. <b>${esc(r.confirmation_code)}</b>`);
   return `
-  <div class="card" data-rental-card="${r.id}" data-trip="${trip.id}">
+  <div class="card${r.status === "watching" ? " card-watching" : " card-booked"}" data-rental-card="${r.id}" data-trip="${trip.id}">
     <div class="card-title-row">
       <span class="drag-handle" draggable="true" data-rental-drag="${r.id}" title="Drag to reorder">⠿</span>
       <h3>${icon} ${esc(r.label)}</h3>
