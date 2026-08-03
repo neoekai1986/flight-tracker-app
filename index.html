@@ -248,6 +248,7 @@
   .att-add-btn{display:flex;align-items:center;justify-content:center;width:56px;height:56px;
       border:1px dashed var(--line);border-radius:6px;cursor:pointer;color:var(--muted);font-size:20px}
   .att-add-btn:hover{border-color:var(--amber);color:var(--amber)}
+  .att-add-btn:focus{outline:none;border-color:var(--amber);border-style:solid;color:var(--amber)}
   .att-status{font-size:12px;color:var(--muted);font-family:'IBM Plex Mono',monospace}
   .att-suggest{background:var(--night);border:1px solid var(--amber);border-radius:6px;
       padding:8px 10px;font-size:12.5px;margin:6px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
@@ -1254,10 +1255,10 @@ function renderAttachmentsRow(kind, itemId, attachments){
   return `
     <div class="attachments-row" data-attachments-row="${itemId}">
       ${thumbs}
-      <label class="att-add-btn" title="Add screenshot">
+      <div class="att-add-btn" tabindex="0" data-att-picker="${kind}:${itemId}" title="Add screenshot — click, or paste an image (⌘V/Ctrl+V)">
         📷
-        <input type="file" accept="image/*" data-att-upload="${kind}:${itemId}" hidden>
-      </label>
+      </div>
+      <input type="file" accept="image/*" data-att-upload="${kind}:${itemId}" hidden>
     </div>
     <div class="att-status" data-att-status="${itemId}"></div>
     <div data-att-suggest-holder="${itemId}"></div>
@@ -3260,49 +3261,72 @@ function wireAttachments(){
   });
 
   document.querySelectorAll("[data-att-upload]").forEach(input => {
-    input.addEventListener("change", async () => {
+    input.addEventListener("change", () => {
       const file = input.files[0];
-      if (!file) return;
-      const [kind, itemId] = input.dataset.attUpload.split(":");
-      const found = kind === "flight" ? findFlight(itemId) : findRental(itemId);
-      const trip = found?.trip;
-      if (!trip) return;
-      const statusEl = document.querySelector(`[data-att-status="${itemId}"]`);
-      if (statusEl) statusEl.textContent = "Uploading…";
-      const att = await uploadAttachment(trip.id, kind, itemId, file);
-      if (!att) { if (statusEl) statusEl.textContent = ""; return; }
-      // Refresh now so the thumbnail appears right away; OCR runs after,
-      // against fresh DOM nodes (render() just replaced the old ones).
-      await refresh();
-      const freshStatusEl = document.querySelector(`[data-att-status="${itemId}"]`);
-      if (freshStatusEl) freshStatusEl.textContent = "Scanning screenshot for text…";
-      try {
-        const text = await runOcr(file, (m) => {
-          if (freshStatusEl && m.status === "recognizing text"){
-            freshStatusEl.textContent = `Scanning… ${Math.round((m.progress||0)*100)}%`;
-          }
-        });
-        await saveAttachmentOcrText(att.id, text);
-        const owner = findAttachmentOwner(att.id);
-        if (owner) owner.attachment.ocr_text = text; // keep in-memory cache in sync, no full refresh
-        const suggestion = parseScreenshotText(text);
-        if (freshStatusEl) freshStatusEl.textContent = "";
-        const suggestHolder = document.querySelector(`[data-att-suggest-holder="${itemId}"]`);
-        if (suggestHolder){
-          suggestHolder.innerHTML = renderSuggestionBanner(kind, itemId, suggestion);
-          const applyBtn = document.querySelector(`[data-att-apply="${itemId}"]`);
-          if (applyBtn) applyBtn.addEventListener("click", () => {
-            if (kind === "flight") applySuggestionToFlight(itemId, suggestion);
-            else applySuggestionToRental(itemId, suggestion);
-          });
-          const dismissBtn = document.querySelector(`[data-att-dismiss="${itemId}"]`);
-          if (dismissBtn) dismissBtn.addEventListener("click", () => { suggestHolder.innerHTML = ""; });
+      if (file) handleAttachmentFile(input.dataset.attUpload, file);
+    });
+  });
+
+  document.querySelectorAll("[data-att-picker]").forEach(picker => {
+    picker.addEventListener("click", () => {
+      document.querySelector(`[data-att-upload="${picker.dataset.attPicker}"]`)?.click();
+    });
+    picker.addEventListener("paste", (e) => {
+      const items = e.clipboardData?.items || [];
+      for (const item of items){
+        if (item.type.startsWith("image/")){
+          e.preventDefault();
+          handleAttachmentFile(picker.dataset.attPicker, item.getAsFile());
+          break;
         }
-      } catch (err){
-        if (freshStatusEl) freshStatusEl.textContent = "Couldn't scan image (saved anyway): " + err.message;
       }
     });
   });
+}
+
+// Shared by both the file-picker input and paste-an-image: uploads the
+// screenshot, refreshes so its thumbnail appears immediately, then runs OCR
+// and offers the extracted-field suggestion banner. `kindAndId` is
+// "flight:id" or "rental:id" (matches the data-att-upload/-picker encoding).
+async function handleAttachmentFile(kindAndId, file){
+  const [kind, itemId] = kindAndId.split(":");
+  const found = kind === "flight" ? findFlight(itemId) : findRental(itemId);
+  const trip = found?.trip;
+  if (!trip) return;
+  const statusEl = document.querySelector(`[data-att-status="${itemId}"]`);
+  if (statusEl) statusEl.textContent = "Uploading…";
+  const att = await uploadAttachment(trip.id, kind, itemId, file);
+  if (!att) { if (statusEl) statusEl.textContent = ""; return; }
+  // Refresh now so the thumbnail appears right away; OCR runs after,
+  // against fresh DOM nodes (render() just replaced the old ones).
+  await refresh();
+  const freshStatusEl = document.querySelector(`[data-att-status="${itemId}"]`);
+  if (freshStatusEl) freshStatusEl.textContent = "Scanning screenshot for text…";
+  try {
+    const text = await runOcr(file, (m) => {
+      if (freshStatusEl && m.status === "recognizing text"){
+        freshStatusEl.textContent = `Scanning… ${Math.round((m.progress||0)*100)}%`;
+      }
+    });
+    await saveAttachmentOcrText(att.id, text);
+    const owner = findAttachmentOwner(att.id);
+    if (owner) owner.attachment.ocr_text = text; // keep in-memory cache in sync, no full refresh
+    const suggestion = parseScreenshotText(text);
+    if (freshStatusEl) freshStatusEl.textContent = "";
+    const suggestHolder = document.querySelector(`[data-att-suggest-holder="${itemId}"]`);
+    if (suggestHolder){
+      suggestHolder.innerHTML = renderSuggestionBanner(kind, itemId, suggestion);
+      const applyBtn = document.querySelector(`[data-att-apply="${itemId}"]`);
+      if (applyBtn) applyBtn.addEventListener("click", () => {
+        if (kind === "flight") applySuggestionToFlight(itemId, suggestion);
+        else applySuggestionToRental(itemId, suggestion);
+      });
+      const dismissBtn = document.querySelector(`[data-att-dismiss="${itemId}"]`);
+      if (dismissBtn) dismissBtn.addEventListener("click", () => { suggestHolder.innerHTML = ""; });
+    }
+  } catch (err){
+    if (freshStatusEl) freshStatusEl.textContent = "Couldn't scan image (saved anyway): " + err.message;
+  }
 }
 
 // ---------------- Tab / folder drag and drop ----------------
