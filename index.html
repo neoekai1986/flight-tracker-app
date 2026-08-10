@@ -371,6 +371,8 @@ let collapsedCalYears = new Set(JSON.parse(localStorage.getItem(COLLAPSED_CAL_YE
 let bulkSelectMode = false;
 let selectedTripIds = new Set();
 
+let bookmarkletPanelOpen = false;
+
 let highlightCategoryId = null; // null = none; "none" = uncategorized; else a category id
 
 // Ad-hoc "what would this combination cost" scratchpad for planning-status
@@ -1276,6 +1278,15 @@ function renderAttachmentsRow(kind, itemId, attachments){
     <div data-att-text-holder="${itemId}"></div>`;
 }
 
+// Appends a "#farelog=<flightId>" fragment to a flight's booking URL so the
+// price-logging bookmarklet (see renderBookmarkletPanel) knows which flight
+// to log against. Fragments are never sent to the server, so this is inert
+// to the airline site — skipped if the URL already has one, to be safe.
+function checkPriceUrl(f){
+  if (!f.url || f.url.includes("#")) return f.url;
+  return `${f.url}#farelog=${f.id}`;
+}
+
 function renderCard(trip, f){
   const cur = f.currency || "USD";
   const moveOptions = trips.filter(t => t.id !== trip.id)
@@ -1334,7 +1345,7 @@ function renderCard(trip, f){
     ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
     ${renderAttachmentsRow("flight", f.id, f.attachments)}
     <div class="row">
-      ${f.url ? `<a class="btn btn-sm" href="${esc(f.url)}" target="_blank" rel="noopener">Check price →</a>` : ""}
+      ${f.url ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener">Check price →</a>` : ""}
       <button class="btn btn-ghost btn-sm" data-edit-flight="${f.id}">Edit</button>
       <button class="btn-ghost btn-sm" data-toggle-flight-status="${f.id}" data-next-status="${f.status === "watching" ? "booked" : "watching"}">
         ${f.status === "watching" ? "Mark booked" : "Mark watching"}</button>
@@ -1988,6 +1999,30 @@ function renderStatsBar(){
     </div>`;
 }
 
+// The bookmarklet runs on the airline's own site, in a tab you opened
+// yourself via a "Check price" link (so it's a real logged-in-as-you
+// browsing session — no automation touches the airline page). It reads the
+// flight id we stashed in the URL fragment, grabs whatever price text you
+// highlighted (or falls back to a prompt), and hands off to this same
+// Fare Board tab via a "#logprice=id&price=value" fragment, where the app
+// (already authenticated) does the actual insert. The bookmarklet itself
+// never touches Supabase or holds any credentials.
+function renderBookmarkletPanel(){
+  const fareBoardUrl = location.origin + location.pathname;
+  const code = `javascript:(function(){var m=location.hash.match(/farelog=([^&]+)/);if(!m){alert('Open this page via a "Check price" link in Fare Board first.');return;}var id=m[1];var sel=(window.getSelection?window.getSelection().toString():'')||'';var pm=sel.match(/[\\d,]+\\.?\\d*/);var price=pm?pm[0].replace(/,/g,''):prompt('Price shown on this page?');if(!price)return;window.open(${JSON.stringify(fareBoardUrl)}+'#logprice='+id+'&price='+encodeURIComponent(price),'farelog');})();`;
+  return `
+    <div class="watching-block" style="margin-bottom:20px">
+      <b>Log price from your browser, one click</b>
+      <p style="margin:6px 0">Drag this to your bookmarks bar:
+        <a class="btn btn-sm" href="${esc(code)}" onclick="return false" style="cursor:grab">📌 Log price</a>
+      </p>
+      <p style="margin:6px 0">Then: click a flight's <b>Check price →</b> link to open the airline site, highlight
+        the price on the page, and click the bookmark. It logs straight into that flight — no typing, no
+        automation touching the airline's site.</p>
+      <button class="btn-link" id="hideBookmarkletPanel">Got it, hide this</button>
+    </div>`;
+}
+
 function renderCancelDeadlines(){
   const today = new Date(); today.setHours(0,0,0,0);
   const rows = [];
@@ -2174,9 +2209,12 @@ function renderTripsSection(){
         ${showImport ? `<option value="importLocal">Import from this browser's saved data</option>` : ""}
         <option value="export">Export all</option>
         <option value="importJson">Import JSON</option>
+        <option value="bookmarklet">Get price-logging bookmarklet</option>
       </select>
       <input type="file" id="importFile" accept="application/json" hidden>
     </div>
+
+    ${bookmarkletPanelOpen ? renderBookmarkletPanel() : ""}
 
     ${renderStatsBar()}
 
@@ -2773,6 +2811,12 @@ function wireEvents(activeTrip){
     if (action === "importLocal") importFromLocalStorage();
     else if (action === "export") exportAllTrips();
     else if (action === "importJson") document.getElementById("importFile").click();
+    else if (action === "bookmarklet"){ bookmarkletPanelOpen = true; render(); }
+  });
+
+  document.getElementById("hideBookmarkletPanel")?.addEventListener("click", () => {
+    bookmarkletPanelOpen = false;
+    render();
   });
 
   document.getElementById("importFile").onchange = (e) => {
@@ -3523,6 +3567,24 @@ function wireDragEvents(activeTrip){
   });
 }
 
+// Picks up after the price-logging bookmarklet (see renderBookmarkletPanel)
+// hands off via "#logprice=<flightId>&price=<value>" — logs the price
+// straight in, no form to fill out. Requires trips to already be loaded.
+async function processBookmarkletHash(){
+  const m = location.hash.match(/logprice=([^&]+)&price=([^&]+)/);
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  const [, flightId, priceStr] = m;
+  const price = parseFloat(priceStr);
+  if (isNaN(price)) return;
+  const found = findFlight(flightId);
+  if (!found){ alert("Couldn't find that flight — it may have been moved or deleted."); return; }
+  await addPriceLog(flightId, new Date().toISOString().slice(0,10), price);
+  activeTripId = found.trip.id;
+  await refresh();
+  alert(`Logged ${fmtCash(price)} for "${found.flight.label}".`);
+}
+
 // ---------------- Init ----------------
 
 supabase.auth.onAuthStateChange((event, newSession) => {
@@ -3537,9 +3599,14 @@ supabase.auth.onAuthStateChange((event, newSession) => {
   if (session) refresh(); else render();
 });
 
+// The bookmarklet reuses one named tab, so repeat clicks often just change
+// the hash on an already-loaded page (no reload) — catch those too.
+window.addEventListener("hashchange", () => { if (session) processBookmarkletHash(); });
+
 const { data: { session: initSession } } = await supabase.auth.getSession();
 session = initSession;
-if (session) refresh(); else render();
+if (session){ await refresh(); await processBookmarkletHash(); }
+else render();
 </script>
 </body>
 </html>
