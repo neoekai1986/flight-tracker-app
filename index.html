@@ -35,13 +35,36 @@
   *{box-sizing:border-box;margin:0}
   body{background:var(--night);color:var(--ink);font-family:Inter,system-ui,sans-serif;
        padding:32px 20px 64px;max-width:1000px;margin:0 auto}
-  .eyebrow{font-family:Inter,system-ui,sans-serif;font-weight:500;font-size:12px;letter-spacing:.22em;
-           color:var(--muted);text-transform:uppercase}
-  h1{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:clamp(26px,4vw,38px);
-     color:var(--amber);letter-spacing:.04em;margin:6px 0 4px}
-  .sub{color:var(--muted);font-size:14px;margin-bottom:20px;line-height:1.5}
+  .brand-row{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+  .brand-mark{color:var(--amber);flex-shrink:0;display:flex}
+  .brand-mark svg{width:30px;height:30px}
+  .brand-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .brand-name{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:22px;
+      color:var(--ink);letter-spacing:.02em}
+  .sub{color:var(--muted);font-size:13px;line-height:1.4}
 
   .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;align-items:center}
+
+  .menu{position:relative}
+  .menu > summary{list-style:none;cursor:pointer}
+  .menu > summary::-webkit-details-marker{display:none}
+  .menu-panel{position:absolute;top:calc(100% + 6px);right:0;background:var(--panel);
+      border:1px solid var(--line);border-radius:8px;padding:6px;min-width:210px;
+      display:flex;flex-direction:column;gap:2px;z-index:30;
+      box-shadow:0 10px 28px rgba(0,0,0,.35)}
+  :root[data-skin="paper"] .menu-panel{box-shadow:0 10px 28px rgba(0,0,0,.12)}
+  .menu-panel button, .menu-panel label{width:100%;text-align:left}
+  .menu-panel button{background:transparent;border:none;color:var(--ink);
+      padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit}
+  .menu-panel button:hover{background:var(--panel2)}
+  .menu-email{padding:6px 10px 8px;font-size:12px;color:var(--muted);
+      border-bottom:1px solid var(--line);margin-bottom:4px;word-break:break-all}
+  .menu-label{display:flex;flex-direction:column;gap:3px;padding:6px 10px;font-size:11px;
+      color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .menu-divider{border-top:1px solid var(--line);margin:4px 2px}
+  .avatar-circle{width:30px;height:30px;border-radius:50%;background:var(--panel2);
+      border:1px solid var(--line);color:var(--amber);display:flex;align-items:center;
+      justify-content:center;font-size:13px;font-weight:600;font-family:'IBM Plex Mono',monospace}
   .section-nav{display:flex;gap:6px;margin-bottom:20px;border-bottom:1px solid var(--line)}
   .section-tab{background:transparent;border:none;color:var(--muted);padding:10px 16px;font-size:14px;
       font-family:'IBM Plex Mono',monospace;cursor:pointer;border-bottom:2px solid transparent}
@@ -319,9 +342,17 @@
 </style>
 </head>
 <body>
-  <p class="eyebrow">Fare board</p>
-  <h1>FLIGHT PRICES</h1>
-  <p class="sub" id="subtext">Loading…</p>
+  <div class="brand-row">
+    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1a1.5 1.5 0 0 0 0 3v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1a1.5 1.5 0 0 0 0-3z"/>
+      <line x1="15" y1="6.5" x2="15" y2="17.5" stroke-dasharray="2 2.5"/>
+    </svg></span>
+    <div class="brand-text">
+      <span class="brand-name">Fare Board</span>
+      <span class="sub" id="subtext">Loading…</span>
+    </div>
+  </div>
 
   <div id="root"></div>
 
@@ -2186,6 +2217,87 @@ function wireSectionNav(){
   });
 }
 
+// Account menu (email, theme, log out) — shared by Trip Planner and Wish
+// List Planning, replacing what used to be two copies of the same toolbar.
+function renderAccountMenu(){
+  const initial = (session.user.email || "?").charAt(0).toUpperCase();
+  return `
+    <details class="menu account-menu">
+      <summary><span class="avatar-circle" title="${esc(session.user.email)}">${esc(initial)}</span></summary>
+      <div class="menu-panel">
+        <div class="menu-email">${esc(session.user.email)}</div>
+        <label class="menu-label">Theme
+          <select id="skinSelect">
+            ${SKINS.map(s => `<option value="${s.id}" ${s.id===currentSkin?"selected":""}>${esc(s.label)}</option>`).join("")}
+          </select>
+        </label>
+        <div class="menu-divider"></div>
+        <button type="button" id="logoutBtn">Log out</button>
+      </div>
+    </details>`;
+}
+
+function wireAccountMenu(){
+  document.getElementById("skinSelect").addEventListener("change", (e) => {
+    currentSkin = e.target.value;
+    localStorage.setItem(SKIN_KEY, currentSkin);
+    applySkin(currentSkin);
+  });
+  document.getElementById("logoutBtn").onclick = async () => { await supabase.auth.signOut(); };
+}
+
+// View menu (Trip Planner only) — tab visibility, bulk-select, and the
+// former "More actions" dropdown, now grouped into one overflow menu.
+function renderViewMenu(showImport){
+  return `
+    <details class="menu view-menu">
+      <summary class="btn btn-ghost btn-sm">View ▾</summary>
+      <div class="menu-panel">
+        <button type="button" id="toggleTabsBtn">${tabsHidden ? "Show tabs" : "Hide tabs"}</button>
+        <button type="button" id="toggleBulkSelectBtn">${bulkSelectMode ? "Done selecting" : "Select trips"}</button>
+        <div class="menu-divider"></div>
+        ${showImport ? `<button type="button" data-menu-action="importLocal">Import from this browser's saved data</button>` : ""}
+        <button type="button" data-menu-action="export">Export all</button>
+        <button type="button" data-menu-action="importJson">Import JSON</button>
+        <button type="button" data-menu-action="bookmarklet">Get price-logging bookmarklet</button>
+      </div>
+    </details>
+    <input type="file" id="importFile" accept="application/json" hidden>`;
+}
+
+function wireViewMenu(){
+  document.getElementById("toggleTabsBtn").addEventListener("click", () => {
+    tabsHidden = !tabsHidden;
+    localStorage.setItem(TABS_HIDDEN_KEY, tabsHidden ? "1" : "0");
+    render();
+  });
+  document.getElementById("toggleBulkSelectBtn").addEventListener("click", () => {
+    bulkSelectMode = !bulkSelectMode;
+    selectedTripIds.clear();
+    render();
+  });
+  document.querySelectorAll("[data-menu-action]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const action = btn.dataset.menuAction;
+      if (action === "importLocal") importFromLocalStorage();
+      else if (action === "export") exportAllTrips();
+      else if (action === "importJson") document.getElementById("importFile").click();
+      else if (action === "bookmarklet"){ bookmarkletPanelOpen = true; render(); }
+    });
+  });
+}
+
+// Native <details> doesn't close itself on an inside click or an outside
+// click — wire both, once, at the document level (event delegation, so it
+// keeps working across every render() that replaces the menu markup).
+document.addEventListener("click", (e) => {
+  document.querySelectorAll("details.menu[open]").forEach(d => {
+    if (!d.contains(e.target) || e.target.closest(".menu-panel button, .menu-panel a")){
+      d.removeAttribute("open");
+    }
+  });
+});
+
 function renderTripsSection(){
   document.getElementById("subtext").textContent =
     "Sites like Southwest block automated price lookups, so check prices yourself and log what you see.";
@@ -2194,25 +2306,13 @@ function renderTripsSection(){
   const showImport = !!localStorage.getItem(OLD_LOCAL_KEY) && !localStorage.getItem(MIGRATED_FLAG);
 
   root.innerHTML = `
-    ${renderSectionNav()}
     <div class="toolbar">
-      <span style="color:var(--muted);font-size:13px">${esc(session.user.email)}</span>
-      <button class="btn btn-ghost btn-sm" id="logoutBtn">Log out</button>
       <div class="spacer"></div>
-      <select id="skinSelect" class="btn-ghost btn-sm" title="Color theme">
-        ${SKINS.map(s => `<option value="${s.id}" ${s.id===currentSkin?"selected":""}>${esc(s.label)}</option>`).join("")}
-      </select>
-      <button class="btn btn-ghost btn-sm" id="toggleTabsBtn">${tabsHidden ? "Show tabs" : "Hide tabs"}</button>
-      <button class="btn btn-ghost btn-sm" id="toggleBulkSelectBtn">${bulkSelectMode ? "Done selecting" : "Select trips"}</button>
-      <select id="moreActionsSelect" class="btn-ghost btn-sm" title="More actions">
-        <option value="">More actions ▾</option>
-        ${showImport ? `<option value="importLocal">Import from this browser's saved data</option>` : ""}
-        <option value="export">Export all</option>
-        <option value="importJson">Import JSON</option>
-        <option value="bookmarklet">Get price-logging bookmarklet</option>
-      </select>
-      <input type="file" id="importFile" accept="application/json" hidden>
+      ${renderViewMenu(showImport)}
+      ${renderAccountMenu()}
     </div>
+
+    ${renderSectionNav()}
 
     ${bookmarkletPanelOpen ? renderBookmarkletPanel() : ""}
 
@@ -2233,18 +2333,6 @@ function renderTripsSection(){
     render();
   });
 
-  document.getElementById("skinSelect").addEventListener("change", (e) => {
-    currentSkin = e.target.value;
-    localStorage.setItem(SKIN_KEY, currentSkin);
-    applySkin(currentSkin);
-  });
-
-  document.getElementById("toggleTabsBtn").addEventListener("click", () => {
-    tabsHidden = !tabsHidden;
-    localStorage.setItem(TABS_HIDDEN_KEY, tabsHidden ? "1" : "0");
-    render();
-  });
-
   document.querySelectorAll("[data-cal-year-toggle]").forEach(el => {
     el.addEventListener("click", () => {
       const year = Number(el.dataset.calYearToggle);
@@ -2252,12 +2340,6 @@ function renderTripsSection(){
       localStorage.setItem(COLLAPSED_CAL_YEARS_KEY, JSON.stringify([...collapsedCalYears]));
       render();
     });
-  });
-
-  document.getElementById("toggleBulkSelectBtn").addEventListener("click", () => {
-    bulkSelectMode = !bulkSelectMode;
-    selectedTripIds.clear();
-    render();
   });
 
   document.getElementById("categoryHighlightSelect").addEventListener("change", (e) => {
@@ -2315,6 +2397,8 @@ function renderTripsSection(){
   });
 
   wireSectionNav();
+  wireAccountMenu();
+  wireViewMenu();
   wireEvents(activeTrip);
   wireTabDragEvents();
   wireAttachments();
@@ -2328,12 +2412,8 @@ function renderWishlistPage(){
 
   root.innerHTML = `
     <div class="toolbar">
-      <span style="color:var(--muted);font-size:13px">${esc(session.user.email)}</span>
-      <button class="btn btn-ghost btn-sm" id="logoutBtn">Log out</button>
       <div class="spacer"></div>
-      <select id="skinSelect" class="btn-ghost btn-sm" title="Color theme">
-        ${SKINS.map(s => `<option value="${s.id}" ${s.id===currentSkin?"selected":""}>${esc(s.label)}</option>`).join("")}
-      </select>
+      ${renderAccountMenu()}
     </div>
 
     ${renderSectionNav()}
@@ -2342,13 +2422,7 @@ function renderWishlistPage(){
   `;
 
   wireSectionNav();
-  document.getElementById("logoutBtn").onclick = async () => { await supabase.auth.signOut(); };
-  document.getElementById("skinSelect").addEventListener("change", (e) => {
-    currentSkin = e.target.value;
-    localStorage.setItem(SKIN_KEY, currentSkin);
-    applySkin(currentSkin);
-  });
-
+  wireAccountMenu();
   wireWishlistBody();
 }
 
@@ -2803,17 +2877,6 @@ function wirePlanningSelection(trip){
 }
 
 function wireEvents(activeTrip){
-  document.getElementById("logoutBtn").onclick = async () => { await supabase.auth.signOut(); };
-
-  document.getElementById("moreActionsSelect").addEventListener("change", (e) => {
-    const action = e.target.value;
-    e.target.value = "";
-    if (action === "importLocal") importFromLocalStorage();
-    else if (action === "export") exportAllTrips();
-    else if (action === "importJson") document.getElementById("importFile").click();
-    else if (action === "bookmarklet"){ bookmarkletPanelOpen = true; render(); }
-  });
-
   document.getElementById("hideBookmarkletPanel")?.addEventListener("click", () => {
     bookmarkletPanelOpen = false;
     render();
