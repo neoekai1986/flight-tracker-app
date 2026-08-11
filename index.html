@@ -129,11 +129,16 @@
   .tab-folder{display:flex;flex-direction:column;gap:2px;border:1px dashed var(--line);
       border-radius:9px;padding:6px}
   .tab-folder.drag-over{border-color:var(--amber)}
+  .tab-folder-head{display:flex;align-items:center;gap:6px;padding:4px 6px;cursor:grab;
+      user-select:none;border-radius:6px}
+  .tab-folder-head:hover{background:var(--panel2)}
+  .tab-folder-caret{color:var(--muted);font-size:10px;flex-shrink:0;display:inline-block;
+      transition:transform .15s ease}
+  .tab-folder-caret.collapsed{transform:rotate(-90deg)}
   .tab-folder-label{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--muted);
-      padding:4px 6px;cursor:grab;user-select:none;white-space:nowrap;display:flex;
-      align-items:center;justify-content:space-between}
+      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
   .tab-folder-label:hover{color:var(--amber)}
-  .tab-folder-del{color:var(--muted);cursor:pointer;font-size:13px;padding:0 4px}
+  .tab-folder-del{color:var(--muted);cursor:pointer;font-size:13px;padding:0 4px;flex-shrink:0}
   .tab-folder-del:hover{color:var(--bad)}
   .tab-folder-tabs{display:flex;flex-direction:column;gap:2px;padding-left:6px}
   .tab-ungrouped{display:flex;flex-direction:column;gap:2px}
@@ -431,6 +436,12 @@ applySkin(currentSkin);
 
 const COLLAPSED_CAL_YEARS_KEY = "flight-tracker-collapsed-cal-years";
 let collapsedCalYears = new Set(JSON.parse(localStorage.getItem(COLLAPSED_CAL_YEARS_KEY) || "[]"));
+
+const COLLAPSED_FOLDERS_KEY = "flight-tracker-collapsed-folders";
+let collapsedFolders = new Set(JSON.parse(localStorage.getItem(COLLAPSED_FOLDERS_KEY) || "[]"));
+
+const CALENDAR_VISIBLE_KEY = "flight-tracker-calendar-visible";
+let calendarVisible = localStorage.getItem(CALENDAR_VISIBLE_KEY) === "1";
 
 let bulkSelectMode = false;
 let selectedTripIds = new Set();
@@ -1973,11 +1984,11 @@ function renderMetaForm(trip){
       <button type="button" class="btn-link daterange-btn" data-dr-btn
         data-dr-start="[data-m-start]" data-dr-end="[data-m-end]">📅 pick both dates on one calendar</button>
     </div>
-    <label class="field">Folder
+    <label class="field">Year
       <select data-m-folder>
-        <option value="">— No folder —</option>
+        <option value="">— No year —</option>
         ${folders.map(f => `<option value="${f.id}" ${f.id===trip.folder_id?"selected":""}>${esc(f.title)}</option>`).join("")}
-        <option value="__new__">+ New folder…</option>
+        <option value="__new__">+ New year…</option>
       </select>
     </label>
     <label class="field">Category
@@ -2052,7 +2063,7 @@ function renderStatsBar(){
   const optionsHTML = `
     <option value="all" ${statsFilter==="all"?"selected":""}>All trips</option>
     ${sortedFolders.map(f => `<option value="${f.id}" ${statsFilter===f.id?"selected":""}>${esc(f.title)}</option>`).join("")}
-    <option value="ungrouped" ${statsFilter==="ungrouped"?"selected":""}>Ungrouped</option>`;
+    <option value="ungrouped" ${statsFilter==="ungrouped"?"selected":""}>No year</option>`;
 
   const noneBucket = byCategory.get("none");
   const categoryOptionsHTML = `
@@ -2214,10 +2225,14 @@ function renderTabs(){
   const sortedFolders = [...folders].sort((a,b) => a.position - b.position);
   const folderHTML = sortedFolders.map(f => {
     const tripsInFolder = (byFolder.get(f.id) || []).sort((a,b) => a.position - b.position);
+    const collapsed = collapsedFolders.has(f.id);
     return `<div class="tab-folder" draggable="true" data-drag-folder="${f.id}" data-folder-drop="${f.id}">
-      <span class="tab-folder-label" data-folder-rename="${f.id}" title="Drag to reorder, click to rename">📁 ${esc(f.title)}</span>
-      <span class="tab-folder-del" data-folder-del="${f.id}" title="Delete folder">×</span>
-      <span class="tab-folder-tabs">${tripsInFolder.map(tabBtn).join("")}</span>
+      <div class="tab-folder-head" data-folder-toggle="${f.id}" title="Drag to reorder, click to expand/collapse">
+        <span class="tab-folder-caret${collapsed ? " collapsed" : ""}">▾</span>
+        <span class="tab-folder-label" data-folder-rename="${f.id}" title="Click to rename">${esc(f.title)}</span>
+        <span class="tab-folder-del" data-folder-del="${f.id}" title="Delete year">×</span>
+      </div>
+      ${collapsed ? "" : `<span class="tab-folder-tabs">${tripsInFolder.map(tabBtn).join("")}</span>`}
     </div>`;
   }).join("");
 
@@ -2227,8 +2242,8 @@ function renderTabs(){
     <div class="tabs">
       ${folderHTML}
       <div class="tab-ungrouped" data-folder-drop="">${sortedUngrouped.map(tabBtn).join("")}</div>
-      <button class="tab tab-new" id="newTripTab" title="New trip">+</button>
-      <button class="tab tab-new-folder" id="newFolderTab" title="New folder">+ folder</button>
+      <button class="tab tab-new" id="newTripTab" title="Add new trip">+ Add New Trip</button>
+      <button class="tab tab-new-folder" id="newFolderTab" title="Add new year">+ Add New Year</button>
     </div>`;
 }
 
@@ -2317,6 +2332,7 @@ function renderViewMenu(showImport){
     <details class="menu view-menu">
       <summary class="btn btn-ghost btn-sm">View ▾</summary>
       <div class="menu-panel">
+        <button type="button" id="toggleCalendarBtn">${calendarVisible ? "Hide calendar" : "Show calendar"}</button>
         <button type="button" id="toggleBulkSelectBtn">${bulkSelectMode ? "Done selecting" : "Select trips"}</button>
         <div class="menu-divider"></div>
         ${showImport ? `<button type="button" data-menu-action="importLocal">Import from this browser's saved data</button>` : ""}
@@ -2329,9 +2345,21 @@ function renderViewMenu(showImport){
 }
 
 function wireViewMenu(){
+  document.getElementById("toggleCalendarBtn").addEventListener("click", () => {
+    calendarVisible = !calendarVisible;
+    localStorage.setItem(CALENDAR_VISIBLE_KEY, calendarVisible ? "1" : "0");
+    render();
+  });
   document.getElementById("toggleBulkSelectBtn").addEventListener("click", () => {
     bulkSelectMode = !bulkSelectMode;
     selectedTripIds.clear();
+    // Trip selection happens via the calendar's trip chips, so make sure
+    // it's visible when entering select mode — otherwise there's nothing
+    // to click.
+    if (bulkSelectMode && !calendarVisible){
+      calendarVisible = true;
+      localStorage.setItem(CALENDAR_VISIBLE_KEY, "1");
+    }
     render();
   });
   document.querySelectorAll("[data-menu-action]").forEach(btn => {
@@ -2378,7 +2406,7 @@ function renderTripsSection(){
 
     ${renderCancelDeadlines()}
 
-    ${renderCalendarView()}
+    ${calendarVisible ? renderCalendarView() : ""}
 
     ${activeTrip ? renderTripPanel(activeTrip) :
       `<div class="empty-state">No trips yet. Click "+" to add your first one, or import saved data above.</div>`}
@@ -2962,17 +2990,27 @@ function wireEvents(activeTrip){
   };
 
   document.getElementById("newFolderTab").onclick = async () => {
-    const title = prompt("Folder name (e.g. Work trips):");
+    const title = prompt("Year name (e.g. 2026):");
     if (!title || !title.trim()) return;
     await createFolder(title.trim());
     await refresh();
   };
 
+  document.querySelectorAll("[data-folder-toggle]").forEach(el => {
+    el.addEventListener("click", () => {
+      const id = el.dataset.folderToggle;
+      if (collapsedFolders.has(id)) collapsedFolders.delete(id); else collapsedFolders.add(id);
+      localStorage.setItem(COLLAPSED_FOLDERS_KEY, JSON.stringify([...collapsedFolders]));
+      render();
+    });
+  });
+
   document.querySelectorAll("[data-folder-rename]").forEach(el => {
-    el.addEventListener("click", async () => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
       const id = el.dataset.folderRename;
       const folder = folders.find(f => f.id === id);
-      const title = prompt("Rename folder:", folder?.title || "");
+      const title = prompt("Rename year:", folder?.title || "");
       if (!title || !title.trim() || title.trim() === folder?.title) return;
       await renameFolder(id, title.trim());
       await refresh();
@@ -2980,10 +3018,11 @@ function wireEvents(activeTrip){
   });
 
   document.querySelectorAll("[data-folder-del]").forEach(el => {
-    el.addEventListener("click", async () => {
+    el.addEventListener("click", async (e) => {
+      e.stopPropagation();
       const id = el.dataset.folderDel;
       const folder = folders.find(f => f.id === id);
-      if (!confirm(`Delete folder "${folder?.title}"? Trips inside it are kept, just ungrouped.`)) return;
+      if (!confirm(`Delete year "${folder?.title}"? Trips inside it are kept, just ungrouped.`)) return;
       await deleteFolder(id);
       await refresh();
     });
@@ -3050,7 +3089,7 @@ function wireEvents(activeTrip){
       await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, attendees, notes });
       let folderSel = holder.querySelector(`[data-m-folder]`).value;
       if (folderSel === "__new__"){
-        const title = prompt("Folder name (e.g. Work trips):");
+        const title = prompt("Year name (e.g. 2026):");
         if (title && title.trim()){
           const f = await createFolder(title.trim());
           folderSel = f?.id || "";
