@@ -2219,8 +2219,14 @@ function renderTabs(){
       byFolder.get(t.folder_id).push(t);
     } else ungrouped.push(t);
   }
+  const tabLabel = t => {
+    const dateStr = t.travel_start || t.travel_end;
+    if (!dateStr) return esc(t.title);
+    const month = MONTH_ABBR[Number(dateStr.slice(5, 7)) - 1];
+    return `${month} - ${esc(t.title)}`;
+  };
   const tabBtn = t => `<button class="tab ${t.id===activeTripId?'active':''}"
-      draggable="true" data-drag-tab="${t.id}" data-tab="${t.id}">${esc(t.title)}</button>`;
+      draggable="true" data-drag-tab="${t.id}" data-tab="${t.id}">${tabLabel(t)}</button>`;
 
   const sortedFolders = [...folders].sort((a,b) => a.position - b.position);
   const folderHTML = sortedFolders.map(f => {
