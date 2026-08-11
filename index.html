@@ -83,6 +83,7 @@
   .card-menu summary{font-weight:600}
   .card-menu .menu-panel{min-width:180px}
   .sidebar-account .menu-panel{top:auto;bottom:calc(100% + 6px);left:0;right:0}
+  .search-trip-menu .menu-panel{left:0;right:auto;white-space:nowrap}
   .menu-email{padding:6px 10px 8px;font-size:12px;color:var(--muted);
       border-bottom:1px solid var(--line);margin-bottom:4px;word-break:break-all}
   .menu-label{display:flex;flex-direction:column;gap:3px;padding:6px 10px;font-size:11px;
@@ -1760,7 +1761,14 @@ function renderTripPanel(trip){
         <button class="btn btn-ghost btn-sm" data-edit-meta="${trip.id}">Trip details</button>
         <button class="btn btn-sm" data-add-flight-toggle="${trip.id}">+ Add flight</button>
         <button class="btn btn-sm" data-add-rental-toggle="${trip.id}">+ Add rental</button>
-        <button class="btn btn-ghost btn-sm" data-search-trip="${trip.id}">Search this trip →</button>
+        <details class="menu search-trip-menu">
+          <summary class="btn btn-ghost btn-sm">Search this trip ▾</summary>
+          <div class="menu-panel">
+            <button type="button" data-search-trip="${trip.id}" data-search-scope="all">Open all links</button>
+            <button type="button" data-search-trip="${trip.id}" data-search-scope="booked">Open booked only</button>
+            <button type="button" data-search-trip="${trip.id}" data-search-scope="watching">Open watching only</button>
+          </div>
+        </details>
         <button class="btn-link" data-del-trip="${trip.id}">delete trip</button>
       </div>
 
@@ -3140,9 +3148,13 @@ function wireEvents(activeTrip){
     await refresh();
   });
 
-  document.querySelector(`[data-search-trip="${activeTrip.id}"]`).addEventListener("click", () => {
-    (activeTrip.flights || []).forEach(f => f.url && window.open(f.url, "_blank"));
-    (activeTrip.rentals || []).forEach(r => r.url && window.open(r.url, "_blank"));
+  document.querySelectorAll(`[data-search-trip="${activeTrip.id}"]`).forEach(btn => {
+    btn.addEventListener("click", () => {
+      const scope = btn.dataset.searchScope; // "all" | "booked" | "watching"
+      const inScope = status => scope === "all" || status === scope;
+      (activeTrip.flights || []).forEach(f => inScope(f.status) && f.url && window.open(f.url, "_blank"));
+      (activeTrip.rentals || []).forEach(r => inScope(r.status) && r.url && window.open(r.url, "_blank"));
+    });
   });
 
   document.querySelector(`[data-edit-meta="${activeTrip.id}"]`).addEventListener("click", () => {
