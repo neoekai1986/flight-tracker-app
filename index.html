@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Fare Board</title>
+<title>Yes, Yes, with E-Kai You Travel</title>
+<link rel="icon" type="image/png" href="favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -35,8 +36,7 @@
   *{box-sizing:border-box;margin:0}
   body{background:var(--night);color:var(--ink);font-family:Inter,system-ui,sans-serif;margin:0}
   .brand-row{display:flex;align-items:center;gap:12px;margin:32px auto;max-width:1000px;padding:0 20px}
-  .brand-mark{color:var(--amber);flex-shrink:0;display:flex}
-  .brand-mark svg{width:30px;height:30px}
+  .brand-logo-lg{width:220px;max-width:60vw;height:auto;flex-shrink:0;display:block}
   .brand-text{display:flex;flex-direction:column;gap:2px;min-width:0}
 
   .app-shell{display:flex;align-items:stretch;min-height:100vh}
@@ -60,11 +60,8 @@
   }
   #root{flex:1;min-width:0;padding:32px 36px 64px;max-width:1000px}
   @media (max-width:640px){ #root{padding:20px 16px 48px} }
-  .brand-name{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:23px;
-      color:var(--ink);letter-spacing:.01em}
+  .brand-logo{width:170px;max-width:100%;height:auto;display:block}
   .sub{color:var(--muted);font-size:13px;line-height:1.4}
-
-  .toolbar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;align-items:center}
 
   .menu{position:relative}
   .menu > summary{list-style:none;cursor:pointer}
@@ -84,6 +81,11 @@
   .card-menu .menu-panel{min-width:180px}
   .sidebar-account .menu-panel{top:auto;bottom:calc(100% + 6px);left:0;right:0}
   .search-trip-menu .menu-panel{left:0;right:auto;white-space:nowrap}
+  .view-menu .menu-panel{left:0;right:auto;white-space:nowrap}
+  .hamburger-btn{display:flex;align-items:center;justify-content:center;width:34px;height:34px;
+      flex-shrink:0;border-radius:9px;border:1px solid var(--line);background:transparent;
+      color:var(--ink);font-size:16px;cursor:pointer}
+  .hamburger-btn:hover{border-color:var(--amber);color:var(--amber)}
   .menu-email{padding:6px 10px 8px;font-size:12px;color:var(--muted);
       border-bottom:1px solid var(--line);margin-bottom:4px;word-break:break-all}
   .menu-label{display:flex;flex-direction:column;gap:3px;padding:6px 10px;font-size:11px;
@@ -103,7 +105,6 @@
   .btn-sm{padding:6px 14px;font-size:12.5px}
   .btn-link{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12.5px;padding:2px 4px}
   .btn-link:hover{color:var(--bad)}
-  .spacer{flex:1}
   .err{color:var(--bad);font-size:13px;margin:6px 0}
   .msg{color:var(--good);font-size:13px;margin:6px 0}
 
@@ -399,13 +400,8 @@
 </head>
 <body>
   <div class="brand-row" id="loggedOutBrand">
-    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-      <path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1a1.5 1.5 0 0 0 0 3v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1a1.5 1.5 0 0 0 0-3z"/>
-      <line x1="15" y1="6.5" x2="15" y2="17.5" stroke-dasharray="2 2.5"/>
-    </svg></span>
+    <img src="logo.png" alt="Yes, Yes, with E-Kai You Travel" class="brand-logo-lg">
     <div class="brand-text">
-      <span class="brand-name">Fare Board</span>
       <span class="sub" id="subtext">Loading…</span>
     </div>
   </div>
@@ -2217,12 +2213,12 @@ function renderStatsBar(){
 // browsing session — no automation touches the airline page). It reads the
 // flight id we stashed in the URL fragment, grabs whatever price text you
 // highlighted (or falls back to a prompt), and hands off to this same
-// Fare Board tab via a "#logprice=id&price=value" fragment, where the app
+// original tab via a "#logprice=id&price=value" fragment, where the app
 // (already authenticated) does the actual insert. The bookmarklet itself
 // never touches Supabase or holds any credentials.
 function renderBookmarkletPanel(){
   const fareBoardUrl = location.origin + location.pathname;
-  const code = `javascript:(function(){var m=location.hash.match(/farelog=([^&]+)/);if(!m){alert('Open this page via a "Check price" link in Fare Board first.');return;}var id=m[1];var sel=(window.getSelection?window.getSelection().toString():'')||'';var pm=sel.match(/[\\d,]+\\.?\\d*/);var price=pm?pm[0].replace(/,/g,''):prompt('Price shown on this page?');if(!price)return;window.open(${JSON.stringify(fareBoardUrl)}+'#logprice='+id+'&price='+encodeURIComponent(price),'farelog');})();`;
+  const code = `javascript:(function(){var m=location.hash.match(/farelog=([^&]+)/);if(!m){alert('Open this page via a "Check price" link in Yes, Yes, with E-Kai You Travel first.');return;}var id=m[1];var sel=(window.getSelection?window.getSelection().toString():'')||'';var pm=sel.match(/[\\d,]+\\.?\\d*/);var price=pm?pm[0].replace(/,/g,''):prompt('Price shown on this page?');if(!price)return;window.open(${JSON.stringify(fareBoardUrl)}+'#logprice='+id+'&price='+encodeURIComponent(price),'farelog');})();`;
   return `
     <div class="watching-block" style="margin-bottom:20px">
       <b>Log price from your browser, one click</b>
@@ -2429,16 +2425,12 @@ function wireAccountMenu(){
 // and-drop wiring needs no changes), and the account menu pinned at the
 // bottom. Rendered into #sidebar, a sibling of #root, by both
 // renderTripsSection() and renderWishlistPage().
-function renderSidebar(){
+function renderSidebar(showImport){
   const isTrips = activeSection === "trips";
   return `
     <div class="sidebar-brand">
-      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 8a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v1a1.5 1.5 0 0 0 0 3v1a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-1a1.5 1.5 0 0 0 0-3z"/>
-        <line x1="15" y1="6.5" x2="15" y2="17.5" stroke-dasharray="2 2.5"/>
-      </svg></span>
-      <span class="brand-name" style="font-size:18px">Fare Board</span>
+      ${isTrips ? renderViewMenu(showImport) : ""}
+      <img src="logo.png" alt="Yes, Yes, with E-Kai You Travel" class="brand-logo">
     </div>
     <nav class="sidebar-nav">
       <button class="sidebar-nav-item ${isTrips ? "active" : ""}" data-section="trips">✈️ Trip Planner</button>
@@ -2457,7 +2449,7 @@ function renderSidebar(){
 function renderViewMenu(showImport){
   return `
     <details class="menu view-menu">
-      <summary class="btn btn-ghost btn-sm">View ▾</summary>
+      <summary class="hamburger-btn" title="Menu" aria-label="Menu">☰</summary>
       <div class="menu-panel">
         <button type="button" id="toggleCalendarBtn">${calendarVisible ? "Hide calendar" : "Show calendar"}</button>
         <button type="button" id="toggleBulkSelectBtn">${bulkSelectMode ? "Done selecting" : "Select trips"}</button>
@@ -2519,14 +2511,9 @@ function renderTripsSection(){
   const showImport = !!localStorage.getItem(OLD_LOCAL_KEY) && !localStorage.getItem(MIGRATED_FLAG);
 
   document.getElementById("loggedOutBrand").style.display = "none";
-  document.getElementById("sidebar").innerHTML = renderSidebar();
+  document.getElementById("sidebar").innerHTML = renderSidebar(showImport);
 
   root.innerHTML = `
-    <div class="toolbar">
-      <div class="spacer"></div>
-      ${renderViewMenu(showImport)}
-    </div>
-
     ${bookmarkletPanelOpen ? renderBookmarkletPanel() : ""}
 
     ${renderStatsBar()}
