@@ -178,16 +178,21 @@
   .lane-label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:500;
       color:var(--muted);font-family:Inter,system-ui,sans-serif}
 
+  .summary-title{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:19px;
+      color:var(--ink);margin:0 0 12px;letter-spacing:.01em}
   .stats-bar{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
   .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;
       padding:10px 16px;min-width:120px}
   .stat-label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
       color:var(--muted);margin-bottom:3px}
   .stat-val{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:var(--ink)}
+  .stat-points{display:flex;flex-direction:column;gap:1px;margin-top:3px;
+      font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--muted)}
   .stat.stat-total{background:var(--amber);border-color:var(--amber);
       box-shadow:0 4px 16px color-mix(in srgb, var(--amber) 30%, transparent)}
   .stat.stat-total .stat-label{color:color-mix(in srgb, var(--btn-ink) 75%, transparent)}
   .stat.stat-total .stat-val{color:var(--btn-ink);font-size:24px;font-weight:700}
+  .stat.stat-total .stat-points{color:color-mix(in srgb, var(--btn-ink) 75%, transparent)}
   .stat.stat-filter{display:flex;align-items:center;gap:8px}
 
   .cancel-list{display:flex;flex-direction:column;gap:6px;margin-bottom:20px}
@@ -492,10 +497,25 @@ const fmtPoints = n => `${Number(n).toLocaleString()} pts`;
 const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
+// "22,000 pts" or, when a loyalty program is set, "22,000 pts (Southwest)".
+const pointsText = (n, program) => fmtPoints(n) + (program ? ` (${esc(program)})` : "");
+
+// Shared accumulator for aggregating points across multiple flights/rentals
+// by loyalty program — used anywhere points from more than one record get
+// summed together (stats bar, trip total). Un-set programs bucket under "".
+function addPoints(map, program, amount){
+  if (!amount) return;
+  const key = program || "";
+  map.set(key, (map.get(key) || 0) + amount);
+}
+function sortedPointsEntries(map){
+  return [...map.entries()].filter(([, pts]) => pts).sort((a, b) => b[1] - a[1]);
+}
+
 function paidText(f){
   const parts = [];
   if (f.paid_cash != null) parts.push(fmtCash(f.paid_cash, f.currency));
-  if (f.paid_points != null) parts.push(fmtPoints(f.paid_points));
+  if (f.paid_points != null) parts.push(pointsText(f.paid_points, f.points_program));
   return parts.length ? parts.join(" + ") : "—";
 }
 
@@ -504,7 +524,7 @@ function flightTotalText(f){
   const n = f.passengers || 1;
   const parts = [];
   if (f.paid_cash != null) parts.push(fmtCash(f.paid_cash * n, f.currency));
-  if (f.paid_points != null) parts.push(fmtPoints(f.paid_points * n));
+  if (f.paid_points != null) parts.push(pointsText(f.paid_points * n, f.points_program));
   return parts.length ? parts.join(" + ") : "—";
 }
 
@@ -1117,6 +1137,7 @@ async function createFlight(tripId, fields){
     depart_date: fields.departDate || null, depart_time: fields.departTime || null,
     return_date: fields.returnDate || null, return_time: fields.returnTime || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
+    points_program: fields.pointsProgram || null,
     passengers: fields.passengers || 1,
     flight_number: fields.flightNumber || null, confirmation_code: fields.confirmationCode || null,
     alert_below: fields.alertBelow, notes: fields.notes, position
@@ -1130,6 +1151,7 @@ async function createRental(tripId, fields){
   const { error } = await supabase.from("rentals").insert({
     trip_id: tripId, kind: fields.kind || "housing", label: fields.label, url: fields.url || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
+    points_program: fields.pointsProgram || null,
     rental_start: fields.rentalStart || null, rental_end: fields.rentalEnd || null,
     cancel_by: fields.cancelBy || null, confirmation_code: fields.confirmationCode || null,
     splits: fields.splits || [], notes: fields.notes || null, position
@@ -1273,6 +1295,7 @@ async function bulkCreateTrips(tripBlobs){
         return_date: f.return_date || null, return_time: f.return_time || null,
         paid_cash: f.paidCash ?? f.paid_cash ?? null,
         paid_points: f.paidPoints ?? f.paid_points ?? null,
+        points_program: f.pointsProgram ?? f.points_program ?? null,
         passengers: f.passengers || 1,
         alert_below: f.alertBelow ?? f.alert_below ?? null,
         notes: f.notes || null, position: byLeg[legKey]
@@ -1289,6 +1312,7 @@ async function bulkCreateTrips(tripBlobs){
         url: r.url || null, currency: r.currency || "USD",
         paid_cash: r.paidCash ?? r.paid_cash ?? null,
         paid_points: r.paidPoints ?? r.paid_points ?? null,
+        points_program: r.pointsProgram ?? r.points_program ?? null,
         rental_start: r.rental_start || null, rental_end: r.rental_end || null,
         cancel_by: r.cancel_by || null, confirmation_code: r.confirmation_code || null,
         splits: r.splits || [], notes: r.notes || null, position: rentalPos
@@ -1311,13 +1335,13 @@ function exportAllTrips(){
       origin: f.origin, destination: f.destination,
       depart_date: f.depart_date, depart_time: f.depart_time,
       return_date: f.return_date, return_time: f.return_time,
-      paidCash: f.paid_cash, paidPoints: f.paid_points, passengers: f.passengers,
+      paidCash: f.paid_cash, paidPoints: f.paid_points, pointsProgram: f.points_program, passengers: f.passengers,
       alertBelow: f.alert_below,
       notes: f.notes, priceLog: (f.price_logs||[]).map(l => ({date: l.date, price: l.price}))
     })),
     rentals: (t.rentals||[]).map(r => ({
       kind: r.kind, label: r.label, url: r.url, currency: r.currency,
-      paidCash: r.paid_cash, paidPoints: r.paid_points,
+      paidCash: r.paid_cash, paidPoints: r.paid_points, pointsProgram: r.points_program,
       rental_start: r.rental_start, rental_end: r.rental_end,
       cancel_by: r.cancel_by, confirmation_code: r.confirmation_code,
       splits: r.splits, notes: r.notes
@@ -1574,6 +1598,9 @@ function renderEditForm(f){
     <label class="field">Paid (points, per passenger)
       <input type="number" step="1" data-f-paidpoints placeholder="e.g. 22000">
     </label>
+    <label class="field">Points program
+      <input type="text" data-f-pointsprogram placeholder="e.g. Southwest">
+    </label>
     <label class="field">Alert below (cash)
       <input type="number" step="0.01" data-f-alert placeholder="optional">
     </label>
@@ -1646,6 +1673,9 @@ function addFlightFormHTML(tripId, trip){
     <label class="field">Paid (points, per passenger)
       <input type="number" step="1" data-nf-paidpoints placeholder="optional">
     </label>
+    <label class="field">Points program
+      <input type="text" data-nf-pointsprogram placeholder="e.g. Southwest">
+    </label>
     <label class="field">Alert below (cash)
       <input type="number" step="0.01" data-nf-alert placeholder="optional">
     </label>
@@ -1704,11 +1734,12 @@ function renderTripPanel(trip){
 
   const totalCash = bookedFlights.reduce((s,f) => s + (f.paid_cash || 0) * (f.passengers || 1), 0)
     + bookedRentals.reduce((s,r) => s + (rentalOurPortion(r) || 0), 0);
-  const totalPoints = bookedFlights.reduce((s,f) => s + (f.paid_points || 0) * (f.passengers || 1), 0)
-    + bookedRentals.reduce((s,r) => s + (r.paid_points || 0), 0);
+  const totalPointsByProgram = new Map();
+  for (const f of bookedFlights) addPoints(totalPointsByProgram, f.points_program, (f.paid_points || 0) * (f.passengers || 1));
+  for (const r of bookedRentals) addPoints(totalPointsByProgram, r.points_program, r.paid_points || 0);
   const totalParts = [];
   if (totalCash) totalParts.push(fmtCash(totalCash));
-  if (totalPoints) totalParts.push(fmtPoints(totalPoints));
+  for (const [program, pts] of sortedPointsEntries(totalPointsByProgram)) totalParts.push(pointsText(pts, program));
 
   const bookedHousing = bookedRentals.filter(r => r.kind !== "car");
   const bookedCars = bookedRentals.filter(r => r.kind === "car");
@@ -2033,6 +2064,9 @@ function rentalFormHTML(prefix, idAttr, defaults){
     <label class="field">Paid (points)
       <input type="number" step="1" data-${p}-paidpoints placeholder="optional">
     </label>
+    <label class="field">Points program
+      <input type="text" data-${p}-pointsprogram placeholder="e.g. Hilton Honors">
+    </label>
     <label class="field span2">Notes
       <textarea data-${p}-notes placeholder="optional"></textarea>
     </label>
@@ -2104,36 +2138,49 @@ function scopedTrips(){
 function renderStatsBar(){
   const scoped = scopedTrips();
 
-  let totalDays = 0, flightCash = 0, flightPoints = 0, rentalCash = 0, rentalPoints = 0;
-  const byCategory = new Map(); // category id (or "none") -> {cash, points}
+  let totalDays = 0, flightCash = 0, rentalCash = 0;
+  const flightPointsByProgram = new Map(), rentalPointsByProgram = new Map();
+  const byCategory = new Map(); // category id (or "none") -> {cash, pointsByProgram}
   for (const t of scoped){
     totalDays += tripDayCount(t);
     const catKey = t.category_id || "none";
-    if (!byCategory.has(catKey)) byCategory.set(catKey, { cash: 0, points: 0 });
+    if (!byCategory.has(catKey)) byCategory.set(catKey, { cash: 0, pointsByProgram: new Map() });
     const catBucket = byCategory.get(catKey);
     for (const f of (t.flights || [])){
       if (f.status === "watching") continue; // still comparing options — excluded from cost totals
       const n = f.passengers || 1;
       const cash = (f.paid_cash || 0) * n, points = (f.paid_points || 0) * n;
-      flightCash += cash; flightPoints += points;
-      catBucket.cash += cash; catBucket.points += points;
+      flightCash += cash; catBucket.cash += cash;
+      addPoints(flightPointsByProgram, f.points_program, points);
+      addPoints(catBucket.pointsByProgram, f.points_program, points);
     }
     for (const r of (t.rentals || [])){
       if (r.status === "watching") continue;
       const cash = rentalOurPortion(r) || 0, points = r.paid_points || 0;
-      rentalCash += cash; rentalPoints += points;
-      catBucket.cash += cash; catBucket.points += points;
+      rentalCash += cash; catBucket.cash += cash;
+      addPoints(rentalPointsByProgram, r.points_program, points);
+      addPoints(catBucket.pointsByProgram, r.points_program, points);
     }
   }
-  const costText = (cash, points) => {
-    const parts = [];
-    if (cash) parts.push(fmtCash(cash));
-    if (points) parts.push(fmtPoints(points));
-    return parts.length ? parts.join(" + ") : "—";
+  const totalPointsByProgram = new Map();
+  for (const [program, pts] of flightPointsByProgram) addPoints(totalPointsByProgram, program, pts);
+  for (const [program, pts] of rentalPointsByProgram) addPoints(totalPointsByProgram, program, pts);
+
+  // Cash on its own line, then each loyalty program's points stacked below
+  // it — narrow stat cards read worse as one long comma-separated line.
+  const costBlockHTML = (cash, pointsByProgram) => {
+    const entries = sortedPointsEntries(pointsByProgram);
+    if (!cash && !entries.length) return `<span class="stat-val">—</span>`;
+    const cashHTML = cash ? `<span class="stat-val">${fmtCash(cash)}</span>` : "";
+    const pointsHTML = entries.length
+      ? `<div class="stat-points">${entries.map(([program, pts]) =>
+          `<span>${fmtPoints(pts)}${program ? ` &middot; ${esc(program)}` : ""}</span>`).join("")}</div>`
+      : "";
+    return cashHTML + pointsHTML;
   };
 
   const sortedFolders = [...folders].sort((a,b) => a.position - b.position);
-  const optionsHTML = `
+  const yearOptionsHTML = `
     <option value="all" ${statsFilter==="all"?"selected":""}>All trips</option>
     ${sortedFolders.map(f => `<option value="${f.id}" ${statsFilter===f.id?"selected":""}>${esc(f.title)}</option>`).join("")}
     <option value="ungrouped" ${statsFilter==="ungrouped"?"selected":""}>No year</option>`;
@@ -2147,19 +2194,20 @@ function renderStatsBar(){
   const selectedCatBucket = highlightCategoryId ? byCategory.get(highlightCategoryId) : null;
 
   return `
+    <h2 class="summary-title">Yearly Summaries</h2>
     <div class="stats-bar">
+      <div class="stat stat-filter">
+        <span class="stat-label">Year</span>
+        <select id="statsFilterSelect">${yearOptionsHTML}</select>
+      </div>
       <div class="stat"><span class="stat-label">Trip days</span><span class="stat-val">${totalDays}</span></div>
-      <div class="stat"><span class="stat-label">Flights</span><span class="stat-val">${costText(flightCash, flightPoints)}</span></div>
-      <div class="stat"><span class="stat-label">Rentals</span><span class="stat-val">${costText(rentalCash, rentalPoints)}</span></div>
-      <div class="stat stat-total"><span class="stat-label">Total cost</span><span class="stat-val">${costText(flightCash+rentalCash, flightPoints+rentalPoints)}</span></div>
+      <div class="stat"><span class="stat-label">Flights</span>${costBlockHTML(flightCash, flightPointsByProgram)}</div>
+      <div class="stat"><span class="stat-label">Rentals</span>${costBlockHTML(rentalCash, rentalPointsByProgram)}</div>
+      <div class="stat stat-total"><span class="stat-label">Total cost</span>${costBlockHTML(flightCash+rentalCash, totalPointsByProgram)}</div>
       <div class="stat stat-filter">
         <span class="stat-label">Category</span>
         <select id="categoryHighlightSelect">${categoryOptionsHTML}</select>
-        ${selectedCatBucket ? `<span class="stat-val">${costText(selectedCatBucket.cash, selectedCatBucket.points)}</span>` : ""}
-      </div>
-      <div class="stat stat-filter">
-        <span class="stat-label">Showing</span>
-        <select id="statsFilterSelect">${optionsHTML}</select>
+        ${selectedCatBucket ? costBlockHTML(selectedCatBucket.cash, selectedCatBucket.pointsByProgram) : ""}
       </div>
     </div>`;
 }
@@ -3241,6 +3289,7 @@ function wireEvents(activeTrip){
         confirmationCode: holder.querySelector("[data-nr-confirmation]").value.trim() || null,
         paidCash: pc === "" ? null : parseFloat(pc),
         paidPoints: pp === "" ? null : parseFloat(pp),
+        pointsProgram: holder.querySelector("[data-nr-pointsprogram]").value.trim() || null,
         splits: gatherSplits(holder, "nr"),
         notes: holder.querySelector("[data-nr-notes]").value.trim(),
       });
@@ -3267,6 +3316,7 @@ function wireEvents(activeTrip){
       form.querySelector("[data-er-confirmation]").value = rental.confirmation_code || "";
       form.querySelector("[data-er-paidcash]").value = rental.paid_cash ?? "";
       form.querySelector("[data-er-paidpoints]").value = rental.paid_points ?? "";
+      form.querySelector("[data-er-pointsprogram]").value = rental.points_program || "";
       form.querySelector("[data-er-notes]").value = rental.notes || "";
       fillSplitRows(form, "er", rental.splits);
       form.querySelector("[data-er-cancel]").addEventListener("click", render);
@@ -3284,6 +3334,7 @@ function wireEvents(activeTrip){
           confirmation_code: form.querySelector("[data-er-confirmation]").value.trim() || null,
           paid_cash: pc === "" ? null : parseFloat(pc),
           paid_points: pp === "" ? null : parseFloat(pp),
+          points_program: form.querySelector("[data-er-pointsprogram]").value.trim() || null,
           splits: gatherSplits(form, "er"),
           notes: form.querySelector("[data-er-notes]").value.trim() || null,
         };
@@ -3330,6 +3381,7 @@ function wireEvents(activeTrip){
       form.querySelector("[data-f-confirmation]").value = flight.confirmation_code || "";
       form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
       form.querySelector("[data-f-paidpoints]").value = flight.paid_points ?? "";
+      form.querySelector("[data-f-pointsprogram]").value = flight.points_program || "";
       form.querySelector("[data-f-alert]").value = flight.alert_below ?? "";
       form.querySelector("[data-f-notes]").value = flight.notes || "";
       // Only keep auto-regenerating if the current label matches what we'd generate.
@@ -3369,6 +3421,7 @@ function wireEvents(activeTrip){
           return_date: returnDate, return_time: returnTime,
           paid_cash: paidCash,
           paid_points: paidPoints,
+          points_program: form.querySelector("[data-f-pointsprogram]").value.trim() || null,
           passengers,
           flight_number: form.querySelector("[data-f-flightnumber]").value.trim() || null,
           confirmation_code: form.querySelector("[data-f-confirmation]").value.trim() || null,
@@ -3480,7 +3533,9 @@ function wireAddFlightForm(tripId){
     const notes = holder.querySelector("[data-nf-notes]").value.trim();
     await createFlight(tripId, {
       label, leg, url: url || null, currency, origin, destination, departDate, departTime,
-      returnDate, returnTime, paidCash, paidPoints, passengers,
+      returnDate, returnTime, paidCash, paidPoints,
+      pointsProgram: holder.querySelector("[data-nf-pointsprogram]").value.trim() || null,
+      passengers,
       flightNumber: holder.querySelector("[data-nf-flightnumber]").value.trim() || null,
       confirmationCode: holder.querySelector("[data-nf-confirmation]").value.trim() || null,
       alertBelow: ab === "" ? null : parseFloat(ab),

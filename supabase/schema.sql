@@ -69,6 +69,7 @@ create table public.flights (
   currency    text not null default 'USD',
   paid_cash   numeric,
   paid_points numeric,
+  points_program text,  -- loyalty program the points came from, e.g. "Southwest", "Hilton Honors" — free text, no fixed list
   passengers  integer not null default 1 check (passengers >= 1),
   flight_number     text,
   confirmation_code text,
@@ -90,6 +91,7 @@ create table public.rentals (
   currency     text not null default 'USD',
   paid_cash    numeric,
   paid_points  numeric,
+  points_program text,  -- same as flights.points_program
   rental_start date,
   rental_end   date,
   cancel_by    date,
