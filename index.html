@@ -91,12 +91,15 @@
   .avatar-circle{width:30px;height:30px;border-radius:50%;background:var(--panel2);
       border:1px solid var(--line);color:var(--amber);display:flex;align-items:center;
       justify-content:center;font-size:13px;font-weight:600;font-family:'IBM Plex Mono',monospace}
-  .btn{display:inline-block;background:var(--amber);color:var(--btn-ink);font-weight:600;
-       text-decoration:none;padding:9px 16px;border-radius:9px;font-size:14px;border:none;cursor:pointer}
-  .btn:hover{opacity:.9}
-  .btn-ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
-  .btn-ghost:hover{border-color:var(--amber);color:var(--amber)}
-  .btn-sm{padding:5px 10px;font-size:12.5px}
+  .btn{display:inline-block;background:var(--amber);color:var(--btn-ink);font-weight:700;
+       text-decoration:none;padding:10px 20px;border-radius:999px;font-size:14px;border:none;
+       cursor:pointer;box-shadow:0 2px 10px color-mix(in srgb, var(--amber) 35%, transparent);
+       transition:transform .12s ease,box-shadow .12s ease,opacity .12s ease}
+  .btn:hover{transform:translateY(-1px);box-shadow:0 4px 14px color-mix(in srgb, var(--amber) 45%, transparent)}
+  .btn:active{transform:translateY(0)}
+  .btn-ghost{background:transparent;border:1px solid var(--line);color:var(--ink);box-shadow:none}
+  .btn-ghost:hover{border-color:var(--amber);color:var(--amber);box-shadow:none}
+  .btn-sm{padding:6px 14px;font-size:12.5px}
   .btn-link{background:none;border:none;color:var(--muted);cursor:pointer;font-size:12.5px;padding:2px 4px}
   .btn-link:hover{color:var(--bad)}
   .spacer{flex:1}
@@ -143,9 +146,9 @@
       background:var(--night);border:1px solid var(--amber);color:var(--ink);
       padding:4px 8px;border-radius:9px;flex:1;min-width:120px}
 
-  .totals{font-family:'IBM Plex Mono',monospace;font-size:15px;color:var(--amber);
+  .totals{font-family:'IBM Plex Mono',monospace;font-size:19px;font-weight:600;color:var(--amber);
       background:var(--night);border:1px solid var(--line);border-radius:12px;
-      padding:10px 14px;margin:12px 0 16px}
+      padding:12px 16px;margin:12px 0 16px;box-shadow:inset 5px 0 0 0 var(--amber)}
 
   .watch-badge{font-size:11px;color:var(--amber);border:1px solid var(--amber);border-radius:20px;
       padding:2px 8px;white-space:nowrap}
@@ -174,8 +177,11 @@
       padding:10px 16px;min-width:120px}
   .stat-label{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;
       color:var(--muted);margin-bottom:3px}
-  .stat-val{font-family:'IBM Plex Mono',monospace;font-size:16px;color:var(--ink)}
-  .stat.stat-total .stat-val{color:var(--amber)}
+  .stat-val{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:600;color:var(--ink)}
+  .stat.stat-total{background:var(--amber);border-color:var(--amber);
+      box-shadow:0 4px 16px color-mix(in srgb, var(--amber) 30%, transparent)}
+  .stat.stat-total .stat-label{color:color-mix(in srgb, var(--btn-ink) 75%, transparent)}
+  .stat.stat-total .stat-val{color:var(--btn-ink);font-size:24px;font-weight:700}
   .stat.stat-filter{display:flex;align-items:center;gap:8px}
 
   .cancel-list{display:flex;flex-direction:column;gap:6px;margin-bottom:20px}
@@ -1676,8 +1682,8 @@ function renderTripPanel(trip){
         <h2 data-title="${trip.id}">${esc(trip.title)}</h2>
         <button class="btn btn-ghost btn-sm" data-rename-trip="${trip.id}">Rename</button>
         <button class="btn btn-ghost btn-sm" data-edit-meta="${trip.id}">Trip details</button>
-        <button class="btn btn-ghost btn-sm" data-add-flight-toggle="${trip.id}">+ Add flight</button>
-        <button class="btn btn-ghost btn-sm" data-add-rental-toggle="${trip.id}">+ Add rental</button>
+        <button class="btn btn-sm" data-add-flight-toggle="${trip.id}">+ Add flight</button>
+        <button class="btn btn-sm" data-add-rental-toggle="${trip.id}">+ Add rental</button>
         <button class="btn btn-ghost btn-sm" data-search-trip="${trip.id}">Search this trip →</button>
         <button class="btn-link" data-del-trip="${trip.id}">delete trip</button>
       </div>
