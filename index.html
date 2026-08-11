@@ -373,6 +373,19 @@
   .section-head::after{content:"";flex:1;border-top:1px solid var(--line)}
   .up{color:var(--bad)} .down{color:var(--good)} .flat{color:var(--muted)}
   .empty-hist{color:var(--muted);font-size:12.5px;margin-top:8px}
+  .hist-more{color:var(--muted);font-size:11.5px;margin:4px 2px 0}
+
+  .price-trend{margin-top:10px}
+  .price-trend-head{display:flex;justify-content:space-between;align-items:baseline;
+      font-size:11.5px;margin-bottom:2px}
+  .price-trend-label{color:var(--muted);letter-spacing:.08em;text-transform:uppercase;font-size:10.5px}
+  .price-trend-svg{width:100%;height:52px;display:block;overflow:visible}
+  .price-trend-line{fill:none;stroke:var(--amber);stroke-width:2;
+      stroke-linejoin:round;stroke-linecap:round}
+  .price-trend-dot{fill:var(--amber)}
+  .price-trend-paid-line{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
+  .price-trend-axis{display:flex;justify-content:space-between;color:var(--muted);
+      font-size:10.5px;font-family:'IBM Plex Mono',monospace;margin-top:2px}
   .empty-state{background:var(--panel);border:1px dashed var(--line);border-radius:14px;
       padding:28px 20px;text-align:center;color:var(--muted)}
   .new-form{display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap}
@@ -1364,6 +1377,54 @@ function checkPriceUrl(f){
   return `${f.url}#farelog=${f.id}`;
 }
 
+// Inline SVG sparkline of logged prices over time, x-scaled to the actual
+// dates entered (not just entry index) so a cluster of same-week checks
+// reads differently from checks spread over months. Needs 2+ entries to
+// draw a trend; a single data point has nothing to trend against.
+function renderPriceTrendChart(entries, paidCash, cur){
+  if (entries.length < 2) return "";
+  const toTs = e => { const [y,m,d] = e.date.split("-").map(Number); return new Date(y, m-1, d).getTime(); };
+  const sorted = [...entries].sort((a,b) => toTs(a) - toTs(b));
+  const first = sorted[0], last = sorted[sorted.length - 1];
+
+  const W = 300, H = 60, padX = 6, padTop = 8, padBottom = 16;
+  const xMin = toTs(first), xMax = toTs(last);
+  const prices = sorted.map(e => e.price);
+  let yMin = Math.min(...prices), yMax = Math.max(...prices);
+  if (paidCash != null){ yMin = Math.min(yMin, paidCash); yMax = Math.max(yMax, paidCash); }
+  if (yMin === yMax){ yMin -= 1; yMax += 1; } // flat line — pad so it's not degenerate
+
+  const xAt = (e, i) => padX + (xMax > xMin
+    ? (toTs(e) - xMin) / (xMax - xMin)
+    : (sorted.length > 1 ? i / (sorted.length - 1) : 0)) * (W - padX * 2);
+  const yAt = price => padTop + (1 - (price - yMin) / (yMax - yMin)) * (H - padTop - padBottom);
+
+  const pts = sorted.map((e, i) => ({ x: xAt(e, i), y: yAt(e.price) }));
+  const polyPoints = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const circles = pts.map(p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5" class="price-trend-dot"/>`).join("");
+  const paidLine = paidCash != null
+    ? `<line x1="${padX}" y1="${yAt(paidCash).toFixed(1)}" x2="${W-padX}" y2="${yAt(paidCash).toFixed(1)}" class="price-trend-paid-line"/>`
+    : "";
+
+  const delta = last.price - first.price;
+  const deltaCls = delta === 0 ? "flat" : (delta < 0 ? "down" : "up");
+  const deltaTxt = delta === 0 ? "flat" : `${delta < 0 ? "▼" : "▲"} ${fmtCash(Math.abs(delta), cur)}`;
+
+  return `
+    <div class="price-trend">
+      <div class="price-trend-head">
+        <span class="price-trend-label">Price trend</span>
+        <span class="${deltaCls}">${deltaTxt} since ${fmtShortDate(first.date)}</span>
+      </div>
+      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="price-trend-svg">
+        ${paidLine}
+        <polyline points="${polyPoints}" class="price-trend-line"/>
+        ${circles}
+      </svg>
+      <div class="price-trend-axis"><span>${fmtShortDate(first.date)}</span><span>${fmtShortDate(last.date)}</span></div>
+    </div>`;
+}
+
 function renderCard(trip, f){
   const cur = f.currency || "USD";
   const moveOptions = trips.filter(t => t.id !== trip.id)
@@ -1385,7 +1446,8 @@ function renderCard(trip, f){
   if (!entries.length){
     histHTML = `<p class="empty-hist">No checks logged yet.</p>`;
   } else {
-    const rows = entries.map((e) => {
+    const recent = entries.slice(0, 3); // entries are already newest-first
+    const rows = recent.map((e) => {
       let deltaHTML = '<span class="flat">·</span>';
       if (f.paid_cash != null){
         const d = e.price - f.paid_cash;
@@ -1405,10 +1467,13 @@ function renderCard(trip, f){
         </td>
       </tr>`;
     }).join("");
-    histHTML = `<table class="hist">
-      <tr><th>Date</th><th>Price seen</th><th>vs. paid</th><th></th><th></th></tr>
-      ${rows}
-    </table>`;
+    histHTML = `
+      ${renderPriceTrendChart(entries, f.paid_cash, cur)}
+      <table class="hist">
+        <tr><th>Date</th><th>Price seen</th><th>vs. paid</th><th></th><th></th></tr>
+        ${rows}
+      </table>
+      ${entries.length > 3 ? `<p class="hist-more">+${entries.length - 3} earlier check${entries.length - 3 > 1 ? "s" : ""} logged</p>` : ""}`;
   }
 
   return `
