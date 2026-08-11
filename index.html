@@ -3152,8 +3152,11 @@ function wireEvents(activeTrip){
     btn.addEventListener("click", () => {
       const scope = btn.dataset.searchScope; // "all" | "booked" | "watching"
       const inScope = status => scope === "all" || status === scope;
-      (activeTrip.flights || []).forEach(f => inScope(f.status) && f.url && window.open(f.url, "_blank"));
-      (activeTrip.rentals || []).forEach(r => inScope(r.status) && r.url && window.open(r.url, "_blank"));
+      // Each window.open() needs a distinct target name — reusing "_blank"
+      // for every call makes browsers navigate the same tab instead of
+      // opening one per link, so only the last URL ever ends up visible.
+      (activeTrip.flights || []).forEach(f => inScope(f.status) && f.url && window.open(f.url, `farecheck_${f.id}`));
+      (activeTrip.rentals || []).forEach(r => inScope(r.status) && r.url && window.open(r.url, `farecheck_${r.id}`));
     });
   });
 
