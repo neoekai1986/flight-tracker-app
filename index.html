@@ -57,6 +57,10 @@
   .menu-panel button{background:transparent;border:none;color:var(--ink);
       padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit}
   .menu-panel button:hover{background:var(--panel2)}
+  .menu-panel button.menu-danger{color:var(--muted)}
+  .menu-panel button.menu-danger:hover{background:transparent;color:var(--bad)}
+  .card-menu summary{font-weight:600}
+  .card-menu .menu-panel{min-width:180px}
   .menu-email{padding:6px 10px 8px;font-size:12px;color:var(--muted);
       border-bottom:1px solid var(--line);margin-bottom:4px;word-break:break-all}
   .menu-label{display:flex;flex-direction:column;gap:3px;padding:6px 10px;font-size:11px;
@@ -1377,14 +1381,23 @@ function renderCard(trip, f){
     ${renderAttachmentsRow("flight", f.id, f.attachments)}
     <div class="row">
       ${f.url ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener">Check price →</a>` : ""}
-      <button class="btn btn-ghost btn-sm" data-edit-flight="${f.id}">Edit</button>
-      <button class="btn-ghost btn-sm" data-toggle-flight-status="${f.id}" data-next-status="${f.status === "watching" ? "booked" : "watching"}">
-        ${f.status === "watching" ? "Mark booked" : "Mark watching"}</button>
-      <button class="btn-link" data-del-flight="${f.id}">delete flight</button>
-      ${moveOptions ? `<select data-move-flight="${f.id}" title="Move to trip">
-        <option value="">Move to…</option>
-        ${moveOptions}
-      </select>` : ""}
+      <details class="menu card-menu">
+        <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
+        <div class="menu-panel">
+          <button type="button" data-edit-flight="${f.id}">Edit</button>
+          <button type="button" data-toggle-flight-status="${f.id}" data-next-status="${f.status === "watching" ? "booked" : "watching"}">
+            ${f.status === "watching" ? "Mark booked" : "Mark watching"}</button>
+          ${moveOptions ? `<div class="menu-divider"></div>
+            <label class="menu-label">Move to trip
+              <select data-move-flight="${f.id}">
+                <option value="">Choose trip…</option>
+                ${moveOptions}
+              </select>
+            </label>` : ""}
+          <div class="menu-divider"></div>
+          <button type="button" class="menu-danger" data-del-flight="${f.id}">Delete flight</button>
+        </div>
+      </details>
     </div>
     <div class="log-form">
       <input type="number" step="0.01" placeholder="Price seen" data-log-input="${f.id}">
@@ -1852,10 +1865,16 @@ function renderRentalCard(trip, r){
     ${renderAttachmentsRow("rental", r.id, r.attachments)}
     <div class="row" style="margin-bottom:0">
       ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
-      <button class="btn btn-ghost btn-sm" data-edit-rental="${r.id}">Edit</button>
-      <button class="btn-ghost btn-sm" data-toggle-rental-status="${r.id}" data-next-status="${r.status === "watching" ? "booked" : "watching"}">
-        ${r.status === "watching" ? "Mark booked" : "Mark watching"}</button>
-      <button class="btn-link" data-del-rental="${r.id}">delete rental</button>
+      <details class="menu card-menu">
+        <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
+        <div class="menu-panel">
+          <button type="button" data-edit-rental="${r.id}">Edit</button>
+          <button type="button" data-toggle-rental-status="${r.id}" data-next-status="${r.status === "watching" ? "booked" : "watching"}">
+            ${r.status === "watching" ? "Mark booked" : "Mark watching"}</button>
+          <div class="menu-divider"></div>
+          <button type="button" class="menu-danger" data-del-rental="${r.id}">Delete rental</button>
+        </div>
+      </details>
     </div>
   </div>`;
 }
