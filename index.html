@@ -316,6 +316,13 @@
 
   .log-form{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;align-items:center}
   .unit-select{width:64px;flex-shrink:0}
+  .points-program-field{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .points-program-field select{flex:1;min-width:110px}
+  .points-program-field input{flex:1;min-width:110px}
+  .fav-star-btn{flex-shrink:0;width:30px;height:30px;border:1px solid var(--line);border-radius:8px;
+      background:transparent;color:var(--amber);cursor:pointer;font-size:14px;display:flex;
+      align-items:center;justify-content:center}
+  .fav-star-btn:hover{border-color:var(--amber)}
 
   .attachments-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
   .att-thumb{position:relative;width:56px;height:56px;border-radius:9px;overflow:hidden;
@@ -486,6 +493,7 @@ let session = null;
 let trips = [];
 let folders = [];
 let categories = [];
+let favoritePrograms = new Set();
 let activeTripId = null;
 
 let wishlistBoards = [];
@@ -509,8 +517,129 @@ const ICON_FLIGHT = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true
 const ICON_HOTEL = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19.6V10.9l7-4.7 7 4.7v8.7z" fill="#D8906C" stroke="#182635" stroke-width="1" stroke-linejoin="round"/><rect x="6.4" y="12.2" width="11.2" height="7.4" rx="0.6" fill="#FBF3E2" stroke="#182635" stroke-width="0.9"/><rect x="8" y="13.8" width="3.2" height="3.2" rx="0.3" fill="#4E7CA6" stroke="#182635" stroke-width="0.7"/><rect x="12.8" y="13.8" width="3.2" height="3.2" rx="0.3" fill="#4E7CA6" stroke="#182635" stroke-width="0.7"/><path d="M8 15.4h3.2M9.6 13.8v3.2M12.8 15.4H16M14.4 13.8v3.2" stroke="#FBF3E2" stroke-width="0.5"/><rect x="10.9" y="17.4" width="2.2" height="2.2" fill="#8FB478" stroke="#182635" stroke-width="0.6"/></svg>`;
 const ICON_CAR = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.6 16.3v-2.55c0-.62.32-1.2.85-1.53l1.55-.97.85-1.9c.32-.72 1.03-1.18 1.82-1.18h6.66c.79 0 1.5.46 1.82 1.18l.85 1.9 1.55.97c.53.33.85.91.85 1.53v2.55" fill="#5C8CB8" stroke="#182635" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/><path d="M3.3 15.2c0-.5.4-.9.9-.9h15.6c.5 0 .9.4.9.9v2.1a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-.55H6.3v.55a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1z" fill="#4E7CA6" stroke="#182635" stroke-width="1" stroke-linejoin="round"/><path d="M7.15 9.85h4.1v2.2h-5.4z" fill="#EAF2F8" stroke="#182635" stroke-width="0.75" stroke-linejoin="round"/><path d="M12.75 9.85h4.1l1.3 2.2h-5.4z" fill="#EAF2F8" stroke="#182635" stroke-width="0.75" stroke-linejoin="round"/><circle cx="7.3" cy="17.15" r="1.75" fill="#182635"/><circle cx="7.3" cy="17.15" r="0.7" fill="#F2A93B"/><circle cx="16.7" cy="17.15" r="1.75" fill="#182635"/><circle cx="16.7" cy="17.15" r="0.7" fill="#F2A93B"/></svg>`;
 
+// Curated loyalty-program lists for the points-program pickers — "Other…"
+// always remains an option, so an unlisted program (e.g. a credit card's
+// transferable-points program) is never a dead end.
+const AIRLINE_PROGRAMS = ["Southwest", "United", "American", "Delta", "Alaska", "JetBlue", "Hawaiian", "Spirit", "Frontier"];
+const HOTEL_PROGRAMS = ["IHG", "Hilton", "Marriott", "Choice Hotels"];
+
 // "22,000 pts" or, when a loyalty program is set, "22,000 pts (Southwest)".
 const pointsText = (n, program) => fmtPoints(n) + (program ? ` (${esc(program)})` : "");
+
+// Favorited programs first (alphabetical among themselves), then the rest
+// alphabetical — same ordering used for both airline and hotel pickers.
+function sortedPrograms(list){
+  return [...list].sort((a, b) => {
+    const af = favoritePrograms.has(a), bf = favoritePrograms.has(b);
+    if (af !== bf) return af ? -1 : 1;
+    return a.localeCompare(b);
+  });
+}
+
+// A curated <select> (airline or hotel programs) + a "Other…" fallback
+// text input, plus a star toggle to favorite whichever program is picked.
+// The text input (data-${prefix}-pointsprogram) is what create/update
+// handlers actually read — the select just drives its value, so no
+// existing read-side code needs to change. Values are populated
+// separately via populatePointsProgramField() (edit forms only — new
+// forms start blank, matching every other field in this app).
+function pointsProgramFieldHTML(prefix, listKind){
+  const list = listKind === "hotel" ? HOTEL_PROGRAMS : AIRLINE_PROGRAMS;
+  const options = sortedPrograms(list).map(p =>
+    `<option value="${esc(p)}">${favoritePrograms.has(p) ? "★ " : ""}${esc(p)}</option>`).join("");
+  return `
+    <div class="points-program-field">
+      <select data-${prefix}-pointsprogram-picker data-program-list="${listKind}">
+        <option value="">— None —</option>
+        ${options}
+        <option value="__other__">Other…</option>
+      </select>
+      <button type="button" class="fav-star-btn" data-${prefix}-pointsprogram-fav
+          title="Favorite this program" style="display:none">☆</button>
+      <input type="text" data-${prefix}-pointsprogram placeholder="Program name" style="display:none">
+    </div>`;
+}
+
+function populatePointsProgramField(prefix, listKind, currentValue){
+  const list = listKind === "hotel" ? HOTEL_PROGRAMS : AIRLINE_PROGRAMS;
+  const picker = document.querySelector(`[data-${prefix}-pointsprogram-picker]`);
+  const input = document.querySelector(`[data-${prefix}-pointsprogram]`);
+  if (!picker || !input) return;
+  const isCurated = currentValue && list.includes(currentValue);
+  if (currentValue && !isCurated){
+    picker.value = "__other__";
+    input.value = currentValue;
+    input.style.display = "";
+  } else {
+    picker.value = currentValue || "";
+    input.value = currentValue || "";
+    input.style.display = "none";
+  }
+  syncFavStar(prefix);
+}
+
+function syncFavStar(prefix){
+  const picker = document.querySelector(`[data-${prefix}-pointsprogram-picker]`);
+  const starBtn = document.querySelector(`[data-${prefix}-pointsprogram-fav]`);
+  if (!picker || !starBtn) return;
+  const v = picker.value;
+  if (!v || v === "__other__"){ starBtn.style.display = "none"; return; }
+  starBtn.style.display = "";
+  starBtn.textContent = favoritePrograms.has(v) ? "★" : "☆";
+}
+
+function wirePointsProgramField(prefix){
+  const picker = document.querySelector(`[data-${prefix}-pointsprogram-picker]`);
+  const input = document.querySelector(`[data-${prefix}-pointsprogram]`);
+  const starBtn = document.querySelector(`[data-${prefix}-pointsprogram-fav]`);
+  if (!picker || !input) return;
+  picker.addEventListener("change", () => {
+    if (picker.value === "__other__"){
+      input.style.display = "";
+      input.value = "";
+      input.focus();
+    } else {
+      input.style.display = "none";
+      input.value = picker.value;
+    }
+    syncFavStar(prefix);
+  });
+  if (starBtn){
+    starBtn.addEventListener("click", async () => {
+      const v = picker.value;
+      if (!v || v === "__other__") return;
+      if (favoritePrograms.has(v)) await removeFavoriteProgram(v);
+      else await addFavoriteProgram(v);
+      const list = picker.dataset.programList === "hotel" ? HOTEL_PROGRAMS : AIRLINE_PROGRAMS;
+      const options = sortedPrograms(list).map(p =>
+        `<option value="${esc(p)}">${favoritePrograms.has(p) ? "★ " : ""}${esc(p)}</option>`).join("");
+      picker.innerHTML = `<option value="">— None —</option>${options}<option value="__other__">Other…</option>`;
+      picker.value = v;
+      syncFavStar(prefix);
+    });
+  }
+  syncFavStar(prefix);
+}
+
+// The rental form's points-program field only offers the curated hotel
+// picker for kind="housing" — car rentals keep the plain free-text input
+// (no car-rental program list was requested), reusing that same input
+// element rather than rendering a second field.
+function applyRentalKindToProgramField(prefix, kind){
+  const picker = document.querySelector(`[data-${prefix}-pointsprogram-picker]`);
+  const starBtn = document.querySelector(`[data-${prefix}-pointsprogram-fav]`);
+  const input = document.querySelector(`[data-${prefix}-pointsprogram]`);
+  if (!picker || !input) return;
+  if (kind === "car"){
+    picker.style.display = "none";
+    if (starBtn) starBtn.style.display = "none";
+    input.style.display = "";
+  } else {
+    picker.style.display = "";
+    input.style.display = picker.value === "__other__" ? "" : "none";
+    syncFavStar(prefix);
+  }
+}
 
 // Shared accumulator for aggregating points across multiple flights/rentals
 // by loyalty program — used anywhere points from more than one record get
@@ -958,8 +1087,29 @@ async function loadCategories(){
   return data;
 }
 
+async function loadFavoritePrograms(){
+  const { data, error } = await supabase.from("favorite_points_programs").select("program");
+  if (error) { console.error(error); return new Set(); }
+  return new Set(data.map(r => r.program));
+}
+
+async function addFavoriteProgram(program){
+  favoritePrograms.add(program);
+  const { error } = await supabase.from("favorite_points_programs")
+    .insert({ owner_id: session.user.id, program });
+  if (error){ favoritePrograms.delete(program); alert(error.message); }
+}
+
+async function removeFavoriteProgram(program){
+  favoritePrograms.delete(program);
+  const { error } = await supabase.from("favorite_points_programs")
+    .delete().eq("owner_id", session.user.id).eq("program", program);
+  if (error){ favoritePrograms.add(program); alert(error.message); }
+}
+
 async function refresh(){
-  [trips, folders, categories] = await Promise.all([loadTrips(), loadFolders(), loadCategories()]);
+  [trips, folders, categories, favoritePrograms] = await Promise.all(
+    [loadTrips(), loadFolders(), loadCategories(), loadFavoritePrograms()]);
   if (!trips.find(t => t.id === activeTripId)) activeTripId = trips[0]?.id || null;
   render();
 }
@@ -1625,7 +1775,7 @@ function renderEditForm(f){
       <input type="number" step="1" data-f-paidpoints placeholder="e.g. 22000">
     </label>
     <label class="field">Points program
-      <input type="text" data-f-pointsprogram placeholder="e.g. Southwest">
+      ${pointsProgramFieldHTML("f", "airline")}
     </label>
     <label class="field">Alert below (cash)
       <input type="number" step="0.01" data-f-alert placeholder="optional">
@@ -1700,7 +1850,7 @@ function addFlightFormHTML(tripId, trip){
       <input type="number" step="1" data-nf-paidpoints placeholder="optional">
     </label>
     <label class="field">Points program
-      <input type="text" data-nf-pointsprogram placeholder="e.g. Southwest">
+      ${pointsProgramFieldHTML("nf", "airline")}
     </label>
     <label class="field">Alert below (cash)
       <input type="number" step="0.01" data-nf-alert placeholder="optional">
@@ -2092,7 +2242,7 @@ function rentalFormHTML(prefix, idAttr, defaults){
       <input type="number" step="1" data-${p}-paidpoints placeholder="optional">
     </label>
     <label class="field">Points program
-      <input type="text" data-${p}-pointsprogram placeholder="e.g. Hilton Honors">
+      ${pointsProgramFieldHTML(p, "hotel")}
     </label>
     <label class="field span2">Notes
       <textarea data-${p}-notes placeholder="optional"></textarea>
@@ -3292,6 +3442,11 @@ function wireEvents(activeTrip){
       rentalStart: activeTrip.travel_start, rentalEnd: activeTrip.travel_end
     });
     wireDateRangeButtons();
+    wirePointsProgramField("nr");
+    applyRentalKindToProgramField("nr", "housing");
+    holder.querySelector("[data-nr-kind]").addEventListener("change", (e) => {
+      applyRentalKindToProgramField("nr", e.target.value);
+    });
     holder.querySelector("[data-nr-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
     holder.querySelector("[data-nr-save]").addEventListener("click", async () => {
       const label = holder.querySelector("[data-nr-label]").value.trim();
@@ -3334,7 +3489,12 @@ function wireEvents(activeTrip){
       form.querySelector("[data-er-confirmation]").value = rental.confirmation_code || "";
       form.querySelector("[data-er-paidcash]").value = rental.paid_cash ?? "";
       form.querySelector("[data-er-paidpoints]").value = rental.paid_points ?? "";
-      form.querySelector("[data-er-pointsprogram]").value = rental.points_program || "";
+      populatePointsProgramField("er", "hotel", rental.points_program || "");
+      wirePointsProgramField("er");
+      applyRentalKindToProgramField("er", rental.kind);
+      form.querySelector("[data-er-kind]").addEventListener("change", (e) => {
+        applyRentalKindToProgramField("er", e.target.value);
+      });
       form.querySelector("[data-er-notes]").value = rental.notes || "";
       fillSplitRows(form, "er", rental.splits);
       form.querySelector("[data-er-cancel]").addEventListener("click", render);
@@ -3399,7 +3559,8 @@ function wireEvents(activeTrip){
       form.querySelector("[data-f-confirmation]").value = flight.confirmation_code || "";
       form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
       form.querySelector("[data-f-paidpoints]").value = flight.paid_points ?? "";
-      form.querySelector("[data-f-pointsprogram]").value = flight.points_program || "";
+      populatePointsProgramField("f", "airline", flight.points_program || "");
+      wirePointsProgramField("f");
       form.querySelector("[data-f-alert]").value = flight.alert_below ?? "";
       form.querySelector("[data-f-notes]").value = flight.notes || "";
       // Only keep auto-regenerating if the current label matches what we'd generate.
@@ -3532,6 +3693,7 @@ function wireAddFlightForm(tripId){
   const cancelBtn = holder.querySelector("[data-nf-cancel]");
   if (!saveBtn) return;
   wireDateRangeButtons();
+  wirePointsProgramField("nf");
   wireAutoTitle(holder, { url: "[data-nf-url]", origin: "[data-nf-origin]",
     dest: "[data-nf-dest]", date: "[data-nf-date]", time: "[data-nf-time]",
     paidCash: "[data-nf-paidcash]", paidPoints: "[data-nf-paidpoints]",
