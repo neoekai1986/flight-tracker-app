@@ -112,7 +112,20 @@ create table public.price_logs (
   flight_id   uuid not null references public.flights(id) on delete cascade,
   date        date not null,
   price       numeric not null,
+  -- true when `price` is a points count instead of a cash amount (e.g. "I
+  -- saw this for 25,000 points today").
+  is_points   boolean not null default false,
   created_at  timestamptz not null default now()
+);
+
+-- Personal list of loyalty programs starred to the top of the
+-- points-program picker (flights: airlines, hotel-kind rentals: chains).
+create table public.favorite_points_programs (
+  id          uuid primary key default gen_random_uuid(),
+  owner_id    uuid not null references auth.users(id) on delete cascade,
+  program     text not null,
+  created_at  timestamptz not null default now(),
+  unique (owner_id, program)
 );
 
 -- Screenshots attached to a flight or rental (confirmation emails, boarding
@@ -181,6 +194,7 @@ create index on public.trip_collaborators (trip_id);
 create index on public.trip_collaborators (email);
 create index on public.flights (trip_id, leg, position);
 create index on public.price_logs (flight_id, date);
+create index on public.favorite_points_programs (owner_id);
 create index on public.rentals (trip_id, position);
 create index rentals_reminder_due on public.rentals (cancel_by)
   where cancel_by is not null and reminded_at is null;

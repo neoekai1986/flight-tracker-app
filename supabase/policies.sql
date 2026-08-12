@@ -91,15 +91,17 @@ alter table public.flights enable row level security;
 alter table public.price_logs enable row level security;
 alter table public.rentals enable row level security;
 alter table public.attachments enable row level security;
+alter table public.favorite_points_programs enable row level security;
 alter table public.wishlist_boards enable row level security;
 alter table public.wishlist_collaborators enable row level security;
 alter table public.wishlist_profiles enable row level security;
 alter table public.wishlist_entries enable row level security;
 
 -- Only logged-in users get any access at all; RLS scopes it further per-row.
-revoke all on public.trip_folders, public.trip_categories, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments, public.wishlist_boards, public.wishlist_collaborators, public.wishlist_profiles, public.wishlist_entries from anon;
+revoke all on public.trip_folders, public.trip_categories, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments, public.favorite_points_programs, public.wishlist_boards, public.wishlist_collaborators, public.wishlist_profiles, public.wishlist_entries from anon;
 grant select, insert, update, delete on public.trip_folders, public.trip_categories, public.trips, public.flights, public.price_logs, public.rentals to authenticated;
 grant select, insert, delete on public.trip_collaborators to authenticated;
+grant select, insert, delete on public.favorite_points_programs to authenticated;
 grant select, insert, update, delete on public.attachments to authenticated;
 grant select, insert, update, delete on public.wishlist_boards, public.wishlist_profiles, public.wishlist_entries to authenticated;
 grant select, insert, delete on public.wishlist_collaborators to authenticated;
@@ -159,6 +161,16 @@ create policy trip_categories_update on public.trip_categories
   for update using ( owner_id = auth.uid() ) with check ( owner_id = auth.uid() );
 
 create policy trip_categories_delete on public.trip_categories
+  for delete using ( owner_id = auth.uid() );
+
+-- favorite_points_programs: purely personal, never shared with collaborators.
+create policy favorite_points_programs_select on public.favorite_points_programs
+  for select using ( owner_id = auth.uid() );
+
+create policy favorite_points_programs_insert on public.favorite_points_programs
+  for insert with check ( owner_id = auth.uid() );
+
+create policy favorite_points_programs_delete on public.favorite_points_programs
   for delete using ( owner_id = auth.uid() );
 
 -- trips
