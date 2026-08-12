@@ -259,7 +259,8 @@
   .solo-list{display:flex;flex-direction:column;gap:16px}
   @media (max-width:640px){ .pair-row{grid-template-columns:1fr} }
 
-  .card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px 20px}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px 20px;
+      min-height:104px}
   .card.card-booked{border-color:var(--good);box-shadow:inset 5px 0 0 0 var(--good);
       background:color-mix(in srgb, var(--good) 8%, var(--panel2))}
   .card.card-watching{border-color:var(--amber);box-shadow:inset 5px 0 0 0 var(--amber);
@@ -272,7 +273,8 @@
   }
   .card h3{font-size:15px;font-weight:600;margin-bottom:4px}
   .drag-handle{cursor:grab;color:var(--muted);font-size:13px;margin-right:6px;user-select:none}
-  .card-title-row{display:flex;align-items:center}
+  .card-title-row{display:flex;align-items:center;gap:8px}
+  .card-title-row h3{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .meta-line{font-size:12.5px;color:var(--muted);margin-bottom:8px;font-family:'Roboto Mono',monospace;line-height:1.6}
   .meta-line b{color:var(--ink);font-weight:600}
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
@@ -328,6 +330,11 @@
       border:1px dashed var(--line);border-radius:9px;cursor:pointer;color:var(--muted);font-size:20px}
   .att-add-btn:hover{border-color:var(--amber);color:var(--amber)}
   .att-add-btn:focus{outline:none;border-color:var(--amber);border-style:solid;color:var(--amber)}
+  .att-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
+      flex-shrink:0;border:1px solid var(--line);border-radius:7px;cursor:pointer;color:var(--muted);
+      font-size:13px;margin-left:auto}
+  .att-icon-btn:hover{border-color:var(--amber);color:var(--amber)}
+  .att-icon-btn:focus{outline:none;border-color:var(--amber);border-style:solid;color:var(--amber)}
   .att-status{font-size:12px;color:var(--muted);font-family:'Roboto Mono',monospace}
   .att-suggest{background:var(--night);border:1px solid var(--amber);border-radius:9px;
       padding:8px 10px;font-size:12.5px;margin:6px 0;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
@@ -1376,7 +1383,17 @@ async function importFromLocalStorage(){
 
 // ---------------- Main app rendering ----------------
 
-function renderAttachmentsRow(kind, itemId, attachments){
+// Small camera trigger for the card's title row — same data-att-picker
+// encoding wireAttachments() already delegates on, just relocated so a
+// card with zero screenshots doesn't reserve a whole row for it.
+function attachmentTrigger(kind, itemId){
+  return `
+    <span class="att-icon-btn" tabindex="0" data-att-picker="${kind}:${itemId}"
+        title="Click here, then paste a copied image (⌘V/Ctrl+V) — click again to browse files instead">📷</span>
+    <input type="file" accept="image/*" data-att-upload="${kind}:${itemId}" hidden>`;
+}
+
+function renderAttachmentsRow(itemId, attachments){
   const thumbs = (attachments || []).map(att => `
     <div class="att-thumb" data-att-id="${att.id}">
       <img data-att-img="${att.id}" data-att-path="${esc(att.storage_path)}"
@@ -1385,13 +1402,7 @@ function renderAttachmentsRow(kind, itemId, attachments){
       <button class="att-text-btn" data-att-view-text="${att.id}" title="View extracted text">📄</button>
     </div>`).join("");
   return `
-    <div class="attachments-row" data-attachments-row="${itemId}">
-      ${thumbs}
-      <div class="att-add-btn" tabindex="0" data-att-picker="${kind}:${itemId}" title="Click here, then paste a copied image (⌘V/Ctrl+V) — click again to browse files instead">
-        📷
-      </div>
-      <input type="file" accept="image/*" data-att-upload="${kind}:${itemId}" hidden>
-    </div>
+    ${thumbs ? `<div class="attachments-row" data-attachments-row="${itemId}">${thumbs}</div>` : ""}
     <div class="att-status" data-att-status="${itemId}"></div>
     <div data-att-suggest-holder="${itemId}"></div>
     <div data-att-text-holder="${itemId}"></div>`;
@@ -1511,10 +1522,11 @@ function renderCard(trip, f){
       <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
       <h3>${esc(f.label)}</h3>
       ${f.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
+      ${attachmentTrigger("flight", f.id)}
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")}</p>
     ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
-    ${renderAttachmentsRow("flight", f.id, f.attachments)}
+    ${renderAttachmentsRow(f.id, f.attachments)}
     <div class="row">
       ${f.url ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener">Check price →</a>` : ""}
       <details class="menu card-menu">
@@ -2008,11 +2020,12 @@ function renderRentalCard(trip, r){
       <span class="drag-handle" draggable="true" data-rental-drag="${r.id}" title="Drag to reorder">⠿</span>
       <h3>${icon} ${esc(r.label)}</h3>
       ${r.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
+      ${attachmentTrigger("rental", r.id)}
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
     ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
     ${rentalSplitText(r) ? `<p class="meta-line">Split: ${rentalSplitText(r)}</p>` : ""}
-    ${renderAttachmentsRow("rental", r.id, r.attachments)}
+    ${renderAttachmentsRow(r.id, r.attachments)}
     <div class="row" style="margin-bottom:0">
       ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
       <details class="menu card-menu">
