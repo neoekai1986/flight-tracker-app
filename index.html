@@ -178,7 +178,9 @@
       background:color-mix(in srgb, var(--bad) 8%, var(--panel))}
   .lane-label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:500;
       color:var(--muted);font-family:Inter,system-ui,sans-serif}
-  .cat-icon{width:15px;height:15px;vertical-align:-3px;flex-shrink:0}
+  /* Illustrated icons carry more detail than the old flat glyphs, so they
+     need a bit more room to stay legible. */
+  .cat-icon{width:26px;height:26px;vertical-align:-8px;flex-shrink:0}
 
   .summary-title{font-family:'Poppins',sans-serif;font-weight:700;font-size:19px;
       color:var(--ink);margin:0 0 12px;letter-spacing:.01em}
@@ -324,23 +326,27 @@
       align-items:center;justify-content:center}
   .fav-star-btn:hover{border-color:var(--amber)}
 
-  .attachments-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0}
-  .att-thumb{position:relative;width:56px;height:56px;border-radius:9px;overflow:hidden;
-      border:1px solid var(--line);cursor:pointer;background:var(--night)}
-  .att-thumb img{width:100%;height:100%;object-fit:cover;display:block}
-  .att-thumb .att-del{position:absolute;top:0;right:0;background:rgba(15,22,38,.85);color:var(--ink);
-      border:none;font-size:11px;padding:1px 5px;cursor:pointer;border-radius:0 0 0 8px}
-  .att-thumb .att-del:hover{color:var(--bad)}
-  .att-thumb .att-text-btn{position:absolute;bottom:0;left:0;background:rgba(15,22,38,.85);color:var(--ink);
-      border:none;font-size:11px;line-height:1;padding:2px 4px;cursor:pointer;border-radius:0 8px 0 0}
-  .att-thumb .att-text-btn:hover{color:var(--amber)}
-  .att-add-btn{display:flex;align-items:center;justify-content:center;width:56px;height:56px;
-      border:1px dashed var(--line);border-radius:9px;cursor:pointer;color:var(--muted);font-size:20px}
-  .att-add-btn:hover{border-color:var(--amber);color:var(--amber)}
-  .att-add-btn:focus{outline:none;border-color:var(--amber);border-style:solid;color:var(--amber)}
-  .att-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
-      flex-shrink:0;border:1px solid var(--line);border-radius:7px;cursor:pointer;color:var(--muted);
-      font-size:13px;margin-left:auto}
+  /* Attachments live inline in the card's title row: thumbnails then the
+     add button, all pushed right by the cluster's auto margin. */
+  .att-cluster{display:inline-flex;align-items:center;gap:5px;margin-left:auto;flex-shrink:0}
+  .att-chip{position:relative;width:28px;height:28px;border-radius:7px;overflow:hidden;
+      border:1px solid var(--line);cursor:pointer;background:var(--night);flex-shrink:0;display:block}
+  .att-chip img{width:100%;height:100%;object-fit:cover;display:block}
+  /* Delete / view-text stay hidden until hover so the resting header is clean. */
+  .att-chip .att-del,.att-chip .att-text-btn{position:absolute;background:rgba(15,22,38,.88);
+      color:var(--ink);border:none;font-size:9px;line-height:1;padding:1px 3px;cursor:pointer;
+      opacity:0;transition:opacity .12s ease}
+  .att-chip .att-del{top:0;right:0;border-radius:0 0 0 6px}
+  .att-chip .att-text-btn{bottom:0;left:0;border-radius:0 6px 0 0}
+  .att-chip:hover .att-del,.att-chip:hover .att-text-btn,
+  .att-chip .att-del:focus,.att-chip .att-text-btn:focus{opacity:1}
+  /* Touch devices have no hover, so never hide them there. */
+  @media (hover:none){ .att-chip .att-del,.att-chip .att-text-btn{opacity:1} }
+  .att-chip .att-del:hover{color:var(--bad)}
+  .att-chip .att-text-btn:hover{color:var(--amber)}
+  .att-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;
+      flex-shrink:0;border:1px dashed var(--line);border-radius:7px;cursor:pointer;color:var(--muted);
+      font-size:14px}
   .att-icon-btn:hover{border-color:var(--amber);color:var(--amber)}
   .att-icon-btn:focus{outline:none;border-color:var(--amber);border-style:solid;color:var(--amber)}
   .att-status{font-size:12px;color:var(--muted);font-family:'Roboto Mono',monospace}
@@ -396,19 +402,31 @@
   .section-head::after{content:"";flex:1;border-top:1px solid var(--line)}
   .up{color:var(--bad)} .down{color:var(--good)} .flat{color:var(--muted)}
   .empty-hist{color:var(--muted);font-size:12.5px;margin-top:8px}
-  .hist-more{color:var(--muted);font-size:11.5px;margin:4px 2px 0}
+  /* Only the newest 3 checks show until the caret expands the rest. The
+     first <tr> is the header row, so data rows start at nth-of-type(2). */
+  table.hist.hist-collapsed tr:nth-of-type(n+5){display:none}
+  .hist-toggle{display:flex;align-items:center;gap:6px;background:none;border:none;padding:4px 2px 0;
+      margin:0;color:var(--muted);font-size:11.5px;font-family:inherit;cursor:pointer}
+  .hist-toggle:hover{color:var(--amber)}
+  .hist-caret{display:inline-block;font-size:10px;transition:transform .15s ease}
+  .hist-caret.open{transform:rotate(180deg)}
 
   .price-trend{margin-top:10px}
   .price-trend-head{display:flex;justify-content:space-between;align-items:baseline;
       font-size:11.5px;margin-bottom:2px}
   .price-trend-label{color:var(--muted);letter-spacing:.08em;text-transform:uppercase;font-size:10.5px}
-  .price-trend-svg{width:100%;height:52px;display:block;overflow:visible}
+  /* Left gutter holds the min/max labels; the stretched SVG fills the rest. */
+  .price-trend-plot{display:flex;align-items:stretch;gap:6px}
+  .price-trend-yaxis{position:relative;width:58px;flex-shrink:0}
+  .price-trend-yaxis span{position:absolute;right:0;transform:translateY(-50%);white-space:nowrap;
+      font-size:10px;font-family:'Roboto Mono',monospace;color:var(--muted)}
+  .price-trend-svg{flex:1;min-width:0;height:52px;display:block;overflow:visible}
   .price-trend-line{fill:none;stroke:var(--amber);stroke-width:2;
       stroke-linejoin:round;stroke-linecap:round}
   .price-trend-dot{fill:var(--amber)}
   .price-trend-paid-line{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
   .price-trend-axis{display:flex;justify-content:space-between;color:var(--muted);
-      font-size:10.5px;font-family:'Roboto Mono',monospace;margin-top:2px}
+      font-size:10.5px;font-family:'Roboto Mono',monospace;margin-top:2px;padding-left:64px}
   .empty-state{background:var(--panel);border:1px dashed var(--line);border-radius:14px;
       padding:28px 20px;text-align:center;color:var(--muted)}
   .new-form{display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap}
@@ -510,12 +528,12 @@ const fmtPoints = n => `${Number(n).toLocaleString()} pts`;
 const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-// Hand-drawn category icons (flight/hotel/car), colored to match the
-// logo's palette (cream, terracotta, blue, navy outline, amber accents)
-// — used wherever the app used to show a plain ✈️/🏠/🚗 emoji.
-const ICON_FLIGHT = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true"><g transform="rotate(-35 12 12)"><path d="M12 3.2c.5 0 .95.32 1.1.8l1.55 4.75 3.9 1.15c.5.15.85.62.85 1.15v.7c0 .55-.42 1-.97 1.02l-3.83.15-1 4.55 1.55.7c.35.16.58.5.58.88v.55c0 .38-.32.68-.7.65l-2.03-.17-2.03.17c-.38.03-.7-.27-.7-.65v-.55c0-.38.23-.72.58-.88l1.55-.7-1-4.55-3.83-.15C6.42 12.63 6 12.18 6 11.63v-.7c0-.53.35-1 .85-1.15l3.9-1.15L12.3 4c.15-.48.6-.8 1.1-.8z" fill="#FBF3E2" stroke="#182635" stroke-width="0.9" stroke-linejoin="round"/></g></svg>`;
-const ICON_HOTEL = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19.6V10.9l7-4.7 7 4.7v8.7z" fill="#D8906C" stroke="#182635" stroke-width="1" stroke-linejoin="round"/><rect x="6.4" y="12.2" width="11.2" height="7.4" rx="0.6" fill="#FBF3E2" stroke="#182635" stroke-width="0.9"/><rect x="8" y="13.8" width="3.2" height="3.2" rx="0.3" fill="#4E7CA6" stroke="#182635" stroke-width="0.7"/><rect x="12.8" y="13.8" width="3.2" height="3.2" rx="0.3" fill="#4E7CA6" stroke="#182635" stroke-width="0.7"/><path d="M8 15.4h3.2M9.6 13.8v3.2M12.8 15.4H16M14.4 13.8v3.2" stroke="#FBF3E2" stroke-width="0.5"/><rect x="10.9" y="17.4" width="2.2" height="2.2" fill="#8FB478" stroke="#182635" stroke-width="0.6"/></svg>`;
-const ICON_CAR = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.6 16.3v-2.55c0-.62.32-1.2.85-1.53l1.55-.97.85-1.9c.32-.72 1.03-1.18 1.82-1.18h6.66c.79 0 1.5.46 1.82 1.18l.85 1.9 1.55.97c.53.33.85.91.85 1.53v2.55" fill="#5C8CB8" stroke="#182635" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/><path d="M3.3 15.2c0-.5.4-.9.9-.9h15.6c.5 0 .9.4.9.9v2.1a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-.55H6.3v.55a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1z" fill="#4E7CA6" stroke="#182635" stroke-width="1" stroke-linejoin="round"/><path d="M7.15 9.85h4.1v2.2h-5.4z" fill="#EAF2F8" stroke="#182635" stroke-width="0.75" stroke-linejoin="round"/><path d="M12.75 9.85h4.1l1.3 2.2h-5.4z" fill="#EAF2F8" stroke="#182635" stroke-width="0.75" stroke-linejoin="round"/><circle cx="7.3" cy="17.15" r="1.75" fill="#182635"/><circle cx="7.3" cy="17.15" r="0.7" fill="#F2A93B"/><circle cx="16.7" cy="17.15" r="1.75" fill="#182635"/><circle cx="16.7" cy="17.15" r="0.7" fill="#F2A93B"/></svg>`;
+// Category icons (flight/hotel/car) — illustrated to match the site logo,
+// used wherever the app used to show a plain emoji. Kept as <img> rather
+// than inline SVG so the browser caches one copy across every card.
+const ICON_FLIGHT = `<img class="cat-icon" src="icon-flight.png" alt="" aria-hidden="true">`;
+const ICON_HOTEL = `<img class="cat-icon" src="icon-hotel.png" alt="" aria-hidden="true">`;
+const ICON_CAR = `<img class="cat-icon" src="icon-car.png" alt="" aria-hidden="true">`;
 
 // Curated loyalty-program lists for the points-program pickers — "Other…"
 // always remains an option, so an unlisted program (e.g. a credit card's
@@ -1537,23 +1555,33 @@ async function importFromLocalStorage(){
 // Small camera trigger for the card's title row — same data-att-picker
 // encoding wireAttachments() already delegates on, just relocated so a
 // card with zero screenshots doesn't reserve a whole row for it.
-function attachmentTrigger(kind, itemId){
-  return `
-    <span class="att-icon-btn" tabindex="0" data-att-picker="${kind}:${itemId}"
-        title="Click here, then paste a copied image (⌘V/Ctrl+V) — click again to browse files instead">📷</span>
-    <input type="file" accept="image/*" data-att-upload="${kind}:${itemId}" hidden>`;
-}
-
-function renderAttachmentsRow(itemId, attachments){
+// The whole attachment affordance, sized to sit inline in a card's title
+// row: existing screenshot thumbnails followed by the add button, so a card
+// never spends a separate row on screenshots. Delete / view-text controls
+// appear on hover to keep the resting header uncluttered. The data-att-*
+// attributes are unchanged, so wireAttachments() needs no changes.
+function attachmentHeader(kind, itemId, attachments){
   const thumbs = (attachments || []).map(att => `
-    <div class="att-thumb" data-att-id="${att.id}">
+    <span class="att-chip" data-att-id="${att.id}">
       <img data-att-img="${att.id}" data-att-path="${esc(att.storage_path)}"
         data-att-open="${att.id}" alt="screenshot" title="Click to view full size">
       <button class="att-del" data-att-del="${att.id}" title="Delete">×</button>
       <button class="att-text-btn" data-att-view-text="${att.id}" title="View extracted text">📄</button>
-    </div>`).join("");
+    </span>`).join("");
   return `
-    ${thumbs ? `<div class="attachments-row" data-attachments-row="${itemId}">${thumbs}</div>` : ""}
+    <span class="att-cluster">
+      ${thumbs}
+      <span class="att-icon-btn" tabindex="0" data-att-picker="${kind}:${itemId}"
+          title="Click here, then paste a copied image (⌘V/Ctrl+V) — click again to browse files instead">📷</span>
+      <input type="file" accept="image/*" data-att-upload="${kind}:${itemId}" hidden>
+    </span>`;
+}
+
+// Out-of-band attachment UI that can't live inline in the header: upload
+// status text, the OCR field-suggestion banner, and the extracted-text panel.
+// All three are empty until something happens, so they cost no vertical space.
+function attachmentHolders(itemId){
+  return `
     <div class="att-status" data-att-status="${itemId}"></div>
     <div data-att-suggest-holder="${itemId}"></div>
     <div data-att-text-holder="${itemId}"></div>`;
@@ -1601,17 +1629,30 @@ function renderPriceTrendChart(entries, paidCash, cur){
   const deltaCls = delta === 0 ? "flat" : (delta < 0 ? "down" : "up");
   const deltaTxt = delta === 0 ? "flat" : `${delta < 0 ? "▼" : "▲"} ${fmtCash(Math.abs(delta), cur)}`;
 
+  // The SVG is stretched (preserveAspectRatio="none"), so text inside it
+  // would be distorted — the min/max labels are HTML in a left gutter
+  // instead, positioned at the same percentages the plot band uses so they
+  // line up exactly with the top and bottom of the drawn range.
+  const topPct = (yAt(yMax) / H) * 100;
+  const botPct = (yAt(yMin) / H) * 100;
+
   return `
     <div class="price-trend">
       <div class="price-trend-head">
         <span class="price-trend-label">Price trend</span>
         <span class="${deltaCls}">${deltaTxt} since ${fmtShortDate(first.date)}</span>
       </div>
-      <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="price-trend-svg">
-        ${paidLine}
-        <polyline points="${polyPoints}" class="price-trend-line"/>
-        ${circles}
-      </svg>
+      <div class="price-trend-plot">
+        <div class="price-trend-yaxis">
+          <span style="top:${topPct.toFixed(2)}%">${fmtCash(yMax, cur)}</span>
+          <span style="top:${botPct.toFixed(2)}%">${fmtCash(yMin, cur)}</span>
+        </div>
+        <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="price-trend-svg">
+          ${paidLine}
+          <polyline points="${polyPoints}" class="price-trend-line"/>
+          ${circles}
+        </svg>
+      </div>
       <div class="price-trend-axis"><span>${fmtShortDate(first.date)}</span><span>${fmtShortDate(last.date)}</span></div>
     </div>`;
 }
@@ -1637,8 +1678,9 @@ function renderCard(trip, f){
   if (!entries.length){
     histHTML = `<p class="empty-hist">No checks logged yet.</p>`;
   } else {
-    const recent = entries.slice(0, 3); // entries are already newest-first
-    const rows = recent.map((e) => {
+    // All entries render; the ones past the newest 3 are hidden by CSS until
+    // the caret below expands them (entries are already newest-first).
+    const rows = entries.map((e) => {
       let deltaHTML = '<span class="flat">·</span>';
       const paidRef = e.is_points ? f.paid_points : f.paid_cash;
       if (paidRef != null){
@@ -1663,13 +1705,16 @@ function renderCard(trip, f){
     // A single sparkline can't meaningfully mix cash and points on one
     // y-axis, so the trend chart only ever plots cash-logged checks.
     const cashEntries = entries.filter(e => !e.is_points);
+    const extra = entries.length - 3;
     histHTML = `
       ${renderPriceTrendChart(cashEntries, f.paid_cash, cur)}
-      <table class="hist">
+      <table class="hist${extra > 0 ? " hist-collapsed" : ""}" data-hist="${f.id}">
         <tr><th>Date</th><th>Price seen</th><th>vs. paid</th><th></th><th></th></tr>
         ${rows}
       </table>
-      ${entries.length > 3 ? `<p class="hist-more">+${entries.length - 3} earlier check${entries.length - 3 > 1 ? "s" : ""} logged</p>` : ""}`;
+      ${extra > 0 ? `<button type="button" class="hist-toggle" data-hist-toggle="${f.id}" data-extra="${extra}">
+        <span class="hist-caret">▾</span><span class="hist-toggle-label">Show ${extra} earlier check${extra > 1 ? "s" : ""}</span>
+      </button>` : ""}`;
   }
 
   return `
@@ -1678,11 +1723,11 @@ function renderCard(trip, f){
       <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
       <h3>${esc(f.label)}</h3>
       ${f.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
-      ${attachmentTrigger("flight", f.id)}
+      ${attachmentHeader("flight", f.id, f.attachments)}
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")}</p>
     ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
-    ${renderAttachmentsRow(f.id, f.attachments)}
+    ${attachmentHolders(f.id)}
     <div class="row">
       ${f.url ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener">Check price →</a>` : ""}
       <details class="menu card-menu">
@@ -2180,12 +2225,12 @@ function renderRentalCard(trip, r){
       <span class="drag-handle" draggable="true" data-rental-drag="${r.id}" title="Drag to reorder">⠿</span>
       <h3>${icon} ${esc(r.label)}</h3>
       ${r.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
-      ${attachmentTrigger("rental", r.id)}
+      ${attachmentHeader("rental", r.id, r.attachments)}
     </div>
     <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
     ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
     ${rentalSplitText(r) ? `<p class="meta-line">Split: ${rentalSplitText(r)}</p>` : ""}
-    ${renderAttachmentsRow(r.id, r.attachments)}
+    ${attachmentHolders(r.id)}
     <div class="row" style="margin-bottom:0">
       ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
       <details class="menu card-menu">
@@ -3682,6 +3727,22 @@ function wireEvents(activeTrip){
 
   document.querySelectorAll("[data-del-log]").forEach(el => {
     el.addEventListener("click", async () => { await deletePriceLog(el.dataset.delLog); await refresh(); });
+  });
+
+  // Expand/collapse the price-check history beyond the newest 3. Toggling a
+  // class beats re-rendering here: the edit-row swap below replaces <tr>s in
+  // place, and a full render() would discard an in-progress edit.
+  document.querySelectorAll("[data-hist-toggle]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const table = document.querySelector(`[data-hist="${btn.dataset.histToggle}"]`);
+      if (!table) return;
+      const collapsed = table.classList.toggle("hist-collapsed");
+      const extra = btn.dataset.extra;
+      btn.querySelector(".hist-caret").classList.toggle("open", !collapsed);
+      btn.querySelector(".hist-toggle-label").textContent = collapsed
+        ? `Show ${extra} earlier check${extra > 1 ? "s" : ""}`
+        : "Show fewer";
+    });
   });
 
   wireDragEvents(activeTrip);
