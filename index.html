@@ -178,6 +178,7 @@
       background:color-mix(in srgb, var(--bad) 8%, var(--panel))}
   .lane-label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:500;
       color:var(--muted);font-family:Inter,system-ui,sans-serif}
+  .cat-icon{width:15px;height:15px;vertical-align:-3px;flex-shrink:0}
 
   .summary-title{font-family:'Poppins',sans-serif;font-weight:700;font-size:19px;
       color:var(--ink);margin:0 0 12px;letter-spacing:.01em}
@@ -492,6 +493,13 @@ const fmtCash = (n, cur="USD") =>
 const fmtPoints = n => `${Number(n).toLocaleString()} pts`;
 const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// Hand-drawn category icons (flight/hotel/car), colored to match the
+// logo's palette (cream, terracotta, blue, navy outline, amber accents)
+// — used wherever the app used to show a plain ✈️/🏠/🚗 emoji.
+const ICON_FLIGHT = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true"><g transform="rotate(-35 12 12)"><path d="M12 3.2c.5 0 .95.32 1.1.8l1.55 4.75 3.9 1.15c.5.15.85.62.85 1.15v.7c0 .55-.42 1-.97 1.02l-3.83.15-1 4.55 1.55.7c.35.16.58.5.58.88v.55c0 .38-.32.68-.7.65l-2.03-.17-2.03.17c-.38.03-.7-.27-.7-.65v-.55c0-.38.23-.72.58-.88l1.55-.7-1-4.55-3.83-.15C6.42 12.63 6 12.18 6 11.63v-.7c0-.53.35-1 .85-1.15l3.9-1.15L12.3 4c.15-.48.6-.8 1.1-.8z" fill="#FBF3E2" stroke="#182635" stroke-width="0.9" stroke-linejoin="round"/></g></svg>`;
+const ICON_HOTEL = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19.6V10.9l7-4.7 7 4.7v8.7z" fill="#D8906C" stroke="#182635" stroke-width="1" stroke-linejoin="round"/><rect x="6.4" y="12.2" width="11.2" height="7.4" rx="0.6" fill="#FBF3E2" stroke="#182635" stroke-width="0.9"/><rect x="8" y="13.8" width="3.2" height="3.2" rx="0.3" fill="#4E7CA6" stroke="#182635" stroke-width="0.7"/><rect x="12.8" y="13.8" width="3.2" height="3.2" rx="0.3" fill="#4E7CA6" stroke="#182635" stroke-width="0.7"/><path d="M8 15.4h3.2M9.6 13.8v3.2M12.8 15.4H16M14.4 13.8v3.2" stroke="#FBF3E2" stroke-width="0.5"/><rect x="10.9" y="17.4" width="2.2" height="2.2" fill="#8FB478" stroke="#182635" stroke-width="0.6"/></svg>`;
+const ICON_CAR = `<svg class="cat-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.6 16.3v-2.55c0-.62.32-1.2.85-1.53l1.55-.97.85-1.9c.32-.72 1.03-1.18 1.82-1.18h6.66c.79 0 1.5.46 1.82 1.18l.85 1.9 1.55.97c.53.33.85.91.85 1.53v2.55" fill="#5C8CB8" stroke="#182635" stroke-width="1" stroke-linejoin="round" stroke-linecap="round"/><path d="M3.3 15.2c0-.5.4-.9.9-.9h15.6c.5 0 .9.4.9.9v2.1a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1v-.55H6.3v.55a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1z" fill="#4E7CA6" stroke="#182635" stroke-width="1" stroke-linejoin="round"/><path d="M7.15 9.85h4.1v2.2h-5.4z" fill="#EAF2F8" stroke="#182635" stroke-width="0.75" stroke-linejoin="round"/><path d="M12.75 9.85h4.1l1.3 2.2h-5.4z" fill="#EAF2F8" stroke="#182635" stroke-width="0.75" stroke-linejoin="round"/><circle cx="7.3" cy="17.15" r="1.75" fill="#182635"/><circle cx="7.3" cy="17.15" r="0.7" fill="#F2A93B"/><circle cx="16.7" cy="17.15" r="1.75" fill="#182635"/><circle cx="16.7" cy="17.15" r="0.7" fill="#F2A93B"/></svg>`;
 
 // "22,000 pts" or, when a loyalty program is set, "22,000 pts (Southwest)".
 const pointsText = (n, program) => fmtPoints(n) + (program ? ` (${esc(program)})` : "");
@@ -1760,10 +1768,10 @@ function renderTripPanel(trip){
           <div class="planning-estimate" data-plan-estimate="${trip.id}">Selected: —</div>
         </div>
        <div class="lane-grid" data-watching-list="${trip.id}">
-         ${watchingLane("✈️ Flights", watchingFlights, "flight", renderCard)}
+         ${watchingLane(`${ICON_FLIGHT} Flights`, watchingFlights, "flight", renderCard)}
          <div class="lane-col">
-           ${watchingLane("🏠 Housing", watchingHousing, "rental", renderRentalCard)}
-           ${watchingLane("🚗 Cars", watchingCars, "rental", renderRentalCard)}
+           ${watchingLane(`${ICON_HOTEL} Housing`, watchingHousing, "rental", renderRentalCard)}
+           ${watchingLane(`${ICON_CAR} Cars`, watchingCars, "rental", renderRentalCard)}
          </div>
        </div>`
     : "";
@@ -1820,20 +1828,20 @@ function renderTripPanel(trip){
 
       <div class="lane-grid">
         <div class="lane">
-          <div class="lane-label">✈️ Flights</div>
+          <div class="lane-label">${ICON_FLIGHT} Flights</div>
           ${pairsHTML}${soloHTML}
           ${!bookedFlights.length ? `<p class="empty-hist">No flights booked yet.</p>` : ""}
         </div>
         <div class="lane-col">
           <div class="lane${housingWarn ? " lane-warn" : ""}">
-            <div class="lane-label">🏠 Housing</div>
+            <div class="lane-label">${ICON_HOTEL} Housing</div>
             <div class="solo-list" data-rental-list="${trip.id}" data-rental-kind="housing">
               ${bookedHousing.map(r => renderRentalCard(trip, r)).join("")}
             </div>
             ${!bookedHousing.length ? `<p class="empty-hist">No housing booked yet.</p>` : ""}
           </div>
           <div class="lane${carsWarn ? " lane-warn" : ""}">
-            <div class="lane-label">🚗 Cars</div>
+            <div class="lane-label">${ICON_CAR} Cars</div>
             <div class="solo-list" data-rental-list="${trip.id}" data-rental-kind="car">
               ${bookedCars.map(r => renderRentalCard(trip, r)).join("")}
             </div>
@@ -1984,7 +1992,7 @@ function fillSplitRows(form, prefix, splits){
 }
 
 function renderRentalCard(trip, r){
-  const icon = r.kind === "car" ? "🚗" : "🏠";
+  const icon = r.kind === "car" ? ICON_CAR : ICON_HOTEL;
   const hasSplits = (r.splits || []).some(s => s.name);
   const metaBits = [`Paid <b>${paidText(r)}</b>`];
   if (hasSplits && r.paid_cash != null){
