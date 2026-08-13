@@ -58,7 +58,7 @@
     .sidebar{width:auto;border-right:none;border-bottom:1px solid var(--line)}
     .sidebar-trips{max-height:180px}
   }
-  #root{flex:1;min-width:0;padding:32px 36px 64px;max-width:1000px}
+  #root{flex:1;min-width:0;padding:32px 36px 64px;max-width:1320px}
   @media (max-width:640px){ #root{padding:20px 16px 48px} }
   .brand-logo{width:170px;max-width:100%;height:auto;display:block}
   .sub{color:var(--muted);font-size:13px;line-height:1.4}
@@ -169,9 +169,11 @@
   .plan-checkbox{padding-top:14px}
   .plan-checkbox input{width:16px;height:16px;cursor:pointer}
 
+  /* Flights carry the most detail (trend chart + history table), so they get
+     a full-width lane of their own; housing and cars share the row below. */
+  .lane-stack{display:flex;flex-direction:column;gap:16px}
   .lane-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-  @media (max-width:640px){ .lane-grid{grid-template-columns:1fr} }
-  .lane-col{display:flex;flex-direction:column;gap:16px}
+  @media (max-width:900px){ .lane-grid{grid-template-columns:1fr} }
   .lane{background:var(--panel);border:1px solid var(--line);border-radius:12px;
       padding:14px;display:flex;flex-direction:column;gap:16px}
   .lane.lane-warn{border-color:var(--bad);box-shadow:inset 5px 0 0 0 var(--bad);
@@ -259,7 +261,7 @@
            font-weight:500;margin-bottom:6px;font-family:Inter,system-ui,sans-serif}
   .leg-col{min-height:20px}
   .solo-list{display:flex;flex-direction:column;gap:16px}
-  @media (max-width:640px){ .pair-row{grid-template-columns:1fr} }
+  @media (max-width:900px){ .pair-row{grid-template-columns:1fr} }
 
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px 20px;
       min-height:104px}
@@ -276,7 +278,8 @@
   .card h3{font-size:15px;font-weight:600;margin-bottom:4px}
   .drag-handle{cursor:grab;color:var(--muted);font-size:13px;margin-right:6px;user-select:none}
   .card-title-row{display:flex;align-items:center;gap:8px}
-  .card-title-row h3{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .card-title-row h3{min-width:0;overflow:hidden;display:-webkit-box;
+      -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
   .meta-line{font-size:12.5px;color:var(--muted);margin-bottom:8px;font-family:'Roboto Mono',monospace;line-height:1.6}
   .meta-line b{color:var(--ink);font-weight:600}
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
@@ -317,7 +320,8 @@
   .crop-zoom{width:100%}
 
   .log-form{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap;align-items:center}
-  .unit-select{width:64px;flex-shrink:0}
+  .log-form input{flex:0 1 180px;min-width:110px}
+  .unit-select{width:72px;flex-shrink:0}
   .points-program-field{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
   .points-program-field select{flex:1;min-width:110px}
   .points-program-field input{flex:1;min-width:110px}
@@ -392,6 +396,9 @@
   table.hist th{text-align:left;color:var(--muted);font-weight:500;font-size:10.5px;
        letter-spacing:.1em;text-transform:uppercase;padding:5px 6px;border-bottom:1px solid var(--line)}
   table.hist td{padding:5px 6px;border-bottom:1px solid var(--line)}
+  .hist-wrap{overflow-x:auto}
+  table.hist th,table.hist td{white-space:nowrap}
+  table.hist td:last-child{text-align:right}
   table.hist tr:last-child td{border-bottom:none}
   .status{font-size:10.5px;letter-spacing:.1em;padding:2px 7px;border-radius:6px;
           border:1px solid var(--line);color:var(--muted);white-space:nowrap}
@@ -417,7 +424,7 @@
   .price-trend-label{color:var(--muted);letter-spacing:.08em;text-transform:uppercase;font-size:10.5px}
   /* Left gutter holds the min/max labels; the stretched SVG fills the rest. */
   .price-trend-plot{display:flex;align-items:stretch;gap:6px}
-  .price-trend-yaxis{position:relative;width:58px;flex-shrink:0}
+  .price-trend-yaxis{position:relative;width:52px;flex-shrink:0}
   .price-trend-yaxis span{position:absolute;right:0;transform:translateY(-50%);white-space:nowrap;
       font-size:10px;font-family:'Roboto Mono',monospace;color:var(--muted)}
   .price-trend-svg{flex:1;min-width:0;height:52px;display:block;overflow:visible}
@@ -426,7 +433,7 @@
   .price-trend-dot{fill:var(--amber)}
   .price-trend-paid-line{stroke:var(--muted);stroke-width:1;stroke-dasharray:3 3}
   .price-trend-axis{display:flex;justify-content:space-between;color:var(--muted);
-      font-size:10.5px;font-family:'Roboto Mono',monospace;margin-top:2px;padding-left:64px}
+      font-size:10.5px;font-family:'Roboto Mono',monospace;margin-top:2px;padding-left:58px}
   .empty-state{background:var(--panel);border:1px dashed var(--line);border-radius:14px;
       padding:28px 20px;text-align:center;color:var(--muted)}
   .new-form{display:flex;gap:8px;align-items:center;margin-bottom:20px;flex-wrap:wrap}
@@ -1600,8 +1607,9 @@ function checkPriceUrl(f){
 // dates entered (not just entry index) so a cluster of same-week checks
 // reads differently from checks spread over months. Needs 2+ entries to
 // draw a trend; a single data point has nothing to trend against.
-function renderPriceTrendChart(entries, paidCash, cur){
+function renderPriceTrendChart(entries, paidRef, cur, isPoints){
   if (entries.length < 2) return "";
+  const fmt = v => isPoints ? fmtPoints(v) : fmtCash(v, cur);
   const toTs = e => { const [y,m,d] = e.date.split("-").map(Number); return new Date(y, m-1, d).getTime(); };
   const sorted = [...entries].sort((a,b) => toTs(a) - toTs(b));
   const first = sorted[0], last = sorted[sorted.length - 1];
@@ -1610,7 +1618,7 @@ function renderPriceTrendChart(entries, paidCash, cur){
   const xMin = toTs(first), xMax = toTs(last);
   const prices = sorted.map(e => e.price);
   let yMin = Math.min(...prices), yMax = Math.max(...prices);
-  if (paidCash != null){ yMin = Math.min(yMin, paidCash); yMax = Math.max(yMax, paidCash); }
+  if (paidRef != null){ yMin = Math.min(yMin, paidRef); yMax = Math.max(yMax, paidRef); }
   if (yMin === yMax){ yMin -= 1; yMax += 1; } // flat line — pad so it's not degenerate
 
   const xAt = (e, i) => padX + (xMax > xMin
@@ -1621,13 +1629,13 @@ function renderPriceTrendChart(entries, paidCash, cur){
   const pts = sorted.map((e, i) => ({ x: xAt(e, i), y: yAt(e.price) }));
   const polyPoints = pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
   const circles = pts.map(p => `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5" class="price-trend-dot"/>`).join("");
-  const paidLine = paidCash != null
-    ? `<line x1="${padX}" y1="${yAt(paidCash).toFixed(1)}" x2="${W-padX}" y2="${yAt(paidCash).toFixed(1)}" class="price-trend-paid-line"/>`
+  const paidLine = paidRef != null
+    ? `<line x1="${padX}" y1="${yAt(paidRef).toFixed(1)}" x2="${W-padX}" y2="${yAt(paidRef).toFixed(1)}" class="price-trend-paid-line"/>`
     : "";
 
   const delta = last.price - first.price;
   const deltaCls = delta === 0 ? "flat" : (delta < 0 ? "down" : "up");
-  const deltaTxt = delta === 0 ? "flat" : `${delta < 0 ? "▼" : "▲"} ${fmtCash(Math.abs(delta), cur)}`;
+  const deltaTxt = delta === 0 ? "flat" : `${delta < 0 ? "▼" : "▲"} ${fmt(Math.abs(delta))}`;
 
   // The SVG is stretched (preserveAspectRatio="none"), so text inside it
   // would be distorted — the min/max labels are HTML in a left gutter
@@ -1644,8 +1652,8 @@ function renderPriceTrendChart(entries, paidCash, cur){
       </div>
       <div class="price-trend-plot">
         <div class="price-trend-yaxis">
-          <span style="top:${topPct.toFixed(2)}%">${fmtCash(yMax, cur)}</span>
-          <span style="top:${botPct.toFixed(2)}%">${fmtCash(yMin, cur)}</span>
+          <span style="top:${topPct.toFixed(2)}%">${fmt(yMax)}</span>
+          <span style="top:${botPct.toFixed(2)}%">${fmt(yMin)}</span>
         </div>
         <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" class="price-trend-svg">
           ${paidLine}
@@ -1659,6 +1667,9 @@ function renderPriceTrendChart(entries, paidCash, cur){
 
 function renderCard(trip, f){
   const cur = f.currency || "USD";
+  // An award booking's price checks are almost always quoted in points too,
+  // so default the log-price unit to match how the seat was actually bought.
+  const paidInPoints = f.paid_points != null && f.paid_cash == null;
   const moveOptions = trips.filter(t => t.id !== trip.id)
     .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
   const passengers = f.passengers || 1;
@@ -1692,7 +1703,7 @@ function renderCard(trip, f){
       let statusTxt = "", statusCls = "";
       if (!e.is_points && f.alert_below != null && e.price <= f.alert_below){ statusTxt = "BELOW ALERT"; statusCls = "status-alert"; }
       return `<tr data-log-row="${e.id}">
-        <td>${esc(e.date)}</td>
+        <td title="${esc(e.date)}">${fmtShortDate(e.date)}</td>
         <td>${e.is_points ? fmtPoints(e.price) : fmtCash(e.price, cur)}</td>
         <td>${deltaHTML}</td>
         <td>${statusTxt ? `<span class="status ${statusCls}">${statusTxt}</span>` : ""}</td>
@@ -1702,16 +1713,28 @@ function renderCard(trip, f){
         </td>
       </tr>`;
     }).join("");
-    // A single sparkline can't meaningfully mix cash and points on one
-    // y-axis, so the trend chart only ever plots cash-logged checks.
-    const cashEntries = entries.filter(e => !e.is_points);
+    // A single sparkline can't mix cash and points on one y-axis (different
+    // units, wildly different scales), so it plots one series: the unit this
+    // flight was bought in when that has enough points to draw, else whichever
+    // unit has been logged more.
+    const cashOnly = entries.filter(e => !e.is_points);
+    const pointsOnly = entries.filter(e => e.is_points);
+    const preferred = paidInPoints ? pointsOnly : cashOnly;
+    const fallback = paidInPoints ? cashOnly : pointsOnly;
+    const chartIsPoints = preferred.length >= 2
+      ? paidInPoints
+      : (fallback.length >= 2 ? !paidInPoints : paidInPoints);
+    const chartEntries = preferred.length >= 2 ? preferred : fallback;
+    const chartPaidRef = chartIsPoints ? f.paid_points : f.paid_cash;
     const extra = entries.length - 3;
     histHTML = `
-      ${renderPriceTrendChart(cashEntries, f.paid_cash, cur)}
-      <table class="hist${extra > 0 ? " hist-collapsed" : ""}" data-hist="${f.id}">
-        <tr><th>Date</th><th>Price seen</th><th>vs. paid</th><th></th><th></th></tr>
-        ${rows}
-      </table>
+      ${renderPriceTrendChart(chartEntries, chartPaidRef, cur, chartIsPoints)}
+      <div class="hist-wrap">
+        <table class="hist${extra > 0 ? " hist-collapsed" : ""}" data-hist="${f.id}">
+          <tr><th>Date</th><th>Price seen</th><th>vs. paid</th><th></th><th></th></tr>
+          ${rows}
+        </table>
+      </div>
       ${extra > 0 ? `<button type="button" class="hist-toggle" data-hist-toggle="${f.id}" data-extra="${extra}">
         <span class="hist-caret">▾</span><span class="hist-toggle-label">Show ${extra} earlier check${extra > 1 ? "s" : ""}</span>
       </button>` : ""}`;
@@ -1751,8 +1774,8 @@ function renderCard(trip, f){
     <div class="log-form">
       <input type="number" step="0.01" placeholder="Price seen" data-log-input="${f.id}">
       <select class="unit-select" data-log-unit="${f.id}">
-        <option value="cash">$</option>
-        <option value="points">pts</option>
+        <option value="cash" ${paidInPoints ? "" : "selected"}>$</option>
+        <option value="points" ${paidInPoints ? "selected" : ""}>pts</option>
       </select>
       <button class="btn btn-ghost btn-sm" data-save-log="${f.id}">Log price</button>
     </div>
@@ -1984,9 +2007,9 @@ function renderTripPanel(trip){
           select a range) to price out a combination.
           <div class="planning-estimate" data-plan-estimate="${trip.id}">Selected: —</div>
         </div>
-       <div class="lane-grid" data-watching-list="${trip.id}">
+       <div class="lane-stack" data-watching-list="${trip.id}">
          ${watchingLane(`${ICON_FLIGHT} Flights`, watchingFlights, "flight", renderCard)}
-         <div class="lane-col">
+         <div class="lane-grid">
            ${watchingLane(`${ICON_HOTEL} Housing`, watchingHousing, "rental", renderRentalCard)}
            ${watchingLane(`${ICON_CAR} Cars`, watchingCars, "rental", renderRentalCard)}
          </div>
@@ -2043,13 +2066,13 @@ function renderTripPanel(trip){
       <div data-add-flight-form="${trip.id}"></div>
       <div data-add-rental-form="${trip.id}"></div>
 
-      <div class="lane-grid">
+      <div class="lane-stack">
         <div class="lane">
           <div class="lane-label">${ICON_FLIGHT} Flights</div>
           ${pairsHTML}${soloHTML}
           ${!bookedFlights.length ? `<p class="empty-hist">No flights booked yet.</p>` : ""}
         </div>
-        <div class="lane-col">
+        <div class="lane-grid">
           <div class="lane${housingWarn ? " lane-warn" : ""}">
             <div class="lane-label">${ICON_HOTEL} Housing</div>
             <div class="solo-list" data-rental-list="${trip.id}" data-rental-kind="housing">
