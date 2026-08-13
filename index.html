@@ -257,11 +257,12 @@
       padding:3px 6px 3px 10px;font-size:12.5px;display:flex;align-items:center;gap:6px}
 
   .pair-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  .watch-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
   .leg-tag{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);
            font-weight:500;margin-bottom:6px;font-family:Inter,system-ui,sans-serif}
   .leg-col{min-height:20px}
   .solo-list{display:flex;flex-direction:column;gap:16px}
-  @media (max-width:900px){ .pair-row{grid-template-columns:1fr} }
+  @media (max-width:900px){ .pair-row,.watch-grid{grid-template-columns:1fr} }
 
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px 20px;
       min-height:104px}
@@ -1994,13 +1995,19 @@ function renderTripPanel(trip){
   const watchingHousing = watchingRentals.filter(r => r.kind !== "car");
   const watchingCars = watchingRentals.filter(r => r.kind === "car");
   const hasWatching = watchingFlights.length > 0 || watchingRentals.length > 0;
-  const watchingLane = (label, items, kind, renderFn) => `
+  // twoCol: flights get two cards per row to match the booked lane. Watching
+  // flights are competing options rather than an outbound/return pair, so
+  // they just flow through the grid instead of being paired by index.
+  const watchingLane = (label, items, kind, renderFn, twoCol) => {
+    const cards = items.map(item => withPlanCheckbox(trip, kind, item.id, renderFn(trip, item))).join("");
+    return `
     <div class="lane">
       <div class="lane-label">${label}</div>
       ${items.length
-        ? items.map(item => withPlanCheckbox(trip, kind, item.id, renderFn(trip, item))).join("")
+        ? (twoCol ? `<div class="watch-grid">${cards}</div>` : cards)
         : `<p class="empty-hist">None</p>`}
     </div>`;
+  };
   const watchingHTML = hasWatching
     ? `<div class="section-head">Watching (not yet booked)</div>
        <div class="watching-block">Not counted in your totals. Check off items below (shift-click to
@@ -2008,7 +2015,7 @@ function renderTripPanel(trip){
           <div class="planning-estimate" data-plan-estimate="${trip.id}">Selected: —</div>
         </div>
        <div class="lane-stack" data-watching-list="${trip.id}">
-         ${watchingLane(`${ICON_FLIGHT} Flights`, watchingFlights, "flight", renderCard)}
+         ${watchingLane(`${ICON_FLIGHT} Flights`, watchingFlights, "flight", renderCard, true)}
          <div class="lane-grid">
            ${watchingLane(`${ICON_HOTEL} Housing`, watchingHousing, "rental", renderRentalCard)}
            ${watchingLane(`${ICON_CAR} Cars`, watchingCars, "rental", renderRentalCard)}
