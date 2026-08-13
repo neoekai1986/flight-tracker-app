@@ -1423,6 +1423,15 @@ async function moveFlightToTrip(flightId, newTripId){
   if (error) alert(error.message);
 }
 
+// Mirrors moveFlightToTrip: append to the destination's positions. Rentals
+// have no leg to clear, so kind and status carry over unchanged.
+async function moveRentalToTrip(rentalId, newTripId){
+  const siblingPositions = (trips.find(t => t.id === newTripId)?.rentals || []).map(r => r.position);
+  const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
+  const { error } = await supabase.from("rentals").update({ trip_id: newTripId, position }).eq("id", rentalId);
+  if (error) alert(error.message);
+}
+
 async function reorderItem(table, item, siblings, targetIndex){
   // siblings: array of rows (excluding `item`) in the same list, sorted by position
   let before = siblings[targetIndex - 1];
@@ -2266,6 +2275,8 @@ function fillSplitRows(form, prefix, splits){
 
 function renderRentalCard(trip, r){
   const icon = r.kind === "car" ? ICON_CAR : ICON_HOTEL;
+  const moveOptions = trips.filter(t => t.id !== trip.id)
+    .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
   const hasSplits = (r.splits || []).some(s => s.name);
   const metaBits = [`Paid <b>${paidText(r)}</b>`];
   if (hasSplits && r.paid_cash != null){
@@ -2295,6 +2306,13 @@ function renderRentalCard(trip, r){
           <button type="button" data-edit-rental="${r.id}">Edit</button>
           <button type="button" data-toggle-rental-status="${r.id}" data-next-status="${r.status === "watching" ? "booked" : "watching"}">
             ${r.status === "watching" ? "Mark booked" : "Mark watching"}</button>
+          ${moveOptions ? `<div class="menu-divider"></div>
+            <label class="menu-label">Move to trip
+              <select data-move-rental="${r.id}">
+                <option value="">Choose trip…</option>
+                ${moveOptions}
+              </select>
+            </label>` : ""}
           <div class="menu-divider"></div>
           <button type="button" class="menu-danger" data-del-rental="${r.id}">Delete rental</button>
         </div>
@@ -3439,6 +3457,14 @@ function wireEvents(activeTrip){
     });
   });
 
+  document.querySelectorAll("[data-move-rental]").forEach(sel => {
+    sel.addEventListener("change", async () => {
+      if (!sel.value) return;
+      await moveRentalToTrip(sel.dataset.moveRental, sel.value);
+      await refresh();
+    });
+  });
+
   document.querySelectorAll("[data-toggle-rental-status]").forEach(btn => {
     btn.addEventListener("click", async () => {
       await updateRental(btn.dataset.toggleRentalStatus, { status: btn.dataset.nextStatus });
@@ -4050,11 +4076,29 @@ function wireTabDragEvents(){
       e.stopPropagation();
       e.dataTransfer.effectAllowed = "move";
     });
-    tab.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
+    tab.addEventListener("dragover", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (dragFlightId || dragRentalId) tab.classList.add("drag-over");
+    });
+    tab.addEventListener("dragleave", () => tab.classList.remove("drag-over"));
     tab.addEventListener("drop", async (e) => {
       e.preventDefault(); e.stopPropagation();
-      if (!dragTripId || dragTripId === tab.dataset.dragTab) return;
-      const target = trips.find(t => t.id === tab.dataset.dragTab);
+      tab.classList.remove("drag-over");
+      // A card dropped on a trip moves into it; anything else falls through
+      // to the trip-reordering logic these handlers already did.
+      const destTripId = tab.dataset.dragTab;
+      if (dragFlightId || dragRentalId){
+        const cardId = dragFlightId || dragRentalId;
+        const isFlight = !!dragFlightId;
+        const source = isFlight ? findFlight(cardId) : findRental(cardId);
+        dragFlightId = null; dragRentalId = null;
+        if (!source || source.trip.id === destTripId) return;
+        await (isFlight ? moveFlightToTrip : moveRentalToTrip)(cardId, destTripId);
+        await refresh();
+        return;
+      }
+      if (!dragTripId || dragTripId === destTripId) return;
+      const target = trips.find(t => t.id === destTripId);
       const dragged = trips.find(t => t.id === dragTripId);
       const targetFolderId = target.folder_id || null;
       if ((dragged.folder_id || null) !== targetFolderId){
@@ -4063,7 +4107,7 @@ function wireTabDragEvents(){
         const siblings = trips
           .filter(t => t.id !== dragTripId && (t.folder_id || null) === targetFolderId)
           .sort((a,b) => a.position - b.position);
-        const targetIndex = siblings.findIndex(t => t.id === tab.dataset.dragTab);
+        const targetIndex = siblings.findIndex(t => t.id === destTripId);
         await reorderItem("trips", dragged, siblings, targetIndex);
       }
       dragTripId = null;
