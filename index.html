@@ -1975,15 +1975,18 @@ function renderTripPanel(trip){
   const pairCount = Math.max(out.length, ret.length);
   for (let i = 0; i < pairCount; i++){
     pairsHTML += `<div class="pair-row">
-      <div class="leg-col" data-leg-list="outbound" data-trip="${trip.id}">
+      <div class="leg-col drop-zone" data-leg-list="outbound" data-trip="${trip.id}"
+        data-drop-kind="flight" data-drop-status="booked" data-drop-leg="outbound">
         ${out[i] ? `<div class="leg-tag">Outbound</div>${renderCard(trip, out[i])}` : ""}
       </div>
-      <div class="leg-col" data-leg-list="return" data-trip="${trip.id}">
+      <div class="leg-col drop-zone" data-leg-list="return" data-trip="${trip.id}"
+        data-drop-kind="flight" data-drop-status="booked" data-drop-leg="return">
         ${ret[i] ? `<div class="leg-tag">Return</div>${renderCard(trip, ret[i])}` : ""}
       </div>
     </div>`;
   }
-  const soloHTML = `<div class="solo-list" data-leg-list="solo" data-trip="${trip.id}">
+  const soloHTML = `<div class="solo-list drop-zone" data-leg-list="solo" data-trip="${trip.id}"
+    data-drop-kind="flight" data-drop-status="booked" data-drop-leg="solo">
     ${solo.map(f => renderCard(trip, f)).join("")}
   </div>`;
 
@@ -2012,14 +2015,18 @@ function renderTripPanel(trip){
   // twoCol: flights get two cards per row to match the booked lane. Watching
   // flights are competing options rather than an outbound/return pair, so
   // they just flow through the grid instead of being paired by index.
-  const watchingLane = (label, items, kind, renderFn, twoCol) => {
+  // The zone wrapper is unconditional (not just for the two-column flights
+  // lane) so every watching lane is a drop target, including an empty one —
+  // that's how a card gets dragged into a section that has nothing in it yet.
+  const watchingLane = (label, items, kind, renderFn, twoCol, laneAttrs) => {
     const cards = items.map(item => withPlanCheckbox(trip, kind, item.id, renderFn(trip, item))).join("");
     return `
     <div class="lane">
       <div class="lane-label">${label}</div>
-      ${items.length
-        ? (twoCol ? `<div class="watch-grid">${cards}</div>` : cards)
-        : `<p class="empty-hist">None</p>`}
+      <div class="drop-zone ${twoCol ? "watch-grid" : "solo-list"}" data-drop-status="watching" ${laneAttrs}>
+        ${cards}
+      </div>
+      ${items.length ? "" : `<p class="empty-hist">None</p>`}
     </div>`;
   };
   const watchingHTML = hasWatching
@@ -2029,10 +2036,13 @@ function renderTripPanel(trip){
           <div class="planning-estimate" data-plan-estimate="${trip.id}">Selected: —</div>
         </div>
        <div class="lane-stack" data-watching-list="${trip.id}">
-         ${watchingLane(`${ICON_FLIGHT} Flights`, watchingFlights, "flight", renderCard, true)}
+         ${watchingLane(`${ICON_FLIGHT} Flights`, watchingFlights, "flight", renderCard, true,
+           `data-drop-kind="flight" data-drop-leg="any"`)}
          <div class="lane-grid">
-           ${watchingLane(`${ICON_HOTEL} Housing`, watchingHousing, "rental", renderRentalCard)}
-           ${watchingLane(`${ICON_CAR} Cars`, watchingCars, "rental", renderRentalCard)}
+           ${watchingLane(`${ICON_HOTEL} Housing`, watchingHousing, "rental", renderRentalCard, false,
+             `data-drop-kind="rental" data-drop-rental-kind="housing"`)}
+           ${watchingLane(`${ICON_CAR} Cars`, watchingCars, "rental", renderRentalCard, false,
+             `data-drop-kind="rental" data-drop-rental-kind="car"`)}
          </div>
        </div>`
     : "";
@@ -2096,14 +2106,16 @@ function renderTripPanel(trip){
         <div class="lane-grid">
           <div class="lane${housingWarn ? " lane-warn" : ""}">
             <div class="lane-label">${ICON_HOTEL} Housing</div>
-            <div class="solo-list" data-rental-list="${trip.id}" data-rental-kind="housing">
+            <div class="solo-list drop-zone" data-rental-list="${trip.id}" data-rental-kind="housing"
+              data-drop-kind="rental" data-drop-status="booked" data-drop-rental-kind="housing">
               ${bookedHousing.map(r => renderRentalCard(trip, r)).join("")}
             </div>
             ${!bookedHousing.length ? `<p class="empty-hist">No housing booked yet.</p>` : ""}
           </div>
           <div class="lane${carsWarn ? " lane-warn" : ""}">
             <div class="lane-label">${ICON_CAR} Cars</div>
-            <div class="solo-list" data-rental-list="${trip.id}" data-rental-kind="car">
+            <div class="solo-list drop-zone" data-rental-list="${trip.id}" data-rental-kind="car"
+              data-drop-kind="rental" data-drop-status="booked" data-drop-rental-kind="car">
               ${bookedCars.map(r => renderRentalCard(trip, r)).join("")}
             </div>
             ${!bookedCars.length ? `<p class="empty-hist">No car booked yet.</p>` : ""}
@@ -4110,57 +4122,95 @@ function wireDragEvents(activeTrip){
       e.dataTransfer.effectAllowed = "move";
     });
   });
+  // Without this an abandoned drag leaves its id set, and the next unrelated
+  // drop acts on a card the user is no longer dragging.
+  document.querySelectorAll("[data-drag-handle],[data-rental-drag]").forEach(handle => {
+    handle.addEventListener("dragend", () => { dragFlightId = null; dragRentalId = null; });
+  });
 
-  document.querySelectorAll("[data-card]").forEach(card => {
+  // Every lane advertises what it holds, so one code path can answer "may this
+  // card land here?" and "what are its siblings once it does?".
+  const zoneOf = el => el?.closest(".drop-zone");
+  const zoneInfo = zone => ({
+    kind: zone.dataset.dropKind,
+    status: zone.dataset.dropStatus,
+    leg: zone.dataset.dropLeg,
+    rentalKind: zone.dataset.dropRentalKind,
+  });
+
+  // Siblings are scoped by status AND lane. Scoping by lane alone (the old
+  // behaviour) mixed booked and watching rows into one position sequence, so
+  // reordering inside Watching was computed against booked cards too.
+  const siblingsFor = (z, excludeId) => {
+    if (z.kind === "flight"){
+      return (activeTrip.flights || [])
+        .filter(f => f.id !== excludeId
+          && (f.status || "booked") === z.status
+          && (z.leg === "any" || legScope(f.leg) === z.leg))
+        .sort((a,b) => a.position - b.position);
+    }
+    return (activeTrip.rentals || [])
+      .filter(r => r.id !== excludeId
+        && (r.status || "booked") === z.status
+        && (r.kind || "housing") === z.rentalKind)
+      .sort((a,b) => a.position - b.position);
+  };
+
+  // A drop is legal when it stays in the same lane type. Crossing sections
+  // (booked <-> watching) is the point; crossing leg or rental kind is not,
+  // so those are rejected rather than silently rewriting the record.
+  const canAccept = (z, item) => {
+    if (z.kind === "flight"){
+      if (!dragFlightId) return false;
+      return z.leg === "any" || legScope(item.leg) === z.leg;
+    }
+    if (!dragRentalId) return false;
+    return (item.kind || "housing") === z.rentalKind;
+  };
+
+  const applyDrop = async (zone, targetId) => {
+    const z = zoneInfo(zone);
+    const isFlight = z.kind === "flight";
+    const dragId = isFlight ? dragFlightId : dragRentalId;
+    if (!dragId || dragId === targetId) return;
+    const found = isFlight ? findFlight(dragId) : findRental(dragId);
+    const item = isFlight ? found?.flight : found?.rental;
+    if (!item || !canAccept(z, item)) return;
+
+    const table = isFlight ? "flights" : "rentals";
+    if ((item.status || "booked") !== z.status){
+      await (isFlight ? updateFlight : updateRental)(dragId, { status: z.status });
+      item.status = z.status; // keep the local copy in step for the reorder below
+    }
+    const siblings = siblingsFor(z, dragId);
+    const targetIndex = targetId
+      ? siblings.findIndex(s => s.id === targetId)
+      : siblings.length;
+    await reorderItem(table, item, siblings, targetIndex < 0 ? siblings.length : targetIndex);
+    dragFlightId = null; dragRentalId = null;
+    await refresh();
+  };
+
+  document.querySelectorAll("[data-card],[data-rental-card]").forEach(card => {
     card.addEventListener("dragover", (e) => { e.preventDefault(); card.classList.add("drag-over"); });
     card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
     card.addEventListener("drop", async (e) => {
       e.preventDefault();
+      e.stopPropagation();
       card.classList.remove("drag-over");
-      if (!dragFlightId || dragFlightId === card.dataset.card) return;
-      const targetLeg = card.dataset.leg;
-      const { flight: dragged } = findFlight(dragFlightId);
-      if (legScope(dragged.leg) !== targetLeg) return; // no cross-lane drag for now
-      const siblings = (activeTrip.flights || [])
-        .filter(f => f.id !== dragFlightId && legScope(f.leg) === targetLeg)
-        .sort((a,b) => a.position - b.position);
-      const targetIndex = siblings.findIndex(f => f.id === card.dataset.card);
-      await reorderItem("flights", dragged, siblings, targetIndex);
-      await refresh();
+      const zone = zoneOf(card);
+      if (!zone) return;
+      await applyDrop(zone, card.dataset.card || card.dataset.rentalCard);
     });
   });
 
-  document.querySelectorAll("[data-leg-list]").forEach(list => {
-    list.addEventListener("dragover", (e) => e.preventDefault());
-    list.addEventListener("drop", async (e) => {
-      if (e.target !== list) return; // let card-level drop handlers take it
+  document.querySelectorAll(".drop-zone").forEach(zone => {
+    zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("drag-over"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("drag-over"));
+    zone.addEventListener("drop", async (e) => {
       e.preventDefault();
-      if (!dragFlightId) return;
-      const targetLeg = list.dataset.legList;
-      const { flight: dragged } = findFlight(dragFlightId);
-      if (legScope(dragged.leg) !== targetLeg) return;
-      const siblings = (activeTrip.flights || [])
-        .filter(f => f.id !== dragFlightId && legScope(f.leg) === targetLeg)
-        .sort((a,b) => a.position - b.position);
-      await reorderItem("flights", dragged, siblings, siblings.length);
-      await refresh();
-    });
-  });
-
-  document.querySelectorAll("[data-rental-card]").forEach(card => {
-    card.addEventListener("dragover", (e) => { e.preventDefault(); card.classList.add("drag-over"); });
-    card.addEventListener("dragleave", () => card.classList.remove("drag-over"));
-    card.addEventListener("drop", async (e) => {
-      e.preventDefault();
-      card.classList.remove("drag-over");
-      if (!dragRentalId || dragRentalId === card.dataset.rentalCard) return;
-      const { rental: dragged } = findRental(dragRentalId);
-      const siblings = (activeTrip.rentals || [])
-        .filter(r => r.id !== dragRentalId)
-        .sort((a,b) => a.position - b.position);
-      const targetIndex = siblings.findIndex(r => r.id === card.dataset.rentalCard);
-      await reorderItem("rentals", dragged, siblings, targetIndex);
-      await refresh();
+      zone.classList.remove("drag-over");
+      await applyDrop(zone, null); // dropped in empty space -> append
     });
   });
 }
