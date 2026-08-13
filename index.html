@@ -1326,6 +1326,7 @@ async function createFlight(tripId, fields){
     return_date: fields.returnDate || null, return_time: fields.returnTime || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
     points_program: fields.pointsProgram || null,
+    status: fields.status || "booked",
     passengers: fields.passengers || 1,
     flight_number: fields.flightNumber || null, confirmation_code: fields.confirmationCode || null,
     alert_below: fields.alertBelow, notes: fields.notes, position
@@ -1340,6 +1341,7 @@ async function createRental(tripId, fields){
     trip_id: tripId, kind: fields.kind || "housing", label: fields.label, url: fields.url || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
     points_program: fields.pointsProgram || null,
+    status: fields.status || "booked",
     rental_start: fields.rentalStart || null, rental_end: fields.rentalEnd || null,
     cancel_by: fields.cancelBy || null, confirmation_code: fields.confirmationCode || null,
     splits: fields.splits || [], notes: fields.notes || null, position
@@ -1846,6 +1848,12 @@ function renderEditForm(f){
     <label class="field">Points program
       ${pointsProgramFieldHTML("f", "airline")}
     </label>
+    <label class="field">Status
+      <select data-f-status>
+        <option value="booked">Booked</option>
+        <option value="watching">Watching</option>
+      </select>
+    </label>
     <label class="field">Alert below (cash)
       <input type="number" step="0.01" data-f-alert placeholder="optional">
     </label>
@@ -1920,6 +1928,12 @@ function addFlightFormHTML(tripId, trip){
     </label>
     <label class="field">Points program
       ${pointsProgramFieldHTML("nf", "airline")}
+    </label>
+    <label class="field">Status
+      <select data-nf-status>
+        <option value="booked">Booked</option>
+        <option value="watching">Watching</option>
+      </select>
     </label>
     <label class="field">Alert below (cash)
       <input type="number" step="0.01" data-nf-alert placeholder="optional">
@@ -2318,6 +2332,12 @@ function rentalFormHTML(prefix, idAttr, defaults){
     </label>
     <label class="field">Points program
       ${pointsProgramFieldHTML(p, "hotel")}
+    </label>
+    <label class="field">Status
+      <select data-${p}-status>
+        <option value="booked">Booked</option>
+        <option value="watching">Watching</option>
+      </select>
     </label>
     <label class="field span2">Notes
       <textarea data-${p}-notes placeholder="optional"></textarea>
@@ -3538,6 +3558,7 @@ function wireEvents(activeTrip){
         paidCash: pc === "" ? null : parseFloat(pc),
         paidPoints: pp === "" ? null : parseFloat(pp),
         pointsProgram: holder.querySelector("[data-nr-pointsprogram]").value.trim() || null,
+        status: holder.querySelector("[data-nr-status]").value,
         splits: gatherSplits(holder, "nr"),
         notes: holder.querySelector("[data-nr-notes]").value.trim(),
       });
@@ -3571,6 +3592,7 @@ function wireEvents(activeTrip){
         applyRentalKindToProgramField("er", e.target.value);
       });
       form.querySelector("[data-er-notes]").value = rental.notes || "";
+      form.querySelector("[data-er-status]").value = rental.status || "booked";
       fillSplitRows(form, "er", rental.splits);
       form.querySelector("[data-er-cancel]").addEventListener("click", render);
       form.querySelector("[data-er-save]").addEventListener("click", async () => {
@@ -3588,6 +3610,7 @@ function wireEvents(activeTrip){
           paid_cash: pc === "" ? null : parseFloat(pc),
           paid_points: pp === "" ? null : parseFloat(pp),
           points_program: form.querySelector("[data-er-pointsprogram]").value.trim() || null,
+          status: form.querySelector("[data-er-status]").value,
           splits: gatherSplits(form, "er"),
           notes: form.querySelector("[data-er-notes]").value.trim() || null,
         };
@@ -3638,6 +3661,7 @@ function wireEvents(activeTrip){
       wirePointsProgramField("f");
       form.querySelector("[data-f-alert]").value = flight.alert_below ?? "";
       form.querySelector("[data-f-notes]").value = flight.notes || "";
+      form.querySelector("[data-f-status]").value = flight.status || "booked";
       // Only keep auto-regenerating if the current label matches what we'd generate.
       const labelEl = form.querySelector("[data-f-label]");
       labelEl.dataset.auto =
@@ -3676,6 +3700,7 @@ function wireEvents(activeTrip){
           paid_cash: paidCash,
           paid_points: paidPoints,
           points_program: form.querySelector("[data-f-pointsprogram]").value.trim() || null,
+          status: form.querySelector("[data-f-status]").value,
           passengers,
           flight_number: form.querySelector("[data-f-flightnumber]").value.trim() || null,
           confirmation_code: form.querySelector("[data-f-confirmation]").value.trim() || null,
@@ -3818,6 +3843,7 @@ function wireAddFlightForm(tripId){
       flightNumber: holder.querySelector("[data-nf-flightnumber]").value.trim() || null,
       confirmationCode: holder.querySelector("[data-nf-confirmation]").value.trim() || null,
       alertBelow: ab === "" ? null : parseFloat(ab),
+      status: holder.querySelector("[data-nf-status]").value,
       notes
     });
     await refresh();
