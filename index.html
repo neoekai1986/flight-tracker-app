@@ -256,14 +256,12 @@
   .collab-chip{background:var(--panel2);border:1px solid var(--line);border-radius:12px;
       padding:3px 6px 3px 10px;font-size:12.5px;display:flex;align-items:center;gap:6px}
 
-  /* Outbound and return each get their own full-width row, matching how the
-     watching lane stacks its cards — a flight card carries a trend chart and
-     a history table, so splitting the lane in half starved both. */
-  .pair-row{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:14px}
+  .pair-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
   .leg-tag{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);
            font-weight:500;margin-bottom:6px;font-family:Inter,system-ui,sans-serif}
   .leg-col{min-height:20px}
   .solo-list{display:flex;flex-direction:column;gap:16px}
+  @media (max-width:900px){ .pair-row{grid-template-columns:1fr} }
 
   .card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px 20px;
       min-height:104px}
