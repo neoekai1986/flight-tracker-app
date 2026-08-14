@@ -271,6 +271,13 @@
   .card.card-watching{border-color:var(--amber);box-shadow:inset 5px 0 0 0 var(--amber);
       background:color-mix(in srgb, var(--amber) 9%, var(--panel2))}
   .card.drag-over{border-color:var(--amber)}
+  /* The off-screen clone the browser snapshots as the drag image. Parked far
+     off-canvas so it never flashes on screen before the snapshot is taken. */
+  .drag-ghost{position:fixed;top:-10000px;left:-10000px;pointer-events:none;
+      opacity:.75;border-color:var(--amber);box-shadow:0 12px 28px rgba(0,0,0,.4)}
+  /* The card left behind, dimmed so the one under the cursor reads as the
+     real thing. */
+  .card.dragging{opacity:.4}
   .card.flash-highlight{animation:flash-highlight 2s ease-out}
   @keyframes flash-highlight{
     0%, 15%{border-color:var(--amber);box-shadow:0 0 0 3px color-mix(in srgb, var(--amber) 35%, transparent)}
@@ -4152,11 +4159,31 @@ let dragFlightId = null;
 let dragRentalId = null;
 
 function wireDragEvents(activeTrip){
+  // `draggable` lives on the grip, so the browser's default drag image is just
+  // that tiny glyph. Snapshot the whole card instead, from an off-screen clone
+  // — the clone is what carries the translucency, since applying opacity to the
+  // live card after dragstart can't change an already-taken snapshot.
+  const useCardAsDragImage = (e, handle) => {
+    const card = handle.closest(".card");
+    if (!card) return;
+    const rect = card.getBoundingClientRect();
+    const ghost = card.cloneNode(true);
+    ghost.classList.add("drag-ghost");
+    ghost.style.width = `${rect.width}px`;
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, e.clientX - rect.left, e.clientY - rect.top);
+    // The snapshot is taken synchronously, so the clone can go straight away.
+    setTimeout(() => ghost.remove(), 0);
+    // Deferred so it can't affect the snapshot above.
+    setTimeout(() => card.classList.add("dragging"), 0);
+  };
+
   document.querySelectorAll("[data-drag-handle]").forEach(handle => {
     handle.addEventListener("dragstart", (e) => {
       dragFlightId = handle.dataset.dragHandle;
       dragRentalId = null;
       e.dataTransfer.effectAllowed = "move";
+      useCardAsDragImage(e, handle);
     });
   });
   document.querySelectorAll("[data-rental-drag]").forEach(handle => {
@@ -4164,12 +4191,16 @@ function wireDragEvents(activeTrip){
       dragRentalId = handle.dataset.rentalDrag;
       dragFlightId = null;
       e.dataTransfer.effectAllowed = "move";
+      useCardAsDragImage(e, handle);
     });
   });
   // Without this an abandoned drag leaves its id set, and the next unrelated
   // drop acts on a card the user is no longer dragging.
   document.querySelectorAll("[data-drag-handle],[data-rental-drag]").forEach(handle => {
-    handle.addEventListener("dragend", () => { dragFlightId = null; dragRentalId = null; });
+    handle.addEventListener("dragend", () => {
+      dragFlightId = null; dragRentalId = null;
+      handle.closest(".card")?.classList.remove("dragging");
+    });
   });
 
   // Every lane advertises what it holds, so one code path can answer "may this
