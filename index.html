@@ -1900,25 +1900,28 @@ function renderEditForm(f){
     <label class="field span2">URL (optional; airports &amp; date auto-fill from Southwest/Kayak links)
       <input type="text" data-f-url value="">
     </label>
+    <label class="field span2">Title (auto-generated from airports + date; type to override)
+      <input type="text" data-f-label value="">
+    </label>
     <label class="field">From (airport)
       <input type="text" data-f-origin placeholder="BWI" maxlength="4" style="text-transform:uppercase">
     </label>
     <label class="field">To (airport)
       <input type="text" data-f-dest placeholder="DEN" maxlength="4" style="text-transform:uppercase">
     </label>
-    <label class="field">Depart date
-      <input type="date" data-f-date>
-    </label>
-    <label class="field">Depart time
-      <input type="time" data-f-time>
-    </label>
-    <label class="field">Leg
-      <select data-f-leg>
+    <label class="field span2">Leg
+      <select data-f-leg style="max-width:280px">
         <option value="">Standalone</option>
         <option value="outbound">Outbound</option>
         <option value="return">Return</option>
         <option value="roundtrip">Round trip</option>
       </select>
+    </label>
+    <label class="field">Depart date
+      <input type="date" data-f-date>
+    </label>
+    <label class="field">Depart time
+      <input type="time" data-f-time>
     </label>
     <div data-f-return-wrap style="display:none">
       <label class="field">Return date
@@ -1932,9 +1935,6 @@ function renderEditForm(f){
           data-dr-start="[data-f-date]" data-dr-end="[data-f-return-date]">📅 pick depart/return on one calendar</button>
       </div>
     </div>
-    <label class="field span2">Title (auto-generated from airports + date; type to override)
-      <input type="text" data-f-label value="">
-    </label>
     <label class="field">Currency
       <input type="text" data-f-currency value="">
     </label>
@@ -1981,25 +1981,28 @@ function addFlightFormHTML(tripId, trip){
     <label class="field span2">URL (optional; paste a Southwest/Kayak link — airports &amp; date auto-fill)
       <input type="text" data-nf-url placeholder="paste search URL">
     </label>
+    <label class="field span2">Title (auto-generated; type to override)
+      <input type="text" data-nf-label placeholder="e.g. BWI → MCO, Jan 5">
+    </label>
     <label class="field">From (airport)
       <input type="text" data-nf-origin placeholder="BWI" maxlength="4" style="text-transform:uppercase">
     </label>
     <label class="field">To (airport)
       <input type="text" data-nf-dest placeholder="DEN" maxlength="4" style="text-transform:uppercase">
     </label>
-    <label class="field">Depart date
-      <input type="date" data-nf-date value="${trip?.travel_start || ""}">
-    </label>
-    <label class="field">Depart time
-      <input type="time" data-nf-time>
-    </label>
-    <label class="field">Leg
-      <select data-nf-leg>
+    <label class="field span2">Leg
+      <select data-nf-leg style="max-width:280px">
         <option value="">Standalone</option>
         <option value="outbound">Outbound</option>
         <option value="return">Return</option>
         <option value="roundtrip">Round trip</option>
       </select>
+    </label>
+    <label class="field">Depart date
+      <input type="date" data-nf-date value="${trip?.travel_start || ""}">
+    </label>
+    <label class="field">Depart time
+      <input type="time" data-nf-time>
     </label>
     <div data-nf-return-wrap style="display:none">
       <label class="field">Return date
@@ -2013,9 +2016,6 @@ function addFlightFormHTML(tripId, trip){
           data-dr-start="[data-nf-date]" data-dr-end="[data-nf-return-date]">📅 pick depart/return on one calendar</button>
       </div>
     </div>
-    <label class="field span2">Title (auto-generated; type to override)
-      <input type="text" data-nf-label placeholder="e.g. BWI → MCO, Jan 5">
-    </label>
     <label class="field">Currency
       <input type="text" data-nf-currency value="USD">
     </label>
