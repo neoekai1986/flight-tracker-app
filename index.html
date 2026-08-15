@@ -430,6 +430,13 @@
   .price-trend-head{display:flex;justify-content:space-between;align-items:baseline;
       font-size:11.5px;margin-bottom:2px}
   .price-trend-label{color:var(--muted);letter-spacing:.08em;text-transform:uppercase;font-size:10.5px}
+  .price-trend-ranges{display:inline-flex;gap:2px;margin-left:8px}
+  .trend-range{background:transparent;border:1px solid var(--line);color:var(--muted);
+      font-size:9.5px;line-height:1;padding:3px 6px;border-radius:6px;cursor:pointer;
+      font-family:inherit;letter-spacing:.04em}
+  .trend-range:hover{border-color:var(--amber);color:var(--amber)}
+  .trend-range.active{background:var(--amber);border-color:var(--amber);color:var(--btn-ink);font-weight:600}
+  .price-trend-delta{margin-left:auto}
   /* Left gutter holds the min/max labels; the stretched SVG fills the rest. */
   .price-trend-plot{display:flex;align-items:stretch;gap:6px}
   .price-trend-yaxis{position:relative;width:52px;flex-shrink:0}
@@ -518,6 +525,12 @@ let highlightCategoryId = null; // null = none; "none" = uncategorized; else a c
 // trips — trip.id -> Set of "flight:id"/"rental:id" keys. Never persisted;
 // resets on reload, survives re-renders since it's a module-level var.
 let planningSelections = new Map();
+
+// Per-chart x-axis window: flight id -> "1m" | "3m" | "all" (default "all").
+// Same lifetime as planningSelections — view state, not data, so it lives in
+// memory and survives re-renders without touching the database.
+let chartRanges = new Map();
+const CHART_RANGE_DAYS = { "1m": 30, "3m": 90 };
 
 const SECTION_KEY = "flight-tracker-section";
 let activeSection = localStorage.getItem(SECTION_KEY) || "trips"; // "trips" | "wishlist"
@@ -1626,15 +1639,70 @@ function checkPriceUrl(f){
 // dates entered (not just entry index) so a cluster of same-week checks
 // reads differently from checks spread over months. Needs 2+ entries to
 // draw a trend; a single data point has nothing to trend against.
-function renderPriceTrendChart(entries, paidRef, cur, isPoints){
+// Which series the sparkline plots. One y-axis can't mix cash and points, so
+// it picks the unit the flight was bought in when that has enough checks to
+// draw, else whichever unit has been logged more. Shared by renderCard and the
+// range-preset handler so the two can't drift apart.
+function flightChartSeries(f){
+  const entries = f.price_logs || [];
+  const paidInPoints = f.paid_points != null && f.paid_cash == null;
+  const cashOnly = entries.filter(e => !e.is_points);
+  const pointsOnly = entries.filter(e => e.is_points);
+  const preferred = paidInPoints ? pointsOnly : cashOnly;
+  const fallback = paidInPoints ? cashOnly : pointsOnly;
+  const isPoints = preferred.length >= 2
+    ? paidInPoints
+    : (fallback.length >= 2 ? !paidInPoints : paidInPoints);
+  return {
+    entries: preferred.length >= 2 ? preferred : fallback,
+    paidRef: isPoints ? f.paid_points : f.paid_cash,
+    isPoints,
+  };
+}
+
+// "Dec 4" from a timestamp, for axis ends that fall on a window boundary
+// rather than on a logged check.
+function tsShortDate(ts){
+  const d = new Date(ts);
+  return fmtShortDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);
+}
+
+function renderPriceTrendChart(entries, paidRef, cur, isPoints, chartId){
   if (entries.length < 2) return "";
   const fmt = v => isPoints ? fmtPoints(v) : fmtCash(v, cur);
   const toTs = e => { const [y,m,d] = e.date.split("-").map(Number); return new Date(y, m-1, d).getTime(); };
-  const sorted = [...entries].sort((a,b) => toTs(a) - toTs(b));
+  const all = [...entries].sort((a,b) => toTs(a) - toTs(b));
+
+  const range = chartRanges.get(chartId) || "all";
+  const days = CHART_RANGE_DAYS[range];
+  const lastTs = toTs(all[all.length - 1]);
+  const windowStart = days ? lastTs - days * 86400000 : null;
+  // Zooming out only changes what the axis spans — older checks stay in the
+  // table below, they're just outside the plotted window.
+  const sorted = days ? all.filter(e => toTs(e) >= windowStart) : all;
+
+  const rangeBar = `<span class="price-trend-ranges">${
+    [["1m","1M"],["3m","3M"],["all","All"]].map(([v,label]) =>
+      `<button type="button" class="trend-range${range === v ? " active" : ""}" data-chart-range="${chartId}:${v}">${label}</button>`
+    ).join("")}</span>`;
+
+  if (sorted.length < 2){
+    return `
+    <div class="price-trend" data-trend-for="${chartId}">
+      <div class="price-trend-head">
+        <span class="price-trend-label">Price trend</span>
+        ${rangeBar}
+      </div>
+      <p class="empty-hist">Only ${sorted.length} check in this window — widen it to see a trend.</p>
+    </div>`;
+  }
+
   const first = sorted[0], last = sorted[sorted.length - 1];
 
   const W = 300, H = 60, padX = 6, padTop = 8, padBottom = 16;
-  const xMin = toTs(first), xMax = toTs(last);
+  // A preset anchors the left edge to the window start, so a cluster of
+  // same-week checks reads as a cluster instead of being stretched to fill.
+  const xMin = days ? windowStart : toTs(first), xMax = lastTs;
   const prices = sorted.map(e => e.price);
   let yMin = Math.min(...prices), yMax = Math.max(...prices);
   if (paidRef != null){ yMin = Math.min(yMin, paidRef); yMax = Math.max(yMax, paidRef); }
@@ -1664,10 +1732,11 @@ function renderPriceTrendChart(entries, paidRef, cur, isPoints){
   const botPct = (yAt(yMin) / H) * 100;
 
   return `
-    <div class="price-trend">
+    <div class="price-trend" data-trend-for="${chartId}">
       <div class="price-trend-head">
         <span class="price-trend-label">Price trend</span>
-        <span class="${deltaCls}">${deltaTxt} since ${fmtShortDate(first.date)}</span>
+        ${rangeBar}
+        <span class="price-trend-delta ${deltaCls}">${deltaTxt} since ${fmtShortDate(first.date)}</span>
       </div>
       <div class="price-trend-plot">
         <div class="price-trend-yaxis">
@@ -1680,7 +1749,7 @@ function renderPriceTrendChart(entries, paidRef, cur, isPoints){
           ${circles}
         </svg>
       </div>
-      <div class="price-trend-axis"><span>${fmtShortDate(first.date)}</span><span>${fmtShortDate(last.date)}</span></div>
+      <div class="price-trend-axis"><span>${tsShortDate(xMin)}</span><span>${tsShortDate(xMax)}</span></div>
     </div>`;
 }
 
@@ -1732,22 +1801,10 @@ function renderCard(trip, f){
         </td>
       </tr>`;
     }).join("");
-    // A single sparkline can't mix cash and points on one y-axis (different
-    // units, wildly different scales), so it plots one series: the unit this
-    // flight was bought in when that has enough points to draw, else whichever
-    // unit has been logged more.
-    const cashOnly = entries.filter(e => !e.is_points);
-    const pointsOnly = entries.filter(e => e.is_points);
-    const preferred = paidInPoints ? pointsOnly : cashOnly;
-    const fallback = paidInPoints ? cashOnly : pointsOnly;
-    const chartIsPoints = preferred.length >= 2
-      ? paidInPoints
-      : (fallback.length >= 2 ? !paidInPoints : paidInPoints);
-    const chartEntries = preferred.length >= 2 ? preferred : fallback;
-    const chartPaidRef = chartIsPoints ? f.paid_points : f.paid_cash;
+    const series = flightChartSeries(f);
     const extra = entries.length - 3;
     histHTML = `
-      ${renderPriceTrendChart(chartEntries, chartPaidRef, cur, chartIsPoints)}
+      ${renderPriceTrendChart(series.entries, series.paidRef, cur, series.isPoints, f.id)}
       <div class="hist-wrap">
         <table class="hist${extra > 0 ? " hist-collapsed" : ""}" data-hist="${f.id}">
           <tr><th>Date</th><th>Price seen</th><th>vs. paid</th><th></th><th></th></tr>
@@ -2804,6 +2861,24 @@ function wireViewMenu(){
     });
   });
 }
+
+// Chart range presets swap just that one chart rather than calling render(),
+// which would tear down any add/edit form open elsewhere on the page. Wired
+// once at the document level so the replaced markup needs no re-binding.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-chart-range]");
+  if (!btn) return;
+  const sep = btn.dataset.chartRange.lastIndexOf(":");
+  const chartId = btn.dataset.chartRange.slice(0, sep);
+  const range = btn.dataset.chartRange.slice(sep + 1);
+  chartRanges.set(chartId, range);
+  const holder = document.querySelector(`[data-trend-for="${chartId}"]`);
+  const found = findFlight(chartId);
+  if (!holder || !found) return;
+  const s = flightChartSeries(found.flight);
+  holder.outerHTML = renderPriceTrendChart(
+    s.entries, s.paidRef, found.flight.currency || "USD", s.isPoints, chartId);
+});
 
 // Native <details> doesn't close itself on an inside click or an outside
 // click — wire both, once, at the document level (event delegation, so it
