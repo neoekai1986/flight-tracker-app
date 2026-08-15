@@ -149,6 +149,44 @@
   .auth-switch button{background:none;border:none;color:var(--amber);cursor:pointer;font-size:13px;
       text-decoration:underline;padding:0}
 
+  /* Signed-out landing. Explains what the app is for and carries the sign-up
+     form, so the first screen isn't a bare password box on an empty page. */
+  .landing{max-width:1080px;margin:0 auto;padding:40px 24px 72px}
+  .landing-hero{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:48px;
+      align-items:center;margin-bottom:64px}
+  .landing-logo{width:260px;max-width:70%;height:auto;display:block;margin-bottom:20px}
+  .landing-title{font-family:'Poppins',sans-serif;font-weight:700;font-size:40px;
+      line-height:1.15;letter-spacing:-.01em;margin-bottom:14px}
+  .landing-lede{font-size:16px;line-height:1.6;color:var(--muted);max-width:52ch}
+  /* Overrides the standalone card's centring — here it's a hero column. */
+  .landing-auth{margin:0;width:100%;max-width:none;box-shadow:0 10px 30px var(--shadow)}
+
+  .landing-lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;
+      margin-bottom:56px}
+  .landing-lane{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+      padding:26px 24px}
+  .landing-lane-icon{width:56px;height:56px;display:block;margin-bottom:14px}
+  .landing-lane h2{font-family:'Poppins',sans-serif;font-weight:600;font-size:19px;margin-bottom:8px}
+  .landing-lane p{font-size:14px;line-height:1.6;color:var(--muted)}
+
+  .landing-points{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:28px 40px;padding-top:44px;border-top:1px solid var(--line)}
+  .landing-point h3{font-family:'Poppins',sans-serif;font-weight:600;font-size:16px;margin-bottom:6px}
+  .landing-point p{font-size:14px;line-height:1.6;color:var(--muted)}
+  .landing-foot{margin-top:48px;padding-top:24px;border-top:1px solid var(--line);
+      font-size:13px;color:var(--muted);text-align:center}
+
+  @media (max-width:900px){
+    .landing-hero{grid-template-columns:minmax(0,1fr);gap:32px}
+    /* Form first on a phone: someone who already has an account shouldn't
+       scroll past the whole pitch to reach it. */
+    .landing-auth{order:-1;max-width:420px}
+    .landing-title{font-size:31px}
+    .landing-lanes{grid-template-columns:minmax(0,1fr)}
+    .landing-points{grid-template-columns:minmax(0,1fr)}
+  }
+  @media (max-width:640px){ .landing{padding:24px 16px 56px} }
+
   /* Sidebar trip list (vertical — was a horizontal tab strip pre-sidebar) */
   .tabs{display:flex;flex-direction:column;gap:2px}
   .tab{background:transparent;border:none;color:var(--muted);padding:8px 10px;font-size:13.5px;
@@ -1188,10 +1226,73 @@ function parseScreenshotText(text){
 
 // ---------------- Auth screen ----------------
 
+// The three lanes a trip is built from, shown with the same icons the cards
+// use so the landing page and the app read as one thing.
+const LANDING_LANES = [
+  { icon: "icon-flight.png", title: "Flights",
+    body: "Outbound and return kept together, round trips as one booking, and the per-passenger price multiplied out for you." },
+  { icon: "icon-hotel.png", title: "Housing",
+    body: "Hotels and rentals with the free-cancellation deadline on the card, plus who owes what when you split the bill." },
+  { icon: "icon-car.png", title: "Cars",
+    body: "Pick-up and drop-off dates, confirmation codes, and the cost folded into the same trip total as everything else." },
+];
+
+const LANDING_POINTS = [
+  { h: "Watch a price instead of guessing",
+    p: "Log what you see each time you check. The trend graph shows where it's gone, and anything under the number you set gets flagged." },
+  { h: "Cash and points, side by side",
+    p: "Record either — or both on one booking. Points stay tagged to the program they came from, so Southwest and Hilton never get added together." },
+  { h: "Keep options separate from plans",
+    p: "Anything you're still deciding on sits in Watching, out of your totals. Tick a few to price out a combination before you commit." },
+  { h: "Bring everyone along",
+    p: "Invite family to a trip by email. Wish List Planning gives each of them a place to pitch a destination with a photo and a reason." },
+];
+
+function renderLanding(bodyHTML){
+  return `
+  <div class="landing">
+    <section class="landing-hero">
+      <div class="landing-intro">
+        <img src="logo.png" alt="Yes, Yes, with E-Kai You Travel" class="landing-logo">
+        <h1 class="landing-title">Every piece of the trip, in one place.</h1>
+        <p class="landing-lede">Flights, somewhere to stay, and a car — tracked together per trip,
+          with what you paid, what you're still watching, and how the price has moved since you
+          started looking.</p>
+      </div>
+      <div class="auth-wrap landing-auth">
+        ${bodyHTML}
+        ${authError ? `<p class="err">${esc(authError)}</p>` : ""}
+        ${authMsg ? `<p class="msg">${esc(authMsg)}</p>` : ""}
+      </div>
+    </section>
+
+    <section class="landing-lanes">
+      ${LANDING_LANES.map(l => `
+        <div class="landing-lane">
+          <img src="${l.icon}" alt="" class="landing-lane-icon">
+          <h2>${l.title}</h2>
+          <p>${l.body}</p>
+        </div>`).join("")}
+    </section>
+
+    <section class="landing-points">
+      ${LANDING_POINTS.map(p => `
+        <div class="landing-point">
+          <h3>${p.h}</h3>
+          <p>${p.p}</p>
+        </div>`).join("")}
+    </section>
+
+    <p class="landing-foot">Free to use. Your trips are private to your account
+      until you invite someone to one.</p>
+  </div>`;
+}
+
 function renderAuth(){
-  document.getElementById("loggedOutBrand").style.display = "";
+  // The landing page carries its own logo, so the shared logged-out brand row
+  // would just repeat it.
+  document.getElementById("loggedOutBrand").style.display = "none";
   document.getElementById("sidebar").innerHTML = "";
-  document.getElementById("subtext").textContent = "Sign in to see your flights.";
   let body;
   if (authMode === "reset"){
     body = `
@@ -1228,7 +1329,10 @@ function renderAuth(){
       ${!isSignup ? `<p class="auth-switch"><button id="a-forgot">Forgot password?</button></p>` : ""}`;
   }
 
-  root.innerHTML = `
+  // Someone following a reset link, or asking for one, has already decided to
+  // use the thing — pitching it at them is noise. They get the bare card.
+  const pitching = authMode === "login" || authMode === "signup";
+  root.innerHTML = pitching ? renderLanding(body) : `
     <div class="auth-wrap">
       ${body}
       ${authError ? `<p class="err">${esc(authError)}</p>` : ""}
