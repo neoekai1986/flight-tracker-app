@@ -437,6 +437,9 @@
   .trend-range:hover{border-color:var(--amber);color:var(--amber)}
   .trend-range.active{background:var(--amber);border-color:var(--amber);color:var(--btn-ink);font-weight:600}
   .price-trend-delta{margin-left:auto}
+  .trend-note{color:var(--muted);font-size:11px;margin:4px 0 0;line-height:1.5}
+  .trend-convert{font-size:11px;color:var(--amber);padding:0 2px}
+  .trend-convert:hover{color:var(--amber);text-decoration:underline}
   /* Left gutter holds the min/max labels; the stretched SVG fills the rest. */
   .price-trend-plot{display:flex;align-items:stretch;gap:6px}
   .price-trend-yaxis{position:relative;width:52px;flex-shrink:0}
@@ -1484,6 +1487,14 @@ async function updatePriceLog(id, patch){
   const { error } = await supabase.from("price_logs").update(patch).eq("id", id);
   if (error) alert(error.message);
 }
+// Flips a batch of checks between cash and points in one round trip — used
+// by the chart's "convert" action for rows logged before the unit picker
+// existed. Only the unit flag changes; the recorded number is untouched.
+async function convertPriceLogUnits(ids, isPoints){
+  const { error } = await supabase.from("price_logs").update({ is_points: isPoints }).in("id", ids);
+  if (error) alert(error.message);
+}
+
 async function deletePriceLog(id){
   const { error } = await supabase.from("price_logs").delete().eq("id", id);
   if (error) alert(error.message);
@@ -1653,10 +1664,15 @@ function flightChartSeries(f){
   const isPoints = preferred.length >= 2
     ? paidInPoints
     : (fallback.length >= 2 ? !paidInPoints : paidInPoints);
+  const chosen = preferred.length >= 2 ? preferred : fallback;
   return {
-    entries: preferred.length >= 2 ? preferred : fallback,
+    entries: chosen,
     paidRef: isPoints ? f.paid_points : f.paid_cash,
     isPoints,
+    // Checks logged in the other unit. They stay in the history table; the
+    // chart can't plot them on this axis, so it says so rather than dropping
+    // them silently.
+    excluded: chosen === preferred ? fallback : preferred,
   };
 }
 
@@ -1667,9 +1683,19 @@ function tsShortDate(ts){
   return fmtShortDate(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`);
 }
 
-function renderPriceTrendChart(entries, paidRef, cur, isPoints, chartId){
+function renderPriceTrendChart(series, cur, chartId){
+  const { entries, paidRef, isPoints, excluded } = series;
   if (entries.length < 2) return "";
   const fmt = v => isPoints ? fmtPoints(v) : fmtCash(v, cur);
+
+  // Legacy rows logged before the unit picker existed sit in the other unit,
+  // so offer to bring them across instead of leaving them off the chart.
+  const nOut = (excluded || []).length;
+  const unitNote = nOut ? `
+    <p class="trend-note">${nOut} check${nOut > 1 ? "s" : ""} logged in
+      ${isPoints ? "$" : "pts"} ${nOut > 1 ? "aren't" : "isn't"} plotted here.
+      <button type="button" class="btn-link trend-convert" data-convert-unit="${chartId}"
+        >Convert to ${isPoints ? "pts" : "$"}</button></p>` : "";
   const toTs = e => { const [y,m,d] = e.date.split("-").map(Number); return new Date(y, m-1, d).getTime(); };
   const all = [...entries].sort((a,b) => toTs(a) - toTs(b));
 
@@ -1694,6 +1720,7 @@ function renderPriceTrendChart(entries, paidRef, cur, isPoints, chartId){
         ${rangeBar}
       </div>
       <p class="empty-hist">Only ${sorted.length} check in this window — widen it to see a trend.</p>
+      ${unitNote}
     </div>`;
   }
 
@@ -1750,6 +1777,7 @@ function renderPriceTrendChart(entries, paidRef, cur, isPoints, chartId){
         </svg>
       </div>
       <div class="price-trend-axis"><span>${tsShortDate(xMin)}</span><span>${tsShortDate(xMax)}</span></div>
+      ${unitNote}
     </div>`;
 }
 
@@ -1804,7 +1832,7 @@ function renderCard(trip, f){
     const series = flightChartSeries(f);
     const extra = entries.length - 3;
     histHTML = `
-      ${renderPriceTrendChart(series.entries, series.paidRef, cur, series.isPoints, f.id)}
+      ${renderPriceTrendChart(series, cur, f.id)}
       <div class="hist-wrap">
         <table class="hist${extra > 0 ? " hist-collapsed" : ""}" data-hist="${f.id}">
           <tr><th>Date</th><th>Price seen</th><th>vs. paid</th><th></th><th></th></tr>
@@ -2876,8 +2904,22 @@ document.addEventListener("click", (e) => {
   const found = findFlight(chartId);
   if (!holder || !found) return;
   const s = flightChartSeries(found.flight);
-  holder.outerHTML = renderPriceTrendChart(
-    s.entries, s.paidRef, found.flight.currency || "USD", s.isPoints, chartId);
+  holder.outerHTML = renderPriceTrendChart(s, found.flight.currency || "USD", chartId);
+});
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-convert-unit]");
+  if (!btn) return;
+  const flightId = btn.dataset.convertUnit;
+  const found = findFlight(flightId);
+  if (!found) return;
+  const s = flightChartSeries(found.flight);
+  const n = s.excluded.length;
+  if (!n) return;
+  const to = s.isPoints ? "points" : "cash";
+  if (!confirm(`Convert ${n} check${n > 1 ? "s" : ""} to ${to}? The recorded numbers stay the same — only the unit changes.`)) return;
+  await convertPriceLogUnits(s.excluded.map(x => x.id), s.isPoints);
+  await refresh();
 });
 
 // Native <details> doesn't close itself on an inside click or an outside
