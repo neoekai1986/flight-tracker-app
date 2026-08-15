@@ -273,8 +273,15 @@
   .solo-list{display:flex;flex-direction:column;gap:16px}
   @media (max-width:900px){ .pair-row,.watch-grid{grid-template-columns:1fr} }
 
-  .card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:16px 20px;
-      min-height:104px}
+  /* No min-height any more: a collapsed result row is as tall as its content
+     and that's the point — the old floor was sized for the price-tracking
+     block that now lives behind the caret. */
+  /* Declared a size container so the result row inside can lay itself out
+     against the card's own width. A viewport media query can't do this job: the
+     same card renders full-lane for flights, half a lane in a pair-row, and
+     half again in the housing/cars split, all at one viewport width. */
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:14px 18px;
+      container-type:inline-size;container-name:card}
   .card.card-booked{border-color:var(--good);box-shadow:inset 5px 0 0 0 var(--good);
       background:color-mix(in srgb, var(--good) 8%, var(--panel2))}
   .card.card-watching{border-color:var(--amber);box-shadow:inset 5px 0 0 0 var(--amber);
@@ -308,6 +315,49 @@
   .meta-line b{color:var(--ink);font-weight:600}
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+
+  /* Kayak-style result row: everything you compare on — route, dates, price —
+     sits on one line, and the price-tracking detail folds away underneath. */
+  .res-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;
+      gap:8px 20px;align-items:center}
+  .res-main{min-width:0}
+  .res-main .meta-line{margin-bottom:0}
+  .res-main .notes{margin-bottom:0;margin-top:4px}
+  .res-price{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .res-price .res-price-main{font-size:20px;font-weight:700;line-height:1.2;
+      display:block;overflow-wrap:anywhere;white-space:normal}
+  .res-price .res-price-sub{font-size:11.5px;color:var(--muted);display:block;margin-top:2px}
+  .res-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+  /* The cluster used to sit last in the title row and push itself right; in
+     the action group it's just another item. */
+  .res-actions .att-cluster{margin-left:0}
+  /* The chevron only turns; the row it opens is a sibling, so no transform on
+     the panel itself and nothing to animate the height of. */
+  .res-toggle{background:none;border:1px solid var(--line);border-radius:8px;
+      color:var(--muted);cursor:pointer;font-size:11px;line-height:1;padding:7px 8px;
+      font-family:inherit}
+  .res-toggle:hover{color:var(--ink);border-color:var(--amber)}
+  .res-toggle .res-caret{display:inline-block;transition:transform .15s ease}
+  .res-toggle[aria-expanded="true"] .res-caret{transform:rotate(180deg)}
+  .res-detail{margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+  /* Two steps down as the card narrows. First the actions drop to their own
+     line — they're the widest column and the least useful to scan — while the
+     price stays beside the title, which is the pairing the row exists for. Only
+     when even that won't fit does the price stack too. */
+  @container card (max-width:520px){
+    /* fit-content rather than auto: "$640.00" takes only the ~70px it needs,
+       while a long award price like "8,000 pts (Chase Ultimate Rewards)" is
+       capped at 45% instead of taking the row and leaving the title wrapping a
+       word per line. */
+    .res-row{grid-template-columns:minmax(0,1fr) fit-content(45%);gap:8px 14px}
+    .res-price{white-space:normal}
+    .res-price .res-price-main{font-size:17px}
+    .res-actions{grid-column:1 / -1;justify-content:flex-start;flex-wrap:wrap}
+  }
+  @container card (max-width:330px){
+    .res-row{grid-template-columns:minmax(0,1fr)}
+    .res-price{text-align:left}
+  }
 
   .wishlist-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:16px}
   .wishlist-card{background:var(--panel2);border:1px solid var(--line);border-radius:14px;
@@ -564,6 +614,11 @@ let planningSelections = new Map();
 // memory and survives re-renders without touching the database.
 let chartRanges = new Map();
 const CHART_RANGE_DAYS = { "1m": 30, "3m": 90 };
+
+// Which cards have their price-tracking detail open — card id -> true. Same
+// lifetime and reasoning as chartRanges: the collapse is what gives the result
+// rows their density, and which rows you left open is view state, not data.
+let openCardDetails = new Set();
 
 const SECTION_KEY = "flight-tracker-section";
 let activeSection = localStorage.getItem(SECTION_KEY) || "trips"; // "trips" | "wishlist"
@@ -1826,9 +1881,9 @@ function renderCard(trip, f){
   const moveOptions = trips.filter(t => t.id !== trip.id)
     .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
   const passengers = f.passengers || 1;
-  const metaBits = [passengers > 1
-    ? `Paid <b>${paidText(f)}</b> × ${passengers} = <b>${flightTotalText(f)}</b>`
-    : `Paid <b>${paidText(f)}</b>`];
+  // What used to lead the meta line now has its own right-aligned block, so
+  // the line is free for the details you scan past the price.
+  const metaBits = [];
   if (f.leg === "roundtrip" && f.return_date){
     const ret = [fmtShortDate(f.return_date), fmtTime(f.return_time)].filter(Boolean).join(" ");
     metaBits.push(`Return <b>${esc(ret)}</b>`);
@@ -1881,46 +1936,61 @@ function renderCard(trip, f){
       </button>` : ""}`;
   }
 
+  const open = openCardDetails.has(f.id);
   return `
   <div class="card${f.status === "watching" ? " card-watching" : " card-booked"}" data-card="${f.id}" data-leg="${legScope(f.leg)}" data-trip="${trip.id}">
-    <div class="card-title-row">
-      <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
-      <h3>${esc(f.label)}</h3>
-      ${f.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
-      ${attachmentHeader("flight", f.id, f.attachments)}
-    </div>
-    <p class="meta-line">${metaBits.join(" &middot; ")}</p>
-    ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
-    ${attachmentHolders(f.id)}
-    <div class="row">
-      ${f.url ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener">Check price →</a>` : ""}
-      <details class="menu card-menu">
-        <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
-        <div class="menu-panel">
-          <button type="button" data-edit-flight="${f.id}">Edit</button>
-          <button type="button" data-toggle-flight-status="${f.id}" data-next-status="${f.status === "watching" ? "booked" : "watching"}">
-            ${f.status === "watching" ? "Mark booked" : "Mark watching"}</button>
-          ${moveOptions ? `<div class="menu-divider"></div>
-            <label class="menu-label">Move to trip
-              <select data-move-flight="${f.id}">
-                <option value="">Choose trip…</option>
-                ${moveOptions}
-              </select>
-            </label>` : ""}
-          <div class="menu-divider"></div>
-          <button type="button" class="menu-danger" data-del-flight="${f.id}">Delete flight</button>
+    <div class="res-row">
+      <div class="res-main">
+        <div class="card-title-row">
+          <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
+          <h3>${esc(f.label)}</h3>
+          ${f.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
         </div>
-      </details>
+        ${metaBits.length ? `<p class="meta-line">${metaBits.join(" &middot; ")}</p>` : ""}
+        ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
+      </div>
+      <div class="res-price">
+        <span class="res-price-main">${flightTotalText(f)}</span>
+        ${passengers > 1 ? `<span class="res-price-sub">${paidText(f)} × ${passengers}</span>` : ""}
+      </div>
+      <div class="res-actions">
+        ${attachmentHeader("flight", f.id, f.attachments)}
+        ${f.url ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener">Check price →</a>` : ""}
+        <details class="menu card-menu">
+          <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
+          <div class="menu-panel">
+            <button type="button" data-edit-flight="${f.id}">Edit</button>
+            <button type="button" data-toggle-flight-status="${f.id}" data-next-status="${f.status === "watching" ? "booked" : "watching"}">
+              ${f.status === "watching" ? "Mark booked" : "Mark watching"}</button>
+            ${moveOptions ? `<div class="menu-divider"></div>
+              <label class="menu-label">Move to trip
+                <select data-move-flight="${f.id}">
+                  <option value="">Choose trip…</option>
+                  ${moveOptions}
+                </select>
+              </label>` : ""}
+            <div class="menu-divider"></div>
+            <button type="button" class="menu-danger" data-del-flight="${f.id}">Delete flight</button>
+          </div>
+        </details>
+        <button type="button" class="res-toggle" data-card-toggle="${f.id}" aria-expanded="${open}"
+          title="${open ? "Hide" : "Show"} price tracking">
+          ${entries.length ? `${entries.length} check${entries.length > 1 ? "s" : ""} ` : "Track "}<span class="res-caret">▾</span>
+        </button>
+      </div>
     </div>
-    <div class="log-form">
-      <input type="number" step="0.01" placeholder="Price seen" data-log-input="${f.id}">
-      <select class="unit-select" data-log-unit="${f.id}">
-        <option value="cash" ${logUnitIsPoints ? "" : "selected"}>$</option>
-        <option value="points" ${logUnitIsPoints ? "selected" : ""}>pts</option>
-      </select>
-      <button class="btn btn-ghost btn-sm" data-save-log="${f.id}">Log price</button>
+    ${attachmentHolders(f.id)}
+    <div class="res-detail" data-card-detail="${f.id}"${open ? "" : " hidden"}>
+      <div class="log-form">
+        <input type="number" step="0.01" placeholder="Price seen" data-log-input="${f.id}">
+        <select class="unit-select" data-log-unit="${f.id}">
+          <option value="cash" ${logUnitIsPoints ? "" : "selected"}>$</option>
+          <option value="points" ${logUnitIsPoints ? "selected" : ""}>pts</option>
+        </select>
+        <button class="btn btn-ghost btn-sm" data-save-log="${f.id}">Log price</button>
+      </div>
+      ${histHTML}
     </div>
-    ${histHTML}
   </div>`;
 }
 
@@ -2407,46 +2477,53 @@ function renderRentalCard(trip, r){
   const moveOptions = trips.filter(t => t.id !== trip.id)
     .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
   const hasSplits = (r.splits || []).some(s => s.name);
-  const metaBits = [`Paid <b>${paidText(r)}</b>`];
-  if (hasSplits && r.paid_cash != null){
-    metaBits.push(`Your share <b>${fmtCash(rentalOurPortion(r), r.currency)}</b>`);
-  }
+  // Paid / your-share move into the right-aligned price block, same as flights.
+  const metaBits = [];
   if (r.rental_start || r.rental_end){
     metaBits.push(`<b>${fmtShortDate(r.rental_start) || "?"} → ${fmtShortDate(r.rental_end) || "?"}</b>`);
   }
   if (r.confirmation_code) metaBits.push(`Conf. <b>${esc(r.confirmation_code)}</b>`);
   return `
   <div class="card${r.status === "watching" ? " card-watching" : " card-booked"}" data-rental-card="${r.id}" data-trip="${trip.id}">
-    <div class="card-title-row">
-      <span class="drag-handle" draggable="true" data-rental-drag="${r.id}" title="Drag to reorder">⠿</span>
-      <h3>${icon} ${esc(r.label)}</h3>
-      ${r.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
-      ${attachmentHeader("rental", r.id, r.attachments)}
-    </div>
-    <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
-    ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
-    ${rentalSplitText(r) ? `<p class="meta-line">Split: ${rentalSplitText(r)}</p>` : ""}
-    ${attachmentHolders(r.id)}
-    <div class="row" style="margin-bottom:0">
-      ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
-      <details class="menu card-menu">
-        <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
-        <div class="menu-panel">
-          <button type="button" data-edit-rental="${r.id}">Edit</button>
-          <button type="button" data-toggle-rental-status="${r.id}" data-next-status="${r.status === "watching" ? "booked" : "watching"}">
-            ${r.status === "watching" ? "Mark booked" : "Mark watching"}</button>
-          ${moveOptions ? `<div class="menu-divider"></div>
-            <label class="menu-label">Move to trip
-              <select data-move-rental="${r.id}">
-                <option value="">Choose trip…</option>
-                ${moveOptions}
-              </select>
-            </label>` : ""}
-          <div class="menu-divider"></div>
-          <button type="button" class="menu-danger" data-del-rental="${r.id}">Delete rental</button>
+    <div class="res-row">
+      <div class="res-main">
+        <div class="card-title-row">
+          <span class="drag-handle" draggable="true" data-rental-drag="${r.id}" title="Drag to reorder">⠿</span>
+          <h3>${icon} ${esc(r.label)}</h3>
+          ${r.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
         </div>
-      </details>
+        <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
+        ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
+        ${rentalSplitText(r) ? `<p class="meta-line">Split: ${rentalSplitText(r)}</p>` : ""}
+      </div>
+      <div class="res-price">
+        <span class="res-price-main">${paidText(r)}</span>
+        ${hasSplits && r.paid_cash != null
+          ? `<span class="res-price-sub">your share ${fmtCash(rentalOurPortion(r), r.currency)}</span>` : ""}
+      </div>
+      <div class="res-actions">
+        ${attachmentHeader("rental", r.id, r.attachments)}
+        ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
+        <details class="menu card-menu">
+          <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
+          <div class="menu-panel">
+            <button type="button" data-edit-rental="${r.id}">Edit</button>
+            <button type="button" data-toggle-rental-status="${r.id}" data-next-status="${r.status === "watching" ? "booked" : "watching"}">
+              ${r.status === "watching" ? "Mark booked" : "Mark watching"}</button>
+            ${moveOptions ? `<div class="menu-divider"></div>
+              <label class="menu-label">Move to trip
+                <select data-move-rental="${r.id}">
+                  <option value="">Choose trip…</option>
+                  ${moveOptions}
+                </select>
+              </label>` : ""}
+            <div class="menu-divider"></div>
+            <button type="button" class="menu-danger" data-del-rental="${r.id}">Delete rental</button>
+          </div>
+        </details>
+      </div>
     </div>
+    ${attachmentHolders(r.id)}
   </div>`;
 }
 
@@ -2926,6 +3003,22 @@ function wireViewMenu(){
     });
   });
 }
+
+// The price-tracking detail is always in the DOM and just hidden, so opening a
+// row is a `hidden` flip rather than a render() — same reasoning as the chart
+// ranges below, and it means an edit form open elsewhere survives the click.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-card-toggle]");
+  if (!btn) return;
+  const id = btn.dataset.cardToggle;
+  const detail = document.querySelector(`[data-card-detail="${id}"]`);
+  if (!detail) return;
+  const open = detail.hidden;   // about to become open
+  detail.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+  btn.title = `${open ? "Hide" : "Show"} price tracking`;
+  if (open) openCardDetails.add(id); else openCardDetails.delete(id);
+});
 
 // Chart range presets swap just that one chart rather than calling render(),
 // which would tear down any add/edit form open elsewhere on the page. Wired
