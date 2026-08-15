@@ -1783,9 +1783,16 @@ function renderPriceTrendChart(series, cur, chartId){
 
 function renderCard(trip, f){
   const cur = f.currency || "USD";
-  // An award booking's price checks are almost always quoted in points too,
-  // so default the log-price unit to match how the seat was actually bought.
   const paidInPoints = f.paid_points != null && f.paid_cash == null;
+  // Default the log-price unit to whatever this flight was last logged in, so
+  // a run of checks doesn't need the picker reset every time. Picked by
+  // created_at rather than array order: price_logs is sorted by `date`, which
+  // is day-granular, so several checks on one day tie and land in arbitrary
+  // order. With nothing logged yet, fall back to how the seat was actually
+  // bought — award bookings are almost always re-quoted in points.
+  const lastLog = (f.price_logs || []).reduce(
+    (best, e) => (!best || (e.created_at || "") > (best.created_at || "")) ? e : best, null);
+  const logUnitIsPoints = lastLog ? !!lastLog.is_points : paidInPoints;
   const moveOptions = trips.filter(t => t.id !== trip.id)
     .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
   const passengers = f.passengers || 1;
@@ -1878,8 +1885,8 @@ function renderCard(trip, f){
     <div class="log-form">
       <input type="number" step="0.01" placeholder="Price seen" data-log-input="${f.id}">
       <select class="unit-select" data-log-unit="${f.id}">
-        <option value="cash" ${paidInPoints ? "" : "selected"}>$</option>
-        <option value="points" ${paidInPoints ? "selected" : ""}>pts</option>
+        <option value="cash" ${logUnitIsPoints ? "" : "selected"}>$</option>
+        <option value="points" ${logUnitIsPoints ? "selected" : ""}>pts</option>
       </select>
       <button class="btn btn-ghost btn-sm" data-save-log="${f.id}">Log price</button>
     </div>
