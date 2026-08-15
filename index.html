@@ -664,15 +664,17 @@ function applySkin(id){
   document.documentElement.dataset.skin = id;
 }
 
-// Kayak is the new default. A browser already holding the previous default
-// would otherwise reload to no visible change, so move it across once — a
-// deliberately-chosen skin is left alone.
-const KAYAK_MIGRATED_KEY = "flight-tracker-kayak-default";
-if (!localStorage.getItem(KAYAK_MIGRATED_KEY)){
-  if (!localStorage.getItem(SKIN_KEY) || localStorage.getItem(SKIN_KEY) === "amber"){
-    localStorage.setItem(SKIN_KEY, "kayak");
-  }
-  localStorage.setItem(KAYAK_MIGRATED_KEY, "1");
+// Kayak is the default. The first pass at this only moved browsers holding
+// the *previous* default, on the theory that a deliberately-chosen skin
+// shouldn't be overridden — but that left anyone who had ever tried another
+// skin pinned to it, which just looks like the default never changed. So this
+// second pass is unconditional: every browser lands on Kayak once, and a skin
+// picked after that sticks, because the key is already set and this never
+// fires again.
+const KAYAK_DEFAULT_KEY = "flight-tracker-kayak-default-v2";
+if (!localStorage.getItem(KAYAK_DEFAULT_KEY)){
+  localStorage.setItem(SKIN_KEY, "kayak");
+  localStorage.setItem(KAYAK_DEFAULT_KEY, "1");
 }
 let currentSkin = localStorage.getItem(SKIN_KEY) || "kayak";
 applySkin(currentSkin);
