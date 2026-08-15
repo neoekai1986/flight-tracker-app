@@ -180,6 +180,39 @@
 
   /* Flights carry the most detail (trend chart + history table), so they get
      a full-width lane of their own; housing and cars share the row below. */
+  /* Kayak's two-column results view: facets pinned left, results right. Note
+     there's already a trip sidebar, so on a wide screen this is two left rails
+     — the sidebar picks the trip, this rail filters within it. */
+  .results-layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:20px;align-items:start}
+  .filter-rail{position:sticky;top:20px;background:var(--panel);border:1px solid var(--line);
+      border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+  .filter-rail-head{display:flex;align-items:baseline;justify-content:space-between;
+      gap:8px;padding-bottom:8px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  .filter-rail-title{font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+      font-weight:600;color:var(--muted)}
+  .filter-group{border-bottom:1px solid var(--line)}
+  .filter-group:last-child{border-bottom:none}
+  .filter-group>summary{cursor:pointer;list-style:none;padding:9px 0;font-size:13px;
+      font-weight:600;display:flex;align-items:center;justify-content:space-between}
+  .filter-group>summary::-webkit-details-marker{display:none}
+  .filter-group>summary::after{content:"▾";font-size:10px;color:var(--muted);
+      transition:transform .15s ease}
+  .filter-group[open]>summary::after{transform:rotate(180deg)}
+  .filter-opts{display:flex;flex-direction:column;gap:2px;padding-bottom:9px}
+  .filter-opt{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;
+      padding:3px 0;overflow-wrap:anywhere}
+  .filter-opt input{accent-color:var(--amber);flex-shrink:0;margin:0}
+  .filter-opt-label{min-width:0;flex:1}
+  .filter-opt-count{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums;
+      flex-shrink:0}
+  /* Kept clickable rather than disabled — a facet with 0 today may have items
+     once something is added, and greying it out reads as broken. */
+  .filter-opt-empty .filter-opt-label,.filter-opt-empty .filter-opt-count{opacity:.5}
+  @media (max-width:900px){
+    .results-layout{grid-template-columns:minmax(0,1fr)}
+    .filter-rail{position:static}
+  }
+
   .lane-stack{display:flex;flex-direction:column;gap:16px}
   .lane-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media (max-width:900px){ .lane-grid{grid-template-columns:1fr} }
@@ -619,6 +652,19 @@ const CHART_RANGE_DAYS = { "1m": 30, "3m": 90 };
 // lifetime and reasoning as chartRanges: the collapse is what gives the result
 // rows their density, and which rows you left open is view state, not data.
 let openCardDetails = new Set();
+
+// Filter rail state — trip.id -> { status, type, program }, each a Set. An
+// empty Set means "no filter on this facet", not "nothing matches", so a fresh
+// trip shows everything. View state like the two above: never persisted.
+let tripFilters = new Map();
+function filtersFor(tripId){
+  if (!tripFilters.has(tripId)){
+    tripFilters.set(tripId, { status: new Set(), type: new Set(), program: new Set() });
+  }
+  return tripFilters.get(tripId);
+}
+// A facet with nothing ticked doesn't constrain anything.
+function facetAllows(set, value){ return set.size === 0 || set.has(value); }
 
 const SECTION_KEY = "flight-tracker-section";
 let activeSection = localStorage.getItem(SECTION_KEY) || "trips"; // "trips" | "wishlist"
@@ -2171,8 +2217,69 @@ function withPlanCheckbox(trip, kind, id, cardHTML){
     </div>`;
 }
 
+// The rail's facets, built from what this trip actually contains — offering
+// "Hilton" on a trip with no hotel would be a dead checkbox. Counts come from
+// the unfiltered lists so a facet never reads "0" just because another facet
+// is currently hiding everything.
+function renderFilterRail(trip){
+  const fl = trip.flights || [], rn = trip.rentals || [];
+  const sel = filtersFor(trip.id);
+  const count = (arr, fn) => arr.filter(fn).length;
+
+  const programs = [...new Set([...fl, ...rn]
+    .map(x => x.points_program).filter(Boolean))].sort();
+
+  const groups = [
+    { key: "status", label: "Status", opts: [
+      { v: "booked",   l: "Booked",   n: count(fl, f=>f.status!=="watching") + count(rn, r=>r.status!=="watching") },
+      { v: "watching", l: "Watching", n: count(fl, f=>f.status==="watching") + count(rn, r=>r.status==="watching") },
+    ]},
+    { key: "type", label: "Type", opts: [
+      { v: "flight",  l: "Flights", n: fl.length },
+      { v: "housing", l: "Housing", n: count(rn, r=>r.kind!=="car") },
+      { v: "car",     l: "Cars",    n: count(rn, r=>r.kind==="car") },
+    ]},
+    { key: "program", label: "Points program", opts: programs.map(p => ({
+      v: p, l: p, n: count(fl, f=>f.points_program===p) + count(rn, r=>r.points_program===p),
+    }))},
+  ].filter(g => g.opts.length);
+
+  const active = sel.status.size + sel.type.size + sel.program.size;
+  return `
+    <aside class="filter-rail">
+      <div class="filter-rail-head">
+        <span class="filter-rail-title">Filters</span>
+        ${active ? `<button type="button" class="btn-link" data-filter-clear="${trip.id}">clear</button>` : ""}
+      </div>
+      ${groups.map(g => `
+        <details class="filter-group" open>
+          <summary>${g.label}</summary>
+          <div class="filter-opts">
+            ${g.opts.map(o => `
+              <label class="filter-opt${o.n ? "" : " filter-opt-empty"}">
+                <input type="checkbox" data-filter="${g.key}" value="${esc(o.v)}"
+                  data-trip="${trip.id}" ${sel[g.key].has(o.v) ? "checked" : ""}>
+                <span class="filter-opt-label">${esc(o.l)}</span>
+                <span class="filter-opt-count">${o.n}</span>
+              </label>`).join("")}
+          </div>
+        </details>`).join("")}
+    </aside>`;
+}
+
 function renderTripPanel(trip){
-  const flights = trip.flights || [];
+  const sel = filtersFor(trip.id);
+  // The rail narrows the lists only. Totals stay computed from everything
+  // booked — "Total paid" is a fact about the trip, not about the current view,
+  // and a filter that appeared to change what you'd paid would be a lie.
+  const allFlights = trip.flights || [];
+  const allRentals = trip.rentals || [];
+  const passesProgram = x => facetAllows(sel.program, x.points_program || "");
+  const flights = allFlights.filter(f =>
+    facetAllows(sel.type, "flight") &&
+    facetAllows(sel.status, f.status === "watching" ? "watching" : "booked") &&
+    passesProgram(f));
+
   const bookedFlights = flights.filter(f => f.status !== "watching");
   const watchingFlights = flights.filter(f => f.status === "watching");
   const out = bookedFlights.filter(f => f.leg === "outbound");
@@ -2198,28 +2305,38 @@ function renderTripPanel(trip){
     ${solo.map(f => renderCard(trip, f)).join("")}
   </div>`;
 
-  const rentals = trip.rentals || [];
+  const rentals = allRentals.filter(r =>
+    facetAllows(sel.type, r.kind === "car" ? "car" : "housing") &&
+    facetAllows(sel.status, r.status === "watching" ? "watching" : "booked") &&
+    passesProgram(r));
   const bookedRentals = rentals.filter(r => r.status !== "watching");
   const watchingRentals = rentals.filter(r => r.status === "watching");
 
-  const totalCash = bookedFlights.reduce((s,f) => s + (f.paid_cash || 0) * (f.passengers || 1), 0)
-    + bookedRentals.reduce((s,r) => s + (rentalOurPortion(r) || 0), 0);
+  // Deliberately off the unfiltered lists — see the note at the top.
+  const allBookedFlights = allFlights.filter(f => f.status !== "watching");
+  const allBookedRentals = allRentals.filter(r => r.status !== "watching");
+  const totalCash = allBookedFlights.reduce((s,f) => s + (f.paid_cash || 0) * (f.passengers || 1), 0)
+    + allBookedRentals.reduce((s,r) => s + (rentalOurPortion(r) || 0), 0);
   const totalPointsByProgram = new Map();
-  for (const f of bookedFlights) addPoints(totalPointsByProgram, f.points_program, (f.paid_points || 0) * (f.passengers || 1));
-  for (const r of bookedRentals) addPoints(totalPointsByProgram, r.points_program, r.paid_points || 0);
+  for (const f of allBookedFlights) addPoints(totalPointsByProgram, f.points_program, (f.paid_points || 0) * (f.passengers || 1));
+  for (const r of allBookedRentals) addPoints(totalPointsByProgram, r.points_program, r.paid_points || 0);
   const totalParts = [];
   if (totalCash) totalParts.push(fmtCash(totalCash));
   for (const [program, pts] of sortedPointsEntries(totalPointsByProgram)) totalParts.push(pointsText(pts, program));
 
   const bookedHousing = bookedRentals.filter(r => r.kind !== "car");
   const bookedCars = bookedRentals.filter(r => r.kind === "car");
-  const hasBookedFlight = bookedFlights.length > 0;
-  const housingWarn = hasBookedFlight && bookedHousing.length === 0;
-  const carsWarn = hasBookedFlight && bookedCars.length === 0;
+  // "You've booked a flight but nowhere to stay" is a fact about the trip, so
+  // like the totals it reads the unfiltered lists — a filter shouldn't be able
+  // to raise or silence the warning.
+  const hasBookedFlight = allBookedFlights.length > 0;
+  const housingWarn = hasBookedFlight && !allBookedRentals.some(r => r.kind !== "car");
+  const carsWarn = hasBookedFlight && !allBookedRentals.some(r => r.kind === "car");
 
   const watchingHousing = watchingRentals.filter(r => r.kind !== "car");
   const watchingCars = watchingRentals.filter(r => r.kind === "car");
-  const hasWatching = watchingFlights.length > 0 || watchingRentals.length > 0;
+  const hasWatching = (watchingFlights.length > 0 || watchingRentals.length > 0)
+    && facetAllows(sel.status, "watching");
   // twoCol: flights get two cards per row to match the booked lane. Watching
   // flights are competing options rather than an outbound/return pair, so
   // they just flow through the grid instead of being paired by index.
@@ -2244,13 +2361,13 @@ function renderTripPanel(trip){
           <div class="planning-estimate" data-plan-estimate="${trip.id}">Selected: —</div>
         </div>
        <div class="lane-stack" data-watching-list="${trip.id}">
-         ${watchingLane(`${ICON_FLIGHT} Flights`, watchingFlights, "flight", renderCard, true,
-           `data-drop-kind="flight" data-drop-leg="any"`)}
+         ${facetAllows(sel.type, "flight") ? watchingLane(`${ICON_FLIGHT} Flights`, watchingFlights, "flight", renderCard, true,
+           `data-drop-kind="flight" data-drop-leg="any"`) : ""}
          <div class="lane-grid">
-           ${watchingLane(`${ICON_HOTEL} Housing`, watchingHousing, "rental", renderRentalCard, false,
-             `data-drop-kind="rental" data-drop-rental-kind="housing"`)}
-           ${watchingLane(`${ICON_CAR} Cars`, watchingCars, "rental", renderRentalCard, false,
-             `data-drop-kind="rental" data-drop-rental-kind="car"`)}
+           ${facetAllows(sel.type, "housing") ? watchingLane(`${ICON_HOTEL} Housing`, watchingHousing, "rental", renderRentalCard, false,
+             `data-drop-kind="rental" data-drop-rental-kind="housing"`) : ""}
+           ${facetAllows(sel.type, "car") ? watchingLane(`${ICON_CAR} Cars`, watchingCars, "rental", renderRentalCard, false,
+             `data-drop-kind="rental" data-drop-rental-kind="car"`) : ""}
          </div>
        </div>`
     : "";
@@ -2305,33 +2422,39 @@ function renderTripPanel(trip){
       <div data-add-flight-form="${trip.id}"></div>
       <div data-add-rental-form="${trip.id}"></div>
 
+      <div class="results-layout">
+        ${renderFilterRail(trip)}
+        <div class="results-col">
+      ${!facetAllows(sel.status, "booked") ? "" : `
       <div class="lane-stack">
-        <div class="lane">
+        ${facetAllows(sel.type, "flight") ? `<div class="lane">
           <div class="lane-label">${ICON_FLIGHT} Flights</div>
           ${pairsHTML}${soloHTML}
           ${!bookedFlights.length ? `<p class="empty-hist">No flights booked yet.</p>` : ""}
-        </div>
+        </div>` : ""}
         <div class="lane-grid">
-          <div class="lane${housingWarn ? " lane-warn" : ""}">
+          ${facetAllows(sel.type, "housing") ? `<div class="lane${housingWarn ? " lane-warn" : ""}">
             <div class="lane-label">${ICON_HOTEL} Housing</div>
             <div class="solo-list drop-zone" data-rental-list="${trip.id}" data-rental-kind="housing"
               data-drop-kind="rental" data-drop-status="booked" data-drop-rental-kind="housing">
               ${bookedHousing.map(r => renderRentalCard(trip, r)).join("")}
             </div>
             ${!bookedHousing.length ? `<p class="empty-hist">No housing booked yet.</p>` : ""}
-          </div>
-          <div class="lane${carsWarn ? " lane-warn" : ""}">
+          </div>` : ""}
+          ${facetAllows(sel.type, "car") ? `<div class="lane${carsWarn ? " lane-warn" : ""}">
             <div class="lane-label">${ICON_CAR} Cars</div>
             <div class="solo-list drop-zone" data-rental-list="${trip.id}" data-rental-kind="car"
               data-drop-kind="rental" data-drop-status="booked" data-drop-rental-kind="car">
               ${bookedCars.map(r => renderRentalCard(trip, r)).join("")}
             </div>
             ${!bookedCars.length ? `<p class="empty-hist">No car booked yet.</p>` : ""}
-          </div>
+          </div>` : ""}
         </div>
-      </div>
+      </div>`}
 
       ${watchingHTML}
+        </div>
+      </div>
     </div>`;
 }
 
@@ -3003,6 +3126,23 @@ function wireViewMenu(){
     });
   });
 }
+
+// Filter rail. Delegated at the document level so the rail needs no re-binding
+// after each render, and a full render() is right here: the whole point is that
+// the result lists change.
+document.addEventListener("change", (e) => {
+  const box = e.target.closest("[data-filter]");
+  if (!box) return;
+  const set = filtersFor(box.dataset.trip)[box.dataset.filter];
+  if (box.checked) set.add(box.value); else set.delete(box.value);
+  render();
+});
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-filter-clear]");
+  if (!btn) return;
+  tripFilters.delete(btn.dataset.filterClear);
+  render();
+});
 
 // The price-tracking detail is always in the DOM and just hidden, so opening a
 // row is a `hidden` flip rather than a render() — same reasoning as the chart
