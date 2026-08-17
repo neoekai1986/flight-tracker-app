@@ -111,15 +111,19 @@ alter table public.wishlist_boards enable row level security;
 alter table public.wishlist_collaborators enable row level security;
 alter table public.wishlist_profiles enable row level security;
 alter table public.wishlist_entries enable row level security;
+alter table public.wishlist_votes enable row level security;
+alter table public.wishlist_comments enable row level security;
 
 -- Only logged-in users get any access at all; RLS scopes it further per-row.
-revoke all on public.trip_folders, public.trip_categories, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments, public.favorite_points_programs, public.wishlist_boards, public.wishlist_collaborators, public.wishlist_profiles, public.wishlist_entries from anon;
+revoke all on public.trip_folders, public.trip_categories, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments, public.favorite_points_programs, public.wishlist_boards, public.wishlist_collaborators, public.wishlist_profiles, public.wishlist_entries, public.wishlist_votes, public.wishlist_comments from anon;
 grant select, insert, update, delete on public.trip_folders, public.trip_categories, public.trips, public.flights, public.price_logs, public.rentals to authenticated;
 grant select, insert, delete on public.trip_collaborators to authenticated;
 grant select, insert, delete on public.favorite_points_programs to authenticated;
 grant select, insert, update, delete on public.attachments to authenticated;
 grant select, insert, update, delete on public.wishlist_boards, public.wishlist_profiles, public.wishlist_entries to authenticated;
 grant select, insert, delete on public.wishlist_collaborators to authenticated;
+grant select, insert, delete on public.wishlist_votes to authenticated;
+grant select, insert, update, delete on public.wishlist_comments to authenticated;
 
 -- Ownership can't be reassigned via UPDATE (simpler and airtight vs. expressing
 -- this in RLS's WITH CHECK).
@@ -377,6 +381,57 @@ create policy wishlist_entries_delete on public.wishlist_entries
   for delete using (
     created_by = auth.uid()
     or public.is_wishlist_board_owner(board_id)
+  );
+
+-- Which board an entry belongs to, without re-triggering wishlist_entries'
+-- own RLS from inside the votes/comments policies. Same reason the other
+-- security definer helpers here exist.
+create or replace function public.wishlist_entry_board(p_entry_id uuid)
+returns uuid
+language sql stable security definer set search_path = public
+as $$
+  select board_id from public.wishlist_entries where id = p_entry_id;
+$$;
+
+-- wishlist_votes — one upvote per person per pitch, enforced by the unique
+-- constraint. Anyone on the board sees every vote (the point is knowing where
+-- the family stands); you can only cast or withdraw your own.
+create policy wishlist_votes_select on public.wishlist_votes
+  for select using (
+    public.can_access_wishlist_board( public.wishlist_entry_board(entry_id) )
+  );
+
+create policy wishlist_votes_insert on public.wishlist_votes
+  for insert with check (
+    user_id = auth.uid()
+    and public.can_access_wishlist_board( public.wishlist_entry_board(entry_id) )
+  );
+
+create policy wishlist_votes_delete on public.wishlist_votes
+  for delete using ( user_id = auth.uid() );
+
+-- wishlist_comments — anyone on the board reads and posts. Editing is the
+-- author's alone, same reasoning as entries. Deleting is the author or the
+-- board's owner, so the owner can moderate a thread the same way they curate
+-- the cards.
+create policy wishlist_comments_select on public.wishlist_comments
+  for select using (
+    public.can_access_wishlist_board( public.wishlist_entry_board(entry_id) )
+  );
+
+create policy wishlist_comments_insert on public.wishlist_comments
+  for insert with check (
+    created_by = auth.uid()
+    and public.can_access_wishlist_board( public.wishlist_entry_board(entry_id) )
+  );
+
+create policy wishlist_comments_update on public.wishlist_comments
+  for update using ( created_by = auth.uid() ) with check ( created_by = auth.uid() );
+
+create policy wishlist_comments_delete on public.wishlist_comments
+  for delete using (
+    created_by = auth.uid()
+    or public.is_wishlist_board_owner( public.wishlist_entry_board(entry_id) )
   );
 
 -- Postgres doesn't guarantee short-circuit evaluation of OR, so

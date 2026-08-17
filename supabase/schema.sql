@@ -186,7 +186,27 @@ create table public.wishlist_entries (
   updated_at    timestamptz not null default now()
 );
 
+-- One upvote per person per pitch — the unique constraint is what enforces
+-- "one vote each", so a double-click can't inflate a count.
+create table public.wishlist_votes (
+  id          uuid primary key default gen_random_uuid(),
+  entry_id    uuid not null references public.wishlist_entries(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  unique (entry_id, user_id)
+);
+
+create table public.wishlist_comments (
+  id          uuid primary key default gen_random_uuid(),
+  entry_id    uuid not null references public.wishlist_entries(id) on delete cascade,
+  created_by  uuid not null references auth.users(id) on delete cascade,
+  body        text not null,
+  created_at  timestamptz not null default now()
+);
+
 create index on public.trip_folders (owner_id, position);
+create index on public.wishlist_votes (entry_id);
+create index on public.wishlist_comments (entry_id, created_at);
 create index on public.trip_categories (owner_id);
 create index on public.trips (folder_id, position);
 create index on public.trips (category_id);
