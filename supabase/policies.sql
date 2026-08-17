@@ -83,6 +83,21 @@ as $$
   );
 $$;
 
+-- "Do I own this board" — used by wishlist_entries_delete so the owner can
+-- curate. Security definer for the same reason as the two above: a plain
+-- subquery over wishlist_boards inside a policy is evaluated with that
+-- table's own RLS applied, so the answer would depend on a second policy
+-- holding up rather than on the fact being asked about.
+create or replace function public.is_wishlist_board_owner(p_board_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.wishlist_boards b
+    where b.id = p_board_id and b.owner_id = auth.uid()
+  );
+$$;
+
 alter table public.trip_folders enable row level security;
 alter table public.trip_categories enable row level security;
 alter table public.trips enable row level security;
@@ -338,9 +353,15 @@ create policy wishlist_profiles_update on public.wishlist_profiles
   for update using ( user_id = auth.uid() ) with check ( user_id = auth.uid() );
 
 -- wishlist_entries
--- Anyone with board access can read and pitch a new entry; only the
--- entry's own creator can edit or delete it (family members shouldn't be
--- able to edit each other's elevator pitches).
+-- Anyone with board access can read and pitch a new entry.
+--
+-- Editing stays with the entry's own creator: a pitch is someone's own
+-- words, and the board owner being able to rewrite them without their
+-- knowing is a different thing from moderating the board.
+--
+-- Deleting is the creator OR the board's owner, so the owner can curate
+-- what's on their board. Note this is a real delete, not a hide — the
+-- author doesn't get it back.
 create policy wishlist_entries_select on public.wishlist_entries
   for select using ( public.can_access_wishlist_board(board_id) );
 
@@ -353,7 +374,10 @@ create policy wishlist_entries_update on public.wishlist_entries
   for update using ( created_by = auth.uid() ) with check ( created_by = auth.uid() );
 
 create policy wishlist_entries_delete on public.wishlist_entries
-  for delete using ( created_by = auth.uid() );
+  for delete using (
+    created_by = auth.uid()
+    or public.is_wishlist_board_owner(board_id)
+  );
 
 -- Postgres doesn't guarantee short-circuit evaluation of OR, so
 -- "x = 'avatars' or can_access_wishlist_board(x::uuid)" can still try (and

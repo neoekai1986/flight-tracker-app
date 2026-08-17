@@ -458,10 +458,35 @@
       overflow:hidden;display:flex;flex-direction:column}
   .wishlist-photo{width:100%;height:280px;background:var(--night) center/cover no-repeat}
   .wishlist-card-body{padding:14px 16px;display:flex;flex-direction:column;gap:6px}
-  .wishlist-author{display:flex;align-items:center;gap:8px;margin-bottom:2px}
+  /* A button now — clicking a person opens their profile. Styled to sit flush
+     like the plain row it replaced, so the card doesn't grow a control. */
+  .wishlist-author{display:flex;align-items:center;gap:8px;margin-bottom:2px;
+      background:none;border:none;padding:2px 4px;margin-left:-4px;border-radius:20px;
+      cursor:pointer;text-align:left;font:inherit}
+  .wishlist-author:hover{background:var(--panel2)}
+  .wishlist-author:hover .wishlist-author-name{color:var(--ink)}
   .wishlist-avatar{display:inline-block;width:24px;height:24px;border-radius:50%;flex-shrink:0;
       background:var(--night) center/cover no-repeat;border:1px solid var(--line)}
   .wishlist-author-name{font-size:12px;color:var(--muted);font-family:Inter,system-ui,sans-serif}
+
+  .wl-profile-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;
+      display:flex;align-items:center;justify-content:center;padding:20px}
+  .wl-profile{position:relative;background:var(--panel);border:1px solid var(--line);
+      border-radius:16px;padding:24px;width:100%;max-width:420px;max-height:80vh;
+      overflow-y:auto;box-shadow:0 18px 44px var(--shadow)}
+  .wl-profile-close{position:absolute;top:12px;right:14px;background:none;border:none;
+      color:var(--muted);font-size:20px;line-height:1;cursor:pointer;padding:4px}
+  .wl-profile-close:hover{color:var(--ink)}
+  .wl-profile-head{display:flex;align-items:center;gap:14px;margin-bottom:16px}
+  .wl-profile-avatar{width:64px;height:64px;border-radius:50%;flex-shrink:0;
+      background:var(--night) center/cover no-repeat;border:1px solid var(--line)}
+  .wl-profile-head h3{font-family:'Poppins',sans-serif;font-weight:600;font-size:18px}
+  .wl-profile-count{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .wl-profile-list{list-style:none;margin-top:16px;padding:0;display:flex;
+      flex-direction:column;gap:10px}
+  .wl-profile-list li{padding:10px 12px;background:var(--panel2);border:1px solid var(--line);
+      border-radius:10px;font-size:13.5px;display:flex;flex-direction:column;gap:2px}
+  .wl-profile-loc{font-size:12px;color:var(--muted)}
   .wishlist-card h3{font-size:16px;font-weight:600;margin:0}
   .wishlist-location{font-size:12.5px;color:var(--muted)}
   .wishlist-blurb{font-size:13px;color:var(--ink);line-height:1.5}
@@ -3324,6 +3349,15 @@ function wireViewMenu(){
   });
 }
 
+// Escape closes the wishlist profile panel. Registered once at the document
+// level — wireWishlistBody() runs on every render, so binding it there would
+// stack up a new listener each time.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const holder = document.querySelector("[data-wishlist-profile-panel]");
+  if (holder && holder.innerHTML) holder.innerHTML = "";
+});
+
 // Filter rail. Delegated at the document level so the rail needs no re-binding
 // after each render, and a full render() is right here: the whole point is that
 // the result lists change.
@@ -3580,32 +3614,70 @@ function renderWishlistBody(){
       <div data-wishlist-add-form></div>
 
       <div class="wishlist-grid">
-        ${entries.length ? entries.map(e => renderWishlistCard(e)).join("") : `<p class="empty-hist">No pitches yet — be the first!</p>`}
+        ${entries.length ? entries.map(e => renderWishlistCard(e, isOwner)).join("") : `<p class="empty-hist">No pitches yet — be the first!</p>`}
       </div>
+      <div data-wishlist-profile-panel></div>
     </div>`;
 }
 
-function renderWishlistCard(entry){
+function renderWishlistCard(entry, isBoardOwner){
   const profile = wishlistProfiles.get(entry.created_by) || {};
   const isMine = entry.created_by === session.user.id;
   const authorName = profile.display_name || (isMine ? "You" : "Family member");
   const thingsList = (entry.things_to_do || "").split("\n").map(s => s.trim()).filter(Boolean);
+  // Editing is the author's alone — the board owner curates by removing, not
+  // by rewriting someone's pitch. Matches wishlist_entries_update in RLS, so
+  // a button is never shown for something the database would refuse.
+  const canRemove = isMine || isBoardOwner;
   return `
     <div class="wishlist-card" data-wishlist-card="${entry.id}">
       <div class="wishlist-photo" data-wishlist-photo="${entry.id}" data-photo-path="${esc(entry.photo_path||"")}"></div>
       <div class="wishlist-card-body">
-        <div class="wishlist-author">
+        <button type="button" class="wishlist-author" data-wishlist-profile-view="${entry.created_by}"
+            title="See ${esc(authorName)}'s pitches">
           <span class="wishlist-avatar" data-wishlist-avatar="${entry.created_by}" data-avatar-path="${esc(profile.avatar_path||"")}"></span>
           <span class="wishlist-author-name">${esc(authorName)}</span>
-        </div>
+        </button>
         <h3>${esc(entry.title)}</h3>
         ${entry.location ? `<p class="wishlist-location">📍 ${esc(entry.location)}</p>` : ""}
         ${entry.blurb ? `<p class="wishlist-blurb">${esc(entry.blurb)}</p>` : ""}
         ${thingsList.length ? `<ul class="wishlist-todo">${thingsList.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
-        ${isMine ? `<div class="row" style="margin-top:8px">
-          <button class="btn btn-ghost btn-sm" data-edit-wishlist-entry="${entry.id}">Edit</button>
-          <button class="btn-link" data-del-wishlist-entry="${entry.id}">delete</button>
+        ${isMine || canRemove ? `<div class="row" style="margin-top:8px">
+          ${isMine ? `<button class="btn btn-ghost btn-sm" data-edit-wishlist-entry="${entry.id}">Edit</button>` : ""}
+          ${canRemove ? `<button class="btn-link" data-del-wishlist-entry="${entry.id}"
+            data-entry-mine="${isMine ? "1" : ""}">${isMine ? "delete" : "remove"}</button>` : ""}
         </div>` : ""}
+      </div>
+    </div>`;
+}
+
+// Profile panel — who someone is and what they've pitched on this board.
+// Built from what's already stored (name + avatar), so it needs no schema
+// change; the pitches are pulled from the board already in memory.
+function renderWishlistProfilePanel(userId, board){
+  const profile = wishlistProfiles.get(userId) || {};
+  const isMe = userId === session.user.id;
+  const name = profile.display_name || (isMe ? "You" : "Family member");
+  const mine = (board.wishlist_entries || []).filter(e => e.created_by === userId);
+  return `
+    <div class="wl-profile-overlay" data-wl-profile-overlay>
+      <div class="wl-profile" role="dialog" aria-label="${esc(name)}'s profile">
+        <button type="button" class="wl-profile-close" data-wl-profile-close aria-label="Close">×</button>
+        <div class="wl-profile-head">
+          <span class="wl-profile-avatar" data-wishlist-avatar="${userId}"
+            data-avatar-path="${esc(profile.avatar_path||"")}"></span>
+          <div>
+            <h3>${esc(name)}</h3>
+            <p class="wl-profile-count">${mine.length} pitch${mine.length === 1 ? "" : "es"} on this board</p>
+          </div>
+        </div>
+        ${isMe ? `<button class="btn btn-ghost btn-sm" data-wl-profile-edit>Edit your photo &amp; name</button>` : ""}
+        ${mine.length ? `<ul class="wl-profile-list">
+          ${mine.map(e => `<li>
+            <strong>${esc(e.title)}</strong>
+            ${e.location ? `<span class="wl-profile-loc">📍 ${esc(e.location)}</span>` : ""}
+          </li>`).join("")}
+        </ul>` : `<p class="empty-hist">No pitches yet.</p>`}
       </div>
     </div>`;
 }
@@ -3918,9 +3990,48 @@ function wireWishlistBody(){
 
   document.querySelectorAll("[data-del-wishlist-entry]").forEach(btn => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Delete this pitch?")) return;
+      // Removing someone else's pitch is a different act from deleting your
+      // own — they can't undo it and won't be told, so say whose it is.
+      const mine = btn.dataset.entryMine === "1";
+      const card = btn.closest("[data-wishlist-card]");
+      const who = card?.querySelector(".wishlist-author-name")?.textContent.trim() || "this person";
+      const what = card?.querySelector("h3")?.textContent.trim() || "this pitch";
+      const ok = mine
+        ? confirm(`Delete your pitch "${what}"?`)
+        : confirm(`Remove ${who}'s pitch "${what}" from the board?\n\nThis deletes it for everyone and can't be undone.`);
+      if (!ok) return;
       await deleteWishlistEntry(btn.dataset.delWishlistEntry);
       await refreshWishlist();
+    });
+  });
+
+  // Clicking a person opens their profile: photo, name, and what they've
+  // pitched here. Rendered into a holder rather than via render() so the
+  // panel can close without rebuilding the page.
+  const profileHolder = document.querySelector("[data-wishlist-profile-panel]");
+  const closeProfile = () => { if (profileHolder) profileHolder.innerHTML = ""; };
+  document.querySelectorAll("[data-wishlist-profile-view]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const board = wishlistBoards.find(b => b.id === activeWishlistBoardId) || wishlistBoards[0];
+      if (!board || !profileHolder) return;
+      profileHolder.innerHTML = renderWishlistProfilePanel(btn.dataset.wishlistProfileView, board);
+      profileHolder.querySelector("[data-wl-profile-close]").addEventListener("click", closeProfile);
+      // Click the backdrop to dismiss, but not a click inside the card.
+      profileHolder.querySelector("[data-wl-profile-overlay]").addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) closeProfile();
+      });
+      profileHolder.querySelector("[data-wl-profile-edit]")?.addEventListener("click", () => {
+        closeProfile();
+        document.getElementById("wishlistProfileBtn").click();
+      });
+      // The avatar in the panel needs the same signed-URL treatment the
+      // card avatars get below, and it was added after that pass ran.
+      profileHolder.querySelectorAll("[data-wishlist-avatar]").forEach(async (el) => {
+        const path = el.dataset.avatarPath;
+        if (!path) return;
+        const url = await wishlistSignedUrl(path);
+        if (url) el.style.backgroundImage = `url(${url})`;
+      });
     });
   });
 
