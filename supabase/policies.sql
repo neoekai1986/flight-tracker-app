@@ -338,9 +338,15 @@ create policy wishlist_profiles_update on public.wishlist_profiles
   for update using ( user_id = auth.uid() ) with check ( user_id = auth.uid() );
 
 -- wishlist_entries
--- Anyone with board access can read and pitch a new entry; only the
--- entry's own creator can edit or delete it (family members shouldn't be
--- able to edit each other's elevator pitches).
+-- Anyone with board access can read and pitch a new entry.
+--
+-- Editing stays with the entry's own creator: a pitch is someone's own
+-- words, and the board owner being able to rewrite them without their
+-- knowing is a different thing from moderating the board.
+--
+-- Deleting is the creator OR the board's owner, so the owner can curate
+-- what's on their board. Note this is a real delete, not a hide — the
+-- author doesn't get it back.
 create policy wishlist_entries_select on public.wishlist_entries
   for select using ( public.can_access_wishlist_board(board_id) );
 
@@ -353,7 +359,10 @@ create policy wishlist_entries_update on public.wishlist_entries
   for update using ( created_by = auth.uid() ) with check ( created_by = auth.uid() );
 
 create policy wishlist_entries_delete on public.wishlist_entries
-  for delete using ( created_by = auth.uid() );
+  for delete using (
+    created_by = auth.uid()
+    or board_id in ( select id from public.wishlist_boards where owner_id = auth.uid() )
+  );
 
 -- Postgres doesn't guarantee short-circuit evaluation of OR, so
 -- "x = 'avatars' or can_access_wishlist_board(x::uuid)" can still try (and
