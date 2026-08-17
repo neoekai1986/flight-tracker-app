@@ -488,6 +488,33 @@
       border-radius:10px;font-size:13.5px;display:flex;flex-direction:column;gap:2px}
   .wl-profile-loc{font-size:12px;color:var(--muted)}
 
+  .wl-openable{cursor:pointer}
+  .wl-openable:hover{opacity:.9}
+  h3.wl-openable:hover{color:var(--amber)}
+  .wl-open-link{background:none;border:none;padding:0;margin-top:2px;cursor:pointer;
+      color:var(--amber);font-size:12.5px;font-family:inherit;text-align:left;align-self:flex-start}
+  .wl-open-link:hover{text-decoration:underline}
+
+  .wl-detail{position:relative;background:var(--panel);border:1px solid var(--line);
+      border-radius:16px;width:100%;max-width:560px;max-height:86vh;overflow-y:auto;
+      box-shadow:0 18px 44px var(--shadow)}
+  .wl-detail-photo{width:100%;height:220px;background:var(--night) center/cover no-repeat;
+      border-radius:16px 16px 0 0}
+  .wl-detail-body{padding:22px 24px 26px}
+  .wl-detail-body h3{font-family:'Poppins',sans-serif;font-weight:700;font-size:22px}
+  .wl-detail-by{font-size:12px;color:var(--muted);margin-top:4px;margin-bottom:12px}
+  .wl-detail-section{margin-top:18px;padding-top:16px;border-top:1px solid var(--line)}
+  .wl-detail-section h4{font-family:'Poppins',sans-serif;font-weight:600;font-size:14px;
+      margin-bottom:7px;display:flex;align-items:center;gap:7px}
+  .wl-detail-section h4 img{width:22px;height:22px}
+  /* Research notes are typed as paragraphs with line breaks, so keep them. */
+  .wl-detail-notes{font-size:13.5px;line-height:1.6;color:var(--ink);
+      white-space:pre-wrap;overflow-wrap:anywhere}
+  /* The close button sits over the photo when there is one. */
+  .wl-detail .wl-profile-close{background:rgba(0,0,0,.45);color:#FFFFFF;border-radius:50%;
+      width:28px;height:28px;display:flex;align-items:center;justify-content:center}
+  .wl-detail .wl-profile-close:hover{background:rgba(0,0,0,.65);color:#FFFFFF}
+
   .wl-react{display:flex;align-items:center;gap:8px;margin-top:10px;
       padding-top:10px;border-top:1px solid var(--line)}
   .wl-vote,.wl-comment-toggle{display:inline-flex;align-items:center;gap:6px;
@@ -1522,6 +1549,10 @@ async function refresh(){
 // and is only cleared if the embedded select comes back saying otherwise.
 let wishlistReactionsAvailable = true;
 
+// Same idea for the per-entry research notes: assume present, and correct
+// ourselves from the first loaded entry if the migration hasn't run.
+let wishlistNotesAvailable = true;
+
 async function loadWishlistBoards(){
   const withReactions =
     "*, wishlist_collaborators(*), wishlist_entries(*, wishlist_votes(*), wishlist_comments(*))";
@@ -1545,6 +1576,12 @@ async function loadWishlistBoards(){
   }
   if (error) { console.error(error); return []; }
   for (const b of data) (b.wishlist_entries || []).sort((a, b2) => a.position - b2.position);
+  // select("*") returns exactly the columns that exist, so a loaded entry
+  // tells us whether the notes migration has run. Without this the notes
+  // fields would go into an insert that PostgREST rejects wholesale, and
+  // adding a pitch at all would break on an un-migrated database.
+  const sample = data.flatMap(b => b.wishlist_entries || [])[0];
+  if (sample) wishlistNotesAvailable = "flight_notes" in sample;
   return data;
 }
 
@@ -1601,6 +1638,11 @@ async function createWishlistEntry(boardId, fields){
     title: fields.title, location: fields.location || null,
     photo_path: fields.photoPath || null,
     blurb: fields.blurb || null, things_to_do: fields.thingsToDo || null,
+    ...(wishlistNotesAvailable ? {
+      flight_notes: fields.flightNotes || null,
+      stay_notes: fields.stayNotes || null,
+      other_notes: fields.otherNotes || null,
+    } : {}),
     position
   }).select().single();
   if (error) { alert(error.message); return null; }
@@ -3426,9 +3468,10 @@ function wireViewMenu(){
   });
 }
 
-// Escape closes the wishlist profile panel. Registered once at the document
-// level — wireWishlistBody() runs on every render, so binding it there would
-// stack up a new listener each time.
+// Escape closes whichever wishlist overlay is open — the profile panel and
+// the entry detail share one holder, so clearing it covers both. Registered
+// once at the document level: wireWishlistBody() runs on every render, so
+// binding it there would stack up a listener each time.
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const holder = document.querySelector("[data-wishlist-profile-panel]");
@@ -3706,19 +3749,27 @@ function renderWishlistCard(entry, isBoardOwner){
   // by rewriting someone's pitch. Matches wishlist_entries_update in RLS, so
   // a button is never shown for something the database would refuse.
   const canRemove = isMine || isBoardOwner;
+  // The research notes live behind the card rather than on it, so the board
+  // stays scannable. Flagged here so you can tell there's something to open.
+  const hasDetails = !!(entry.flight_notes || entry.stay_notes || entry.other_notes);
   return `
     <div class="wishlist-card" data-wishlist-card="${entry.id}">
-      <div class="wishlist-photo" data-wishlist-photo="${entry.id}" data-photo-path="${esc(entry.photo_path||"")}"></div>
+      <div class="wishlist-photo wl-openable" data-wishlist-photo="${entry.id}"
+        data-wl-open="${entry.id}" data-photo-path="${esc(entry.photo_path||"")}"
+        title="Open ${esc(entry.title)}"></div>
       <div class="wishlist-card-body">
         <button type="button" class="wishlist-author" data-wishlist-profile-view="${entry.created_by}"
             title="See ${esc(authorName)}'s pitches">
           <span class="wishlist-avatar" data-wishlist-avatar="${entry.created_by}" data-avatar-path="${esc(profile.avatar_path||"")}"></span>
           <span class="wishlist-author-name">${esc(authorName)}</span>
         </button>
-        <h3>${esc(entry.title)}</h3>
+        <h3 class="wl-openable" data-wl-open="${entry.id}" title="Open ${esc(entry.title)}">${esc(entry.title)}</h3>
         ${entry.location ? `<p class="wishlist-location">📍 ${esc(entry.location)}</p>` : ""}
         ${entry.blurb ? `<p class="wishlist-blurb">${esc(entry.blurb)}</p>` : ""}
         ${thingsList.length ? `<ul class="wishlist-todo">${thingsList.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
+        <button type="button" class="wl-open-link" data-wl-open="${entry.id}">
+          ${hasDetails ? "Flights, stay &amp; more" : "Open"} →
+        </button>
 
         ${renderWishlistReactions(entry, isBoardOwner)}
 
@@ -3791,6 +3842,40 @@ function renderWishlistReactions(entry, isBoardOwner){
     </div>`;
 }
 
+// The full pitch, including the research notes the card deliberately hides.
+function renderWishlistDetailPanel(entry){
+  const thingsList = (entry.things_to_do || "").split("\n").map(s => s.trim()).filter(Boolean);
+  const sections = [
+    { label: "Getting there", icon: ICON_FLIGHT, body: entry.flight_notes },
+    { label: "Where we'd stay", icon: ICON_HOTEL, body: entry.stay_notes },
+    { label: "Anything else", icon: "📝", body: entry.other_notes },
+  ].filter(s => s.body);
+  return `
+    <div class="wl-profile-overlay" data-wl-detail-overlay>
+      <div class="wl-detail" role="dialog" aria-label="${esc(entry.title)}">
+        <button type="button" class="wl-profile-close" data-wl-detail-close aria-label="Close">×</button>
+        ${entry.photo_path ? `<div class="wl-detail-photo" data-wishlist-photo="detail-${entry.id}"
+          data-photo-path="${esc(entry.photo_path)}"></div>` : ""}
+        <div class="wl-detail-body">
+          <h3>${esc(entry.title)}</h3>
+          ${entry.location ? `<p class="wishlist-location">📍 ${esc(entry.location)}</p>` : ""}
+          <p class="wl-detail-by">Pitched by ${esc(wishlistPersonName(entry.created_by))}</p>
+          ${entry.blurb ? `<p class="wishlist-blurb">${esc(entry.blurb)}</p>` : ""}
+          ${thingsList.length ? `<div class="wl-detail-section">
+            <h4>Things to do</h4>
+            <ul class="wishlist-todo">${thingsList.map(t => `<li>${esc(t)}</li>`).join("")}</ul>
+          </div>` : ""}
+          ${sections.map(s => `<div class="wl-detail-section">
+            <h4>${s.icon} ${s.label}</h4>
+            <p class="wl-detail-notes">${esc(s.body)}</p>
+          </div>`).join("")}
+          ${sections.length ? "" : `<p class="empty-hist">No flight or stay notes yet —
+            whoever pitched this can add them with Edit.</p>`}
+        </div>
+      </div>
+    </div>`;
+}
+
 // Profile panel — who someone is and what they've pitched on this board.
 // Built from what's already stored (name + avatar), so it needs no schema
 // change; the pitches are pulled from the board already in memory.
@@ -3848,7 +3933,20 @@ function wishlistEntryFormHTML(prefix, idAttr){
       <label class="field span2">Things to do (one per line)
         <textarea data-${p}-todo placeholder="Visit the bamboo grove&#10;Try a kaiseki dinner"></textarea>
       </label>
-      <div class="span2 row" style="margin:0">
+
+      ${wishlistNotesAvailable ? `
+      <div class="form-section">The practical bit <span class="field-opt">(all optional — kept off the card, shown when someone opens it)</span></div>
+      <label class="field span2">Getting there
+        <textarea data-${p}-flight placeholder="Rough flight times, airlines, what it'd cost, whether points would cover it"></textarea>
+      </label>
+      <label class="field span2">Where we'd stay
+        <textarea data-${p}-stay placeholder="Neighbourhoods, a hotel or rental you found, rough nightly rate"></textarea>
+      </label>
+      <label class="field span2">Anything else
+        <textarea data-${p}-other placeholder="Best time of year, visas, how many days you'd need, links"></textarea>
+      </label>` : ""}
+
+      <div class="span2 row form-actions">
         <button class="btn btn-sm" data-${p}-save>Save</button>
         <button class="btn-link" data-${p}-cancel>cancel</button>
       </div>
@@ -4086,8 +4184,12 @@ function wireWishlistBody(){
       const location = holder.querySelector("[data-nw-location]").value.trim();
       const blurb = holder.querySelector("[data-nw-blurb]").value.trim();
       const thingsToDo = holder.querySelector("[data-nw-todo]").value.trim();
+      const flightNotes = holder.querySelector("[data-nw-flight]")?.value.trim() || "";
+      const stayNotes = holder.querySelector("[data-nw-stay]")?.value.trim() || "";
+      const otherNotes = holder.querySelector("[data-nw-other]")?.value.trim() || "";
       const file = photoField.getFile();
-      const entry = await createWishlistEntry(board.id, { title, location, blurb, thingsToDo });
+      const entry = await createWishlistEntry(board.id,
+        { title, location, blurb, thingsToDo, flightNotes, stayNotes, otherNotes });
       if (entry && file){
         const path = await uploadWishlistPhoto(board.id, file);
         if (path) await updateWishlistEntry(entry.id, { photo_path: path });
@@ -4109,6 +4211,11 @@ function wireWishlistBody(){
       form.querySelector("[data-ew-location]").value = entry.location || "";
       form.querySelector("[data-ew-blurb]").value = entry.blurb || "";
       form.querySelector("[data-ew-todo]").value = entry.things_to_do || "";
+      if (wishlistNotesAvailable){
+        form.querySelector("[data-ew-flight]").value = entry.flight_notes || "";
+        form.querySelector("[data-ew-stay]").value = entry.stay_notes || "";
+        form.querySelector("[data-ew-other]").value = entry.other_notes || "";
+      }
       const photoField = setupPhotoField(form, { prefix: "ew", cropConfig: null, existingPath: entry.photo_path });
       form.querySelector("[data-ew-cancel]").addEventListener("click", render);
       form.querySelector("[data-ew-save]").addEventListener("click", async () => {
@@ -4118,6 +4225,11 @@ function wireWishlistBody(){
         const thingsToDo = form.querySelector("[data-ew-todo]").value.trim();
         const file = photoField.getFile();
         const patch = { title, location, blurb, things_to_do: thingsToDo };
+        if (wishlistNotesAvailable){
+          patch.flight_notes = form.querySelector("[data-ew-flight]").value.trim() || null;
+          patch.stay_notes = form.querySelector("[data-ew-stay]").value.trim() || null;
+          patch.other_notes = form.querySelector("[data-ew-other]").value.trim() || null;
+        }
         if (file){
           const path = await uploadWishlistPhoto(board.id, file);
           if (path) patch.photo_path = path;
@@ -4142,6 +4254,31 @@ function wireWishlistBody(){
       if (!ok) return;
       await deleteWishlistEntry(btn.dataset.delWishlistEntry);
       await refreshWishlist();
+    });
+  });
+
+  // Opening an entry. Rendered into the same holder the profile panel uses,
+  // so the two can't be on screen at once.
+  document.querySelectorAll("[data-wl-open]").forEach(el => {
+    el.addEventListener("click", () => {
+      const board = wishlistBoards.find(b => b.id === activeWishlistBoardId) || wishlistBoards[0];
+      const entry = (board?.wishlist_entries || []).find(e => e.id === el.dataset.wlOpen);
+      const holder = document.querySelector("[data-wishlist-profile-panel]");
+      if (!entry || !holder) return;
+      holder.innerHTML = renderWishlistDetailPanel(entry);
+      const close = () => { holder.innerHTML = ""; };
+      holder.querySelector("[data-wl-detail-close]").addEventListener("click", close);
+      holder.querySelector("[data-wl-detail-overlay]").addEventListener("click", (e) => {
+        if (e.target === e.currentTarget) close();
+      });
+      // The photo is a signed URL, and this markup appeared after the pass
+      // below that resolves them.
+      holder.querySelectorAll("[data-photo-path]").forEach(async (ph) => {
+        const path = ph.dataset.photoPath;
+        if (!path) return;
+        const url = await wishlistSignedUrl(path);
+        if (url) ph.style.backgroundImage = `url(${url})`;
+      });
     });
   });
 

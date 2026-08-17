@@ -181,6 +181,13 @@ create table public.wishlist_entries (
   photo_path    text,
   blurb         text,
   things_to_do  text,
+  -- Practical legwork behind a pitch: rough flights, where you'd stay,
+  -- anything else worth knowing. Deliberately free text — this is research
+  -- notes at the "should we go" stage, not a booking. Kept off the card face
+  -- and shown when you open an entry, so the board stays scannable.
+  flight_notes  text,
+  stay_notes    text,
+  other_notes   text,
   position      double precision not null default 0,
   created_at    timestamptz not null default now(),
   updated_at    timestamptz not null default now()
