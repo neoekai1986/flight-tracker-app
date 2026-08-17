@@ -487,6 +487,34 @@
   .wl-profile-list li{padding:10px 12px;background:var(--panel2);border:1px solid var(--line);
       border-radius:10px;font-size:13.5px;display:flex;flex-direction:column;gap:2px}
   .wl-profile-loc{font-size:12px;color:var(--muted)}
+
+  .wl-react{display:flex;align-items:center;gap:8px;margin-top:10px;
+      padding-top:10px;border-top:1px solid var(--line)}
+  .wl-vote,.wl-comment-toggle{display:inline-flex;align-items:center;gap:6px;
+      background:none;border:1px solid var(--line);border-radius:20px;padding:5px 11px;
+      color:var(--muted);font-size:12.5px;font-family:inherit;cursor:pointer}
+  .wl-vote:hover,.wl-comment-toggle:hover{border-color:var(--amber);color:var(--ink)}
+  .wl-vote:disabled{cursor:default;opacity:.6}
+  /* Voted is a state you should be able to read at a glance across a grid of
+     cards, so it fills rather than just recolouring the outline. */
+  .wl-vote.wl-voted{background:var(--amber);border-color:var(--amber);color:var(--btn-ink)}
+  .wl-vote.wl-voted:hover{color:var(--btn-ink)}
+  .wl-vote-count{font-variant-numeric:tabular-nums;font-weight:600}
+  .wl-comment-toggle .wl-caret{font-size:9px;transition:transform .15s ease;display:inline-block}
+  .wl-comment-toggle[aria-expanded="true"] .wl-caret{transform:rotate(180deg)}
+
+  .wl-thread{margin-top:10px;display:flex;flex-direction:column;gap:10px}
+  .wl-comment{background:var(--panel2);border:1px solid var(--line);border-radius:10px;
+      padding:9px 11px}
+  .wl-comment-head{display:flex;align-items:baseline;gap:8px;margin-bottom:3px}
+  .wl-comment-who{font-size:12px;font-weight:600}
+  .wl-comment-when{font-size:11px;color:var(--muted);flex:1}
+  .wl-comment-del{background:none;border:none;color:var(--muted);cursor:pointer;
+      font-size:15px;line-height:1;padding:0 2px}
+  .wl-comment-del:hover{color:var(--bad)}
+  .wl-comment-body{font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+  .wl-comment-form{display:flex;gap:8px;align-items:flex-start}
+  .wl-comment-form textarea{flex:1;min-height:38px;min-width:0}
   .wishlist-card h3{font-size:16px;font-weight:600;margin:0}
   .wishlist-location{font-size:12.5px;color:var(--muted)}
   .wishlist-blurb{font-size:13px;color:var(--ink);line-height:1.5}
@@ -776,6 +804,10 @@ const CHART_RANGE_DAYS = { "1m": 30, "3m": 90 };
 // lifetime and reasoning as chartRanges: the collapse is what gives the result
 // rows their density, and which rows you left open is view state, not data.
 let openCardDetails = new Set();
+
+// Wishlist entry ids whose comment thread is expanded. Same lifetime and
+// reasoning as openCardDetails — view state, never persisted.
+let openWishlistComments = new Set();
 
 // Filter rail state — trip.id -> { status, type, program }, each a Set. An
 // empty Set means "no filter on this facet", not "nothing matches", so a fresh
@@ -1486,11 +1518,31 @@ async function refresh(){
 
 // ---------------- Wish List Planning data layer ----------------
 
+// True once we've confirmed the votes/comments tables exist. Starts optimistic
+// and is only cleared if the embedded select comes back saying otherwise.
+let wishlistReactionsAvailable = true;
+
 async function loadWishlistBoards(){
-  const { data, error } = await supabase
+  const withReactions =
+    "*, wishlist_collaborators(*), wishlist_entries(*, wishlist_votes(*), wishlist_comments(*))";
+  const plain = "*, wishlist_collaborators(*), wishlist_entries(*)";
+
+  let { data, error } = await supabase
     .from("wishlist_boards")
-    .select("*, wishlist_collaborators(*), wishlist_entries(*)")
+    .select(wishlistReactionsAvailable ? withReactions : plain)
     .order("created_at", { ascending: true });
+
+  // PGRST200 means PostgREST can't find the votes/comments relationship —
+  // the migration hasn't been run. Without this the embedded select takes the
+  // whole board down with it and the page looks empty, which is a bad way to
+  // find out you've missed a migration. Fall back to the board as it was and
+  // hide the vote/comment controls instead.
+  if (error && error.code === "PGRST200"){
+    wishlistReactionsAvailable = false;
+    ({ data, error } = await supabase
+      .from("wishlist_boards").select(plain)
+      .order("created_at", { ascending: true }));
+  }
   if (error) { console.error(error); return []; }
   for (const b of data) (b.wishlist_entries || []).sort((a, b2) => a.position - b2.position);
   return data;
@@ -1562,6 +1614,31 @@ async function updateWishlistEntry(id, patch){
 
 async function deleteWishlistEntry(id){
   const { error } = await supabase.from("wishlist_entries").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+// One row per person per pitch, so voting is an insert and un-voting a
+// delete — no counter to keep in step, and the unique constraint means a
+// double-click can't double-count.
+async function toggleWishlistVote(entryId, currentlyVoted){
+  const { error } = currentlyVoted
+    ? await supabase.from("wishlist_votes").delete()
+        .eq("entry_id", entryId).eq("user_id", session.user.id)
+    : await supabase.from("wishlist_votes")
+        .insert({ entry_id: entryId, user_id: session.user.id });
+  // A duplicate here means the vote is already cast — the end state the user
+  // asked for, so it isn't worth interrupting them over.
+  if (error && error.code !== "23505") alert(error.message);
+}
+
+async function addWishlistComment(entryId, body){
+  const { error } = await supabase.from("wishlist_comments")
+    .insert({ entry_id: entryId, created_by: session.user.id, body });
+  if (error) alert(error.message);
+}
+
+async function deleteWishlistComment(id){
+  const { error } = await supabase.from("wishlist_comments").delete().eq("id", id);
   if (error) alert(error.message);
 }
 
@@ -3642,11 +3719,74 @@ function renderWishlistCard(entry, isBoardOwner){
         ${entry.location ? `<p class="wishlist-location">📍 ${esc(entry.location)}</p>` : ""}
         ${entry.blurb ? `<p class="wishlist-blurb">${esc(entry.blurb)}</p>` : ""}
         ${thingsList.length ? `<ul class="wishlist-todo">${thingsList.map(t => `<li>${esc(t)}</li>`).join("")}</ul>` : ""}
+
+        ${renderWishlistReactions(entry, isBoardOwner)}
+
         ${isMine || canRemove ? `<div class="row" style="margin-top:8px">
           ${isMine ? `<button class="btn btn-ghost btn-sm" data-edit-wishlist-entry="${entry.id}">Edit</button>` : ""}
           ${canRemove ? `<button class="btn-link" data-del-wishlist-entry="${entry.id}"
             data-entry-mine="${isMine ? "1" : ""}">${isMine ? "delete" : "remove"}</button>` : ""}
         </div>` : ""}
+      </div>
+    </div>`;
+}
+
+// Name for a person, falling back the same way the card header does.
+function wishlistPersonName(userId){
+  const p = wishlistProfiles.get(userId) || {};
+  return p.display_name || (userId === session.user.id ? "You" : "Family member");
+}
+
+// Votes and comments. The thread is collapsed by default and its state lives
+// in openWishlistComments, so opening one and posting doesn't close it when
+// the board re-renders.
+function renderWishlistReactions(entry, isBoardOwner){
+  // Migration not run yet — offering buttons that can only fail is worse
+  // than not offering them.
+  if (!wishlistReactionsAvailable) return "";
+  const votes = entry.wishlist_votes || [];
+  const comments = (entry.wishlist_comments || [])
+    .slice().sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""));
+  const iVoted = votes.some(v => v.user_id === session.user.id);
+  const open = openWishlistComments.has(entry.id);
+  // Who's keen is the useful part on a family board, so name them rather than
+  // just showing a number.
+  const voterNames = votes.map(v => wishlistPersonName(v.user_id));
+  const voteTitle = voterNames.length
+    ? `${voterNames.join(", ")} voted for this`
+    : "No votes yet — be the first";
+
+  return `
+    <div class="wl-react">
+      <button type="button" class="wl-vote${iVoted ? " wl-voted" : ""}"
+          data-wl-vote="${entry.id}" data-voted="${iVoted ? "1" : ""}"
+          title="${esc(voteTitle)}" aria-pressed="${iVoted}">
+        <span class="wl-vote-icon">${iVoted ? "♥" : "♡"}</span>
+        <span class="wl-vote-count">${votes.length}</span>
+      </button>
+      <button type="button" class="wl-comment-toggle" data-wl-comments="${entry.id}"
+          aria-expanded="${open}">
+        💬 ${comments.length ? `${comments.length}` : "Comment"}
+        <span class="wl-caret">▾</span>
+      </button>
+    </div>
+    <div class="wl-thread" data-wl-thread="${entry.id}"${open ? "" : " hidden"}>
+      ${comments.length ? comments.map(c => {
+        const canDelete = c.created_by === session.user.id || isBoardOwner;
+        return `<div class="wl-comment">
+          <div class="wl-comment-head">
+            <span class="wl-comment-who">${esc(wishlistPersonName(c.created_by))}</span>
+            <span class="wl-comment-when">${esc(fmtShortDate((c.created_at || "").slice(0, 10)) || "")}</span>
+            ${canDelete ? `<button type="button" class="wl-comment-del"
+              data-wl-del-comment="${c.id}" title="Delete this comment">×</button>` : ""}
+          </div>
+          <p class="wl-comment-body">${esc(c.body)}</p>
+        </div>`;
+      }).join("") : `<p class="empty-hist">No comments yet.</p>`}
+      <div class="wl-comment-form">
+        <textarea data-wl-comment-input="${entry.id}" rows="2"
+          placeholder="Add a comment…"></textarea>
+        <button class="btn btn-sm" data-wl-comment-save="${entry.id}">Post</button>
       </div>
     </div>`;
 }
@@ -4001,6 +4141,62 @@ function wireWishlistBody(){
         : confirm(`Remove ${who}'s pitch "${what}" from the board?\n\nThis deletes it for everyone and can't be undone.`);
       if (!ok) return;
       await deleteWishlistEntry(btn.dataset.delWishlistEntry);
+      await refreshWishlist();
+    });
+  });
+
+  document.querySelectorAll("[data-wl-vote]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      // Paint the new state immediately — a vote should feel instant, and the
+      // refresh below replaces this markup with the server's answer anyway.
+      const voted = btn.dataset.voted === "1";
+      const count = btn.querySelector(".wl-vote-count");
+      count.textContent = Math.max(0, Number(count.textContent) + (voted ? -1 : 1));
+      btn.classList.toggle("wl-voted", !voted);
+      btn.disabled = true;
+      await toggleWishlistVote(btn.dataset.wlVote, voted);
+      await refreshWishlist();
+    });
+  });
+
+  document.querySelectorAll("[data-wl-comments]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const id = btn.dataset.wlComments;
+      const thread = document.querySelector(`[data-wl-thread="${id}"]`);
+      if (!thread) return;
+      const opening = thread.hidden;
+      thread.hidden = !opening;
+      btn.setAttribute("aria-expanded", String(opening));
+      if (opening){
+        openWishlistComments.add(id);
+        thread.querySelector("[data-wl-comment-input]")?.focus();
+      } else {
+        openWishlistComments.delete(id);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-wl-comment-save]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = btn.dataset.wlCommentSave;
+      const input = document.querySelector(`[data-wl-comment-input="${id}"]`);
+      const body = (input?.value || "").trim();
+      if (!body) { input?.focus(); return; }
+      btn.disabled = true;
+      // Keep the thread open across the re-render — you've just posted, so
+      // seeing your comment land is the whole point.
+      openWishlistComments.add(id);
+      await addWishlistComment(id, body);
+      await refreshWishlist();
+    });
+  });
+
+  document.querySelectorAll("[data-wl-del-comment]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete this comment?")) return;
+      const entryId = btn.closest("[data-wl-thread]")?.dataset.wlThread;
+      if (entryId) openWishlistComments.add(entryId);
+      await deleteWishlistComment(btn.dataset.wlDelComment);
       await refreshWishlist();
     });
   });
