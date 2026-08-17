@@ -83,6 +83,21 @@ as $$
   );
 $$;
 
+-- "Do I own this board" — used by wishlist_entries_delete so the owner can
+-- curate. Security definer for the same reason as the two above: a plain
+-- subquery over wishlist_boards inside a policy is evaluated with that
+-- table's own RLS applied, so the answer would depend on a second policy
+-- holding up rather than on the fact being asked about.
+create or replace function public.is_wishlist_board_owner(p_board_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.wishlist_boards b
+    where b.id = p_board_id and b.owner_id = auth.uid()
+  );
+$$;
+
 alter table public.trip_folders enable row level security;
 alter table public.trip_categories enable row level security;
 alter table public.trips enable row level security;
@@ -361,7 +376,7 @@ create policy wishlist_entries_update on public.wishlist_entries
 create policy wishlist_entries_delete on public.wishlist_entries
   for delete using (
     created_by = auth.uid()
-    or board_id in ( select id from public.wishlist_boards where owner_id = auth.uid() )
+    or public.is_wishlist_board_owner(board_id)
   );
 
 -- Postgres doesn't guarantee short-circuit evaluation of OR, so
