@@ -507,6 +507,9 @@
   .wl-detail-section h4{font-family:'Poppins',sans-serif;font-weight:600;font-size:14px;
       margin-bottom:7px;display:flex;align-items:center;gap:7px}
   .wl-detail-section h4 img{width:22px;height:22px}
+  /* The other two icons are images that the flex gap spaces on their own; this
+     one is an emoji in a text node, so give it the same footing. */
+  .wl-detail-emoji{font-size:17px;line-height:1}
   /* Research notes are typed as paragraphs with line breaks, so keep them. */
   .wl-detail-notes{font-size:13.5px;line-height:1.6;color:var(--ink);
       white-space:pre-wrap;overflow-wrap:anywhere}
@@ -3848,7 +3851,7 @@ function renderWishlistDetailPanel(entry){
   const sections = [
     { label: "Getting there", icon: ICON_FLIGHT, body: entry.flight_notes },
     { label: "Where we'd stay", icon: ICON_HOTEL, body: entry.stay_notes },
-    { label: "Anything else", icon: "📝", body: entry.other_notes },
+    { label: "Anything else", icon: `<span class="wl-detail-emoji">📝</span>`, body: entry.other_notes },
   ].filter(s => s.body);
   return `
     <div class="wl-profile-overlay" data-wl-detail-overlay>
