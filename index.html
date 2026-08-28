@@ -867,13 +867,22 @@ let planningSelections = new Map();
 let chartRanges = new Map();
 const CHART_RANGE_DAYS = { "1m": 30, "3m": 90 };
 
-// Which cards have their price-tracking detail open — card id -> true. Same
-// lifetime and reasoning as chartRanges: the collapse is what gives the result
-// rows their density, and which rows you left open is view state, not data.
-let openCardDetails = new Set();
+// Tracking mode: the default for whether a card shows its price graph. Off,
+// cards are collapsed and the board stays dense; on, every flight across every
+// trip opens its tracking detail. Persisted, because it describes how you want
+// to work rather than where you happen to be.
+const TRACKING_MODE_KEY = "flight-tracker-tracking-mode";
+let trackingMode = localStorage.getItem(TRACKING_MODE_KEY) === "1";
+
+// Cards that differ from that default — not "cards that are open". Storing the
+// deviation rather than the state is what lets the per-card caret keep working
+// inside either mode without a second Set to keep in step, and flipping the
+// mode is then just clearing the exceptions.
+let cardDetailOverrides = new Set();
+const cardDetailOpen = id => trackingMode !== cardDetailOverrides.has(id);
 
 // Wishlist entry ids whose comment thread is expanded. Same lifetime and
-// reasoning as openCardDetails — view state, never persisted.
+// reasoning as cardDetailOverrides — view state, never persisted.
 let openWishlistComments = new Set();
 
 // Filter rail state — trip.id -> { status, type, program }, each a Set. An
@@ -2356,7 +2365,7 @@ function renderCard(trip, f){
       </button>` : ""}`;
   }
 
-  const open = openCardDetails.has(f.id);
+  const open = cardDetailOpen(f.id);
   return `
   <div class="card${f.status === "watching" ? " card-watching" : " card-booked"}" data-card="${f.id}" data-leg="${legScope(f.leg)}" data-trip="${trip.id}">
     <div class="res-row">
@@ -2631,28 +2640,12 @@ function renderFilterRail(trip){
   ].filter(g => g.opts.length);
 
   const active = sel.status.size + sel.type.size + sel.program.size;
-  // Price tracking is collapsed per card by default; this opens every flight's
-  // at once so the graphs can be compared side by side, which is the whole
-  // reason to look at more than one. "On" means every flight is already open.
-  const withChecks = fl.filter(f => (f.price_logs || []).length).length;
-  const graphsOn = fl.length > 0 && fl.every(f => openCardDetails.has(f.id));
   return `
     <aside class="filter-rail">
       <div class="filter-rail-head">
         <span class="filter-rail-title">Filters</span>
         ${active ? `<button type="button" class="btn-link" data-filter-clear="${trip.id}">clear</button>` : ""}
       </div>
-      ${fl.length ? `
-      <details class="filter-group" open>
-        <summary>Show</summary>
-        <div class="filter-opts">
-          <label class="filter-opt${withChecks ? "" : " filter-opt-empty"}">
-            <input type="checkbox" data-graphs-toggle="${trip.id}" ${graphsOn ? "checked" : ""}>
-            <span class="filter-opt-label">Price graphs</span>
-            <span class="filter-opt-count">${withChecks}</span>
-          </label>
-        </div>
-      </details>` : ""}
       ${groups.map(g => `
         <details class="filter-group" open>
           <summary>${g.label}</summary>
@@ -3493,6 +3486,7 @@ function renderViewMenu(showImport){
       <summary class="hamburger-btn" title="Menu" aria-label="Menu">☰</summary>
       <div class="menu-panel">
         <button type="button" id="toggleCalendarBtn">${calendarVisible ? "Hide calendar" : "Show calendar"}</button>
+        <button type="button" id="toggleTrackingBtn">${trackingMode ? "Turn off tracking mode" : "Turn on tracking mode"}</button>
         <button type="button" id="toggleBulkSelectBtn">${bulkSelectMode ? "Done selecting" : "Select trips"}</button>
         <div class="menu-divider"></div>
         ${showImport ? `<button type="button" data-menu-action="importLocal">Import from this browser's saved data</button>` : ""}
@@ -3508,6 +3502,15 @@ function wireViewMenu(){
   document.getElementById("toggleCalendarBtn").addEventListener("click", () => {
     calendarVisible = !calendarVisible;
     localStorage.setItem(CALENDAR_VISIBLE_KEY, calendarVisible ? "1" : "0");
+    render();
+  });
+  document.getElementById("toggleTrackingBtn").addEventListener("click", () => {
+    trackingMode = !trackingMode;
+    localStorage.setItem(TRACKING_MODE_KEY, trackingMode ? "1" : "0");
+    // Switching the default makes the old exceptions meaningless — carrying
+    // them over would leave a card you'd collapsed yesterday mysteriously shut
+    // while everything around it opened.
+    cardDetailOverrides.clear();
     render();
   });
   document.getElementById("toggleBulkSelectBtn").addEventListener("click", () => {
@@ -3560,20 +3563,6 @@ document.addEventListener("click", (e) => {
   render();
 });
 
-// "Price graphs" drives the same openCardDetails Set the per-card carets use,
-// so the two can't disagree: opening all then closing one leaves the checkbox
-// unticked, which is the truth. Full render() here — unlike a single caret,
-// this changes every card.
-document.addEventListener("change", (e) => {
-  const box = e.target.closest("[data-graphs-toggle]");
-  if (!box) return;
-  const trip = trips.find(t => t.id === box.dataset.graphsToggle);
-  for (const f of (trip?.flights || [])){
-    if (box.checked) openCardDetails.add(f.id); else openCardDetails.delete(f.id);
-  }
-  render();
-});
-
 // The price-tracking detail is always in the DOM and just hidden, so opening a
 // row is a `hidden` flip rather than a render() — same reasoning as the chart
 // ranges below, and it means an edit form open elsewhere survives the click.
@@ -3587,15 +3576,11 @@ document.addEventListener("click", (e) => {
   detail.hidden = !open;
   btn.setAttribute("aria-expanded", String(open));
   btn.title = `${open ? "Hide" : "Show"} price tracking`;
-  if (open) openCardDetails.add(id); else openCardDetails.delete(id);
-  // Keep the rail's "Price graphs" box honest: it means "every flight is
-  // open", so closing any one card has to untick it. Done by hand because
-  // this handler deliberately avoids render().
-  const all = document.querySelector("[data-graphs-toggle]");
-  if (all){
-    const details = document.querySelectorAll("[data-card-detail]");
-    all.checked = details.length > 0 && [...details].every(d => !d.hidden);
-  }
+  // Record the deviation from whatever tracking mode currently dictates, so
+  // this card stays as you left it across re-renders without needing to know
+  // which mode we're in.
+  if (open === trackingMode) cardDetailOverrides.delete(id);
+  else cardDetailOverrides.add(id);
 });
 
 // Chart range presets swap just that one chart rather than calling render(),
