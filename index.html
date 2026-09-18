@@ -1228,11 +1228,20 @@ function renderCalMonth(year, month, rangeStart, rangeEnd){
     <div class="cal-actions"><button type="button" class="btn-link" data-cal-clear>clear</button></div>`;
 }
 
+// The month a fresh picker should open on. Today is almost never the right
+// answer: you're booking for a trip that already has dates, so opening on the
+// current month means paging forward every single time.
+function pickerAnchorDate(){
+  const trip = trips.find(t => t.id === activeTripId);
+  return parseISODate(trip?.travel_start) || parseISODate(trip?.travel_end) || null;
+}
+
 function openDateRangePicker(anchorBtn, startInput, endInput){
   closeDateRangePopover();
   let rangeStart = parseISODate(startInput.value);
   let rangeEnd = parseISODate(endInput.value);
-  const initial = rangeStart || new Date();
+  // Already-chosen start wins, then the trip's own dates, then today.
+  const initial = rangeStart || pickerAnchorDate() || new Date();
   let viewYear = initial.getFullYear(), viewMonth = initial.getMonth();
 
   const pop = document.createElement("div");
@@ -1274,6 +1283,9 @@ function openDateRangePicker(anchorBtn, startInput, endInput){
         const clicked = parseISODate(cell.dataset.calDay);
         if (!rangeStart || rangeEnd){
           rangeStart = clicked; rangeEnd = null;
+          // Follow the new start: the end date is nearly always in the same
+          // month or the next one, so that's where the second click belongs.
+          viewYear = clicked.getFullYear(); viewMonth = clicked.getMonth();
         } else if (clicked < rangeStart){
           rangeEnd = rangeStart; rangeStart = clicked;
         } else {
@@ -1295,14 +1307,25 @@ function openDateRangePicker(anchorBtn, startInput, endInput){
 
 function wireDateRangeButtons(){
   document.querySelectorAll("[data-dr-btn]").forEach(btn => {
+    const container = btn.closest(
+      "[data-edit-form], [data-add-flight-form], [data-rental-edit-form], [data-add-rental-form], [data-meta-edit]"
+    ) || btn.parentElement;
+    const startInput = container.querySelector(btn.dataset.drStart);
+    const endInput = container.querySelector(btn.dataset.drEnd);
+    if (!startInput || !endInput) return;
+
+    // These buttons already declare which two fields pair up, so use that to
+    // tie the native pickers together too — not everyone opens the popover.
+    // min on the end field does double duty: a return before the departure is
+    // nonsense and is now unselectable, and an empty native picker opens at
+    // its min, so the end date starts from the start date rather than today.
+    const trailStart = () => { endInput.min = startInput.value || ""; };
+    trailStart();
+    startInput.addEventListener("change", trailStart);
+    startInput.addEventListener("input", trailStart);
+
     btn.addEventListener("click", (e) => {
       e.preventDefault();
-      const container = btn.closest(
-        "[data-edit-form], [data-add-flight-form], [data-rental-edit-form], [data-add-rental-form], [data-meta-edit]"
-      ) || btn.parentElement;
-      const startInput = container.querySelector(btn.dataset.drStart);
-      const endInput = container.querySelector(btn.dataset.drEnd);
-      if (!startInput || !endInput) return;
       openDateRangePicker(btn, startInput, endInput);
     });
   });
