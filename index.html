@@ -287,6 +287,10 @@
   .filter-opt-label{min-width:0;flex:1}
   .filter-opt-count{color:var(--muted);font-size:11.5px;font-variant-numeric:tabular-nums;
       flex-shrink:0}
+  /* This one switch is global while everything under it is per-trip, so say so
+     rather than letting its neighbours imply the wrong scope. */
+  .filter-opt-scope{display:block;font-size:10.5px;color:var(--muted);
+      letter-spacing:.04em;text-transform:uppercase;margin-top:1px}
   /* Kept clickable rather than disabled — a facet with 0 today may have items
      once something is added, and greying it out reads as broken. */
   .filter-opt-empty .filter-opt-label,.filter-opt-empty .filter-opt-count{opacity:.5}
@@ -880,6 +884,17 @@ let trackingMode = localStorage.getItem(TRACKING_MODE_KEY) === "1";
 // mode is then just clearing the exceptions.
 let cardDetailOverrides = new Set();
 const cardDetailOpen = id => trackingMode !== cardDetailOverrides.has(id);
+
+// The rail checkbox and the View-menu item are the same switch, so both go
+// through here. Switching the default makes the old per-card exceptions
+// meaningless — carrying them over would leave a card you'd collapsed
+// yesterday mysteriously shut while everything around it opened.
+function setTrackingMode(on){
+  trackingMode = on;
+  localStorage.setItem(TRACKING_MODE_KEY, on ? "1" : "0");
+  cardDetailOverrides.clear();
+  render();
+}
 
 // Wishlist entry ids whose comment thread is expanded. Same lifetime and
 // reasoning as cardDetailOverrides — view state, never persisted.
@@ -2663,12 +2678,27 @@ function renderFilterRail(trip){
   ].filter(g => g.opts.length);
 
   const active = sel.status.size + sel.type.size + sel.program.size;
+  // Tracking mode is global, but it belongs in the rail where you can see it.
+  // Moving it into the View menu made it effectively disappear — a price graph
+  // you can't find is the same as one that isn't there. The scope is spelled
+  // out on the label so the rail's per-trip filters don't imply otherwise.
+  const withChecks = fl.filter(f => (f.price_logs || []).length).length;
   return `
     <aside class="filter-rail">
       <div class="filter-rail-head">
         <span class="filter-rail-title">Filters</span>
         ${active ? `<button type="button" class="btn-link" data-filter-clear="${trip.id}">clear</button>` : ""}
       </div>
+      <details class="filter-group" open>
+        <summary>Show</summary>
+        <div class="filter-opts">
+          <label class="filter-opt">
+            <input type="checkbox" data-tracking-toggle ${trackingMode ? "checked" : ""}>
+            <span class="filter-opt-label">Price graphs<span class="filter-opt-scope">all trips</span></span>
+            <span class="filter-opt-count">${withChecks}</span>
+          </label>
+        </div>
+      </details>
       ${groups.map(g => `
         <details class="filter-group" open>
           <summary>${g.label}</summary>
@@ -3527,15 +3557,7 @@ function wireViewMenu(){
     localStorage.setItem(CALENDAR_VISIBLE_KEY, calendarVisible ? "1" : "0");
     render();
   });
-  document.getElementById("toggleTrackingBtn").addEventListener("click", () => {
-    trackingMode = !trackingMode;
-    localStorage.setItem(TRACKING_MODE_KEY, trackingMode ? "1" : "0");
-    // Switching the default makes the old exceptions meaningless — carrying
-    // them over would leave a card you'd collapsed yesterday mysteriously shut
-    // while everything around it opened.
-    cardDetailOverrides.clear();
-    render();
-  });
+  document.getElementById("toggleTrackingBtn").addEventListener("click", () => setTrackingMode(!trackingMode));
   document.getElementById("toggleBulkSelectBtn").addEventListener("click", () => {
     bulkSelectMode = !bulkSelectMode;
     selectedTripIds.clear();
@@ -3567,6 +3589,11 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   const holder = document.querySelector("[data-wishlist-profile-panel]");
   if (holder && holder.innerHTML) holder.innerHTML = "";
+});
+
+document.addEventListener("change", (e) => {
+  const box = e.target.closest("[data-tracking-toggle]");
+  if (box) setTrackingMode(box.checked);
 });
 
 // Filter rail. Delegated at the document level so the rail needs no re-binding
