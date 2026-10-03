@@ -1169,14 +1169,22 @@ function fmtTime(t){
 // Auto-generated flight title: "Dec 4 10:00 PM, BWI → DEN, 22,000 pts"
 // (date/time, depart airport → arrival airport, points or cash paid)
 // Round trip: "Dec 4 → Dec 8, BWI ⇄ DEN, 22,000 pts"
-function flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate){
+// Card title: who's flying it, when each leg goes, and what it cost when you
+// started watching. Takes an object rather than nine positional arguments —
+// adding the airline and the return time to the old signature would have made
+// the call sites unreadable.
+function flightTitle(o){
+  const { origin, destination, departDate, departTime, returnDate, returnTime,
+          paidCash, paidPoints, leg, airline } = o || {};
   if (!origin || !destination) return "";
   const parts = [];
+  if (airline) parts.push(String(airline).trim());
+  const stamp = (date, time) => [fmtShortDate(date), fmtTime(time)].filter(Boolean).join(" ");
   if (leg === "roundtrip" && returnDate){
-    parts.push(`${fmtShortDate(departDate)} → ${fmtShortDate(returnDate)}`);
+    parts.push(`${stamp(departDate, departTime)} → ${stamp(returnDate, returnTime)}`);
     parts.push(`${origin.toUpperCase()} ⇄ ${destination.toUpperCase()}`);
   } else {
-    const when = [fmtShortDate(departDate), fmtTime(departTime)].filter(Boolean).join(" ");
+    const when = stamp(departDate, departTime);
     if (when) parts.push(when);
     parts.push(`${origin.toUpperCase()} → ${destination.toUpperCase()}`);
   }
@@ -1222,6 +1230,10 @@ function parseFlightUrl(url){
       departDate: m[3],
       returnDate: m[4] || null,
       passengers: pax ? parseInt(pax[1], 10) : null,
+      // Kayak searches here are always round trips, so assume one even when
+      // the path carries a single date — the return date gets filled in by
+      // hand rather than the leg being wrong and the field hidden.
+      assumeRoundTrip: true,
     };
   } catch {}
   return null;
@@ -2991,14 +3003,21 @@ function wireAutoTitle(container, sel){
   const legEl = sel.leg ? container.querySelector(sel.leg) : null;
   const returnDateEl = sel.returnDate ? container.querySelector(sel.returnDate) : null;
   const returnWrap = sel.returnWrap ? container.querySelector(sel.returnWrap) : null;
+  const returnTimeEl = sel.returnTime ? container.querySelector(sel.returnTime) : null;
+  const airlineEl = sel.airline ? container.querySelector(sel.airline) : null;
 
   const regen = () => {
     if (labelEl.dataset.auto === "0") return;
-    const t = flightTitle(originEl.value.trim(), destEl.value.trim(),
-      dateEl.value, timeEl.value,
-      cashEl.value === "" ? null : parseFloat(cashEl.value),
-      pointsEl.value === "" ? null : parseFloat(pointsEl.value),
-      legEl ? legEl.value : null, returnDateEl ? returnDateEl.value : null);
+    const t = flightTitle({
+      origin: originEl.value.trim(), destination: destEl.value.trim(),
+      departDate: dateEl.value, departTime: timeEl.value,
+      returnDate: returnDateEl ? returnDateEl.value : null,
+      returnTime: returnTimeEl ? returnTimeEl.value : null,
+      paidCash: cashEl.value === "" ? null : parseFloat(cashEl.value),
+      paidPoints: pointsEl.value === "" ? null : parseFloat(pointsEl.value),
+      leg: legEl ? legEl.value : null,
+      airline: airlineEl ? airlineEl.value.trim() : null,
+    });
     if (t) labelEl.value = t;
   };
   const syncReturnVisibility = () => {
@@ -3008,6 +3027,8 @@ function wireAutoTitle(container, sel){
   labelEl.addEventListener("input", () => { labelEl.dataset.auto = "0"; });
   [originEl, destEl, dateEl, timeEl, cashEl, pointsEl].forEach(el => el.addEventListener("input", regen));
   if (returnDateEl) returnDateEl.addEventListener("input", regen);
+  if (returnTimeEl) returnTimeEl.addEventListener("input", regen);
+  if (airlineEl) airlineEl.addEventListener("input", regen);
   if (legEl) legEl.addEventListener("change", () => { syncReturnVisibility(); regen(); });
   syncReturnVisibility();
   const paxEl = sel.passengers ? container.querySelector(sel.passengers) : null;
@@ -3021,10 +3042,10 @@ function wireAutoTitle(container, sel){
     // A search with a return date is a round trip. Set the leg so the return
     // fields appear, then fill them — otherwise the second half of the search
     // is silently dropped and has to be re-entered by hand.
-    if (parsed.returnDate && returnDateEl && legEl){
+    if ((parsed.returnDate || parsed.assumeRoundTrip) && legEl){
       legEl.value = "roundtrip";
       syncReturnVisibility();
-      returnDateEl.value = parsed.returnDate;
+      if (parsed.returnDate && returnDateEl) returnDateEl.value = parsed.returnDate;
     }
     regen();
   });
@@ -4949,15 +4970,20 @@ function wireEvents(activeTrip){
       // Only keep auto-regenerating if the current label matches what we'd generate.
       const labelEl = form.querySelector("[data-f-label]");
       labelEl.dataset.auto =
-        (!flight.label || flight.label === flightTitle(flight.origin, flight.destination,
-          flight.depart_date, (flight.depart_time || "").slice(0,5),
-          flight.paid_cash, flight.paid_points, flight.leg, flight.return_date)) ? "1" : "0";
+        (!flight.label || flight.label === flightTitle({
+          origin: flight.origin, destination: flight.destination,
+          departDate: flight.depart_date, departTime: (flight.depart_time || "").slice(0,5),
+          returnDate: flight.return_date, returnTime: (flight.return_time || "").slice(0,5),
+          paidCash: flight.paid_cash, paidPoints: flight.paid_points,
+          leg: flight.leg, airline: flight.airline,
+        })) ? "1" : "0";
       wireAutoTitle(form, { url: "[data-f-url]", origin: "[data-f-origin]",
         dest: "[data-f-dest]", date: "[data-f-date]", time: "[data-f-time]",
         paidCash: "[data-f-paidcash]", paidPoints: "[data-f-paidpoints]",
         label: "[data-f-label]", leg: "[data-f-leg]",
         returnDate: "[data-f-return-date]", returnWrap: "[data-f-return-wrap]",
-        passengers: "[data-f-passengers]" });
+        passengers: "[data-f-passengers]", returnTime: "[data-f-return-time]",
+        airline: "[data-f-airline]" });
 
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
@@ -4975,7 +5001,9 @@ function wireEvents(activeTrip){
         const passengers = parseInt(form.querySelector("[data-f-passengers]").value, 10) || 1;
         await updateFlight(fid, {
           label: form.querySelector("[data-f-label]").value.trim()
-            || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate)
+            || flightTitle({ origin, destination, departDate, departTime, returnDate, returnTime,
+                 paidCash, paidPoints, leg,
+                 airline: form.querySelector("[data-f-airline]")?.value.trim() || null })
             || flight.label,
           leg,
           currency: form.querySelector("[data-f-currency]").value.trim() || "USD",
@@ -5102,7 +5130,8 @@ function wireAddFlightForm(tripId){
     paidCash: "[data-nf-paidcash]", paidPoints: "[data-nf-paidpoints]",
     label: "[data-nf-label]", leg: "[data-nf-leg]",
     returnDate: "[data-nf-return-date]", returnWrap: "[data-nf-return-wrap]",
-    passengers: "[data-nf-passengers]" });
+    passengers: "[data-nf-passengers]", returnTime: "[data-nf-return-time]",
+    airline: "[data-nf-airline]" });
   saveBtn.addEventListener("click", async () => {
     const url = holder.querySelector("[data-nf-url]").value.trim();
     const origin = holder.querySelector("[data-nf-origin]").value.trim().toUpperCase() || null;
@@ -5118,7 +5147,9 @@ function wireAddFlightForm(tripId){
     const paidPoints = pp === "" ? null : parseFloat(pp);
     const passengers = parseInt(holder.querySelector("[data-nf-passengers]").value, 10) || 1;
     const label = holder.querySelector("[data-nf-label]").value.trim()
-      || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate);
+      || flightTitle({ origin, destination, departDate, departTime, returnDate, returnTime,
+           paidCash, paidPoints, leg,
+           airline: holder.querySelector("[data-nf-airline]")?.value.trim() || null });
     if (!label) { alert("A title, or From/To airports to auto-generate one, is required."); return; }
     const currency = holder.querySelector("[data-nf-currency]").value.trim() || "USD";
     const ab = holder.querySelector("[data-nf-alert]").value;
