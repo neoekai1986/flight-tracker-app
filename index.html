@@ -772,6 +772,8 @@
     </div>
   </div>
 
+  <datalist id="airline-options"></datalist>
+
   <div class="app-shell">
     <aside class="sidebar" id="sidebar"></aside>
     <main id="root"></main>
@@ -969,6 +971,16 @@ const ICON_CAR = `<img class="cat-icon" src="icon-car.png" alt="" aria-hidden="t
 // always remains an option, so an unlisted program (e.g. a credit card's
 // transferable-points program) is never a dead end.
 const AIRLINE_PROGRAMS = ["Southwest", "United", "American", "Delta", "Alaska", "JetBlue", "Hawaiian", "Spirit", "Frontier"];
+
+// The same carriers the points picker offers, as type-ahead suggestions for
+// the airline field. A datalist suggests without constraining, so a carrier
+// that isn't on the list is still typeable.
+function fillAirlineDatalist(){
+  const dl = document.getElementById("airline-options");
+  if (dl && !dl.childElementCount){
+    dl.innerHTML = AIRLINE_PROGRAMS.map(a => `<option value="${esc(a)}"></option>`).join("");
+  }
+}
 const HOTEL_PROGRAMS = ["IHG", "Hilton", "Marriott", "Choice Hotels"];
 
 // "22,000 pts" or, when a loyalty program is set, "22,000 pts (Southwest)".
@@ -1173,20 +1185,44 @@ function flightTitle(origin, destination, departDate, departTime, paidCash, paid
   return parts.join(", ");
 }
 
-// Pull airports + date out of a pasted flight-search URL where possible.
-// Southwest puts them right in the query string; Kayak uses /flights/BWI-DEN/2026-12-04.
+// Pull everything a flight-search URL will give up. Southwest puts it in the
+// query string; Kayak encodes it in the path:
+//
+//   /flights/BWI-DEN/2026-12-04                     one way
+//   /flights/BWI-DEN/2026-12-04/2026-12-10          round trip
+//   /flights/BWI-DEN/2026-12-04/2026-12-10/2adults  …with passengers
+//
+// The return date and passenger count were previously thrown away, so a
+// round-trip search came in as a one-way for one person and had to be redone
+// by hand. What no search URL carries is the airline, the price or the flight
+// number — those exist only in the results — which is why they're typed in.
 function parseFlightUrl(url){
   try {
     const u = new URL(url);
     const q = u.searchParams;
-    const sw = {
-      origin: q.get("originationAirportCode"),
-      destination: q.get("destinationAirportCode"),
-      departDate: q.get("departureDate"),
+    if (q.get("originationAirportCode") && q.get("destinationAirportCode")){
+      const n = parseInt(q.get("adultPassengersCount") || q.get("adultsCount") || "", 10);
+      return {
+        origin: q.get("originationAirportCode").toUpperCase(),
+        destination: q.get("destinationAirportCode").toUpperCase(),
+        departDate: q.get("departureDate") || null,
+        returnDate: q.get("returnDate") || null,
+        passengers: Number.isFinite(n) && n > 0 ? n : null,
+      };
+    }
+    const m = u.pathname.match(/\/flights\/([A-Za-z]{3})-([A-Za-z]{3})\/(\d{4}-\d{2}-\d{2})(?:\/(\d{4}-\d{2}-\d{2}))?/);
+    if (!m) return null;
+    // Passengers can sit in any later segment, e.g. ".../2adults" or
+    // ".../2adults/business" — match it wherever it lands rather than
+    // assuming a position.
+    const pax = u.pathname.match(/\/(\d+)adults?\b/i);
+    return {
+      origin: m[1].toUpperCase(),
+      destination: m[2].toUpperCase(),
+      departDate: m[3],
+      returnDate: m[4] || null,
+      passengers: pax ? parseInt(pax[1], 10) : null,
     };
-    if (sw.origin && sw.destination) return sw;
-    const kayak = u.pathname.match(/\/flights\/([A-Z]{3})-([A-Z]{3})\/(\d{4}-\d{2}-\d{2})/i);
-    if (kayak) return { origin: kayak[1].toUpperCase(), destination: kayak[2].toUpperCase(), departDate: kayak[3] };
   } catch {}
   return null;
 }
@@ -1605,6 +1641,11 @@ async function loadTrips(){
     (t.rentals || []).sort((a,b) => a.position - b.position);
     for (const f of t.flights || []) (f.price_logs || []).sort((a,b) => b.date.localeCompare(a.date));
   }
+  // select("*") returns exactly the columns that exist, so the first loaded
+  // flight says whether the airline migration has run. Keeps the field out of
+  // the form and the writes until it has.
+  const sample = data.flatMap(t => t.flights || [])[0];
+  if (sample) flightAirlineAvailable = "airline" in sample;
   return data;
 }
 
@@ -1662,6 +1703,9 @@ let wishlistReactionsAvailable = true;
 // Same idea for the per-entry research notes: assume present, and correct
 // ourselves from the first loaded entry if the migration hasn't run.
 let wishlistNotesAvailable = true;
+
+// Likewise for flights.airline.
+let flightAirlineAvailable = true;
 
 async function loadWishlistBoards(){
   const withReactions =
@@ -1892,7 +1936,7 @@ async function createFlight(tripId, fields){
     .filter(f => legScope(f.leg) === legScope(fields.leg))
     .map(f => f.position);
   const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
-  const { error } = await supabase.from("flights").insert({
+  const row = {
     trip_id: tripId, label: fields.label, leg: fields.leg || null, url: fields.url,
     origin: fields.origin || null, destination: fields.destination || null,
     depart_date: fields.departDate || null, depart_time: fields.departTime || null,
@@ -1903,8 +1947,21 @@ async function createFlight(tripId, fields){
     passengers: fields.passengers || 1,
     flight_number: fields.flightNumber || null, confirmation_code: fields.confirmationCode || null,
     alert_below: fields.alertBelow, notes: fields.notes, position
-  });
-  if (error) alert(error.message);
+  };
+  if (flightAirlineAvailable) row.airline = fields.airline || null;
+  let { data, error } = await supabase.from("flights").insert(row).select().single();
+  // PGRST204 is "no such column" — the migration hasn't run. PostgREST rejects
+  // the whole write for one unknown field, so without this, adding any flight
+  // at all would fail on an un-migrated database rather than just losing the
+  // airline. Detection from loaded rows below covers the normal case; this
+  // covers an account with no flights yet, where there was nothing to inspect.
+  if (error && error.code === "PGRST204"){
+    flightAirlineAvailable = false;
+    delete row.airline;
+    ({ data, error } = await supabase.from("flights").insert(row).select().single());
+  }
+  if (error) { alert(error.message); return null; }
+  return data;
 }
 
 async function createRental(tripId, fields){
@@ -2027,6 +2084,13 @@ async function reorderItem(table, item, siblings, targetIndex){
   }
   const { error } = await supabase.from(table).update({ position: newPos }).eq("id", item.id);
   if (error) alert(error.message);
+}
+
+// Local date, not toISOString() — that converts to UTC, so logging anything
+// after ~7pm Eastern would be stamped tomorrow.
+function todayISO(){
+  const d = new Date();
+  return fmtISO(d.getFullYear(), d.getMonth(), d.getDate());
 }
 
 async function addPriceLog(flightId, date, price, isPoints){
@@ -2355,6 +2419,7 @@ function renderCard(trip, f){
     const ret = [fmtShortDate(f.return_date), fmtTime(f.return_time)].filter(Boolean).join(" ");
     metaBits.push(`Return <b>${esc(ret)}</b>`);
   }
+  if (f.airline) metaBits.push(`<b>${esc(f.airline)}</b>`);
   if (f.flight_number) metaBits.push(`Flight <b>${esc(f.flight_number)}</b>`);
   if (f.confirmation_code) metaBits.push(`Conf. <b>${esc(f.confirmation_code)}</b>`);
   if (f.alert_below != null) metaBits.push(`Alert below <b>${fmtCash(f.alert_below, cur)}</b>`);
@@ -2529,6 +2594,9 @@ function renderEditForm(f){
     </label>
 
     <div class="form-section">Anything else <span class="field-opt">(all optional)</span></div>
+    ${flightAirlineAvailable ? `<label class="field field-narrow">Airline
+      <input type="text" data-f-airline list="airline-options" placeholder="e.g. United">
+    </label>` : ""}
     <label class="field field-narrow">Flight number
       <input type="text" data-f-flightnumber placeholder="e.g. WN1234">
     </label>
@@ -2616,6 +2684,9 @@ function addFlightFormHTML(tripId, trip){
     </label>
 
     <div class="form-section">Anything else <span class="field-opt">(all optional)</span></div>
+    ${flightAirlineAvailable ? `<label class="field field-narrow">Airline
+      <input type="text" data-nf-airline list="airline-options" placeholder="e.g. United">
+    </label>` : ""}
     <label class="field field-narrow">Flight number
       <input type="text" data-nf-flightnumber placeholder="e.g. WN1234">
     </label>
@@ -2939,12 +3010,22 @@ function wireAutoTitle(container, sel){
   if (returnDateEl) returnDateEl.addEventListener("input", regen);
   if (legEl) legEl.addEventListener("change", () => { syncReturnVisibility(); regen(); });
   syncReturnVisibility();
+  const paxEl = sel.passengers ? container.querySelector(sel.passengers) : null;
   urlEl.addEventListener("input", () => {
     const parsed = parseFlightUrl(urlEl.value.trim());
     if (!parsed) return;
     if (parsed.origin) originEl.value = parsed.origin;
     if (parsed.destination) destEl.value = parsed.destination;
     if (parsed.departDate) dateEl.value = parsed.departDate;
+    if (parsed.passengers && paxEl) paxEl.value = parsed.passengers;
+    // A search with a return date is a round trip. Set the leg so the return
+    // fields appear, then fill them — otherwise the second half of the search
+    // is silently dropped and has to be re-entered by hand.
+    if (parsed.returnDate && returnDateEl && legEl){
+      legEl.value = "roundtrip";
+      syncReturnVisibility();
+      returnDateEl.value = parsed.returnDate;
+    }
     regen();
   });
 }
@@ -3677,6 +3758,7 @@ document.addEventListener("click", (e) => {
 });
 
 function renderTripsSection(){
+  fillAirlineDatalist();
   document.getElementById("subtext").textContent =
     "Sites like Southwest block automated price lookups, so check prices yourself and log what you see.";
 
@@ -4854,6 +4936,7 @@ function wireEvents(activeTrip){
       form.querySelector("[data-f-return-date]").value = flight.return_date || "";
       form.querySelector("[data-f-return-time]").value = (flight.return_time || "").slice(0,5);
       form.querySelector("[data-f-passengers]").value = flight.passengers || 1;
+      if (flightAirlineAvailable) form.querySelector("[data-f-airline]").value = flight.airline || "";
       form.querySelector("[data-f-flightnumber]").value = flight.flight_number || "";
       form.querySelector("[data-f-confirmation]").value = flight.confirmation_code || "";
       form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
@@ -4873,7 +4956,8 @@ function wireEvents(activeTrip){
         dest: "[data-f-dest]", date: "[data-f-date]", time: "[data-f-time]",
         paidCash: "[data-f-paidcash]", paidPoints: "[data-f-paidpoints]",
         label: "[data-f-label]", leg: "[data-f-leg]",
-        returnDate: "[data-f-return-date]", returnWrap: "[data-f-return-wrap]" });
+        returnDate: "[data-f-return-date]", returnWrap: "[data-f-return-wrap]",
+        passengers: "[data-f-passengers]" });
 
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
@@ -4903,6 +4987,8 @@ function wireEvents(activeTrip){
           points_program: form.querySelector("[data-f-pointsprogram]").value.trim() || null,
           status: form.querySelector("[data-f-status]").value,
           passengers,
+          ...(flightAirlineAvailable
+            ? { airline: form.querySelector("[data-f-airline]")?.value.trim() || null } : {}),
           flight_number: form.querySelector("[data-f-flightnumber]").value.trim() || null,
           confirmation_code: form.querySelector("[data-f-confirmation]").value.trim() || null,
           alert_below: ab === "" ? null : parseFloat(ab),
@@ -5015,7 +5101,8 @@ function wireAddFlightForm(tripId){
     dest: "[data-nf-dest]", date: "[data-nf-date]", time: "[data-nf-time]",
     paidCash: "[data-nf-paidcash]", paidPoints: "[data-nf-paidpoints]",
     label: "[data-nf-label]", leg: "[data-nf-leg]",
-    returnDate: "[data-nf-return-date]", returnWrap: "[data-nf-return-wrap]" });
+    returnDate: "[data-nf-return-date]", returnWrap: "[data-nf-return-wrap]",
+    passengers: "[data-nf-passengers]" });
   saveBtn.addEventListener("click", async () => {
     const url = holder.querySelector("[data-nf-url]").value.trim();
     const origin = holder.querySelector("[data-nf-origin]").value.trim().toUpperCase() || null;
@@ -5036,17 +5123,26 @@ function wireAddFlightForm(tripId){
     const currency = holder.querySelector("[data-nf-currency]").value.trim() || "USD";
     const ab = holder.querySelector("[data-nf-alert]").value;
     const notes = holder.querySelector("[data-nf-notes]").value.trim();
-    await createFlight(tripId, {
+    const created = await createFlight(tripId, {
       label, leg, url: url || null, currency, origin, destination, departDate, departTime,
       returnDate, returnTime, paidCash, paidPoints,
       pointsProgram: holder.querySelector("[data-nf-pointsprogram]").value.trim() || null,
       passengers,
+      airline: holder.querySelector("[data-nf-airline]")?.value.trim() || null,
       flightNumber: holder.querySelector("[data-nf-flightnumber]").value.trim() || null,
       confirmationCode: holder.querySelector("[data-nf-confirmation]").value.trim() || null,
       alertBelow: ab === "" ? null : parseFloat(ab),
       status: holder.querySelector("[data-nf-status]").value,
       notes
     });
+    // Record the price you entered as the first check, so a flight you add to
+    // watch starts its history at the moment you found it rather than at
+    // whenever you next remember to log one. Cash preferred when both are
+    // given, since that's the unit the trend defaults to.
+    if (created){
+      if (paidCash != null) await addPriceLog(created.id, todayISO(), paidCash);
+      else if (paidPoints != null) await addPriceLog(created.id, todayISO(), paidPoints, true);
+    }
     await refresh();
   });
   cancelBtn.addEventListener("click", () => { holder.innerHTML = ""; });

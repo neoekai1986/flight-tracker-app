@@ -71,6 +71,9 @@ create table public.flights (
   paid_points numeric,
   points_program text,  -- loyalty program the points came from, e.g. "Southwest", "Hilton Honors" — free text, no fixed list
   passengers  integer not null default 1 check (passengers >= 1),
+  -- Which carrier. A flight-search URL carries the route and dates but never
+  -- the airline (it only exists in the results), so this is entered by hand.
+  airline     text,
   flight_number     text,
   confirmation_code text,
   alert_below numeric,
