@@ -1169,14 +1169,22 @@ function fmtTime(t){
 // Auto-generated flight title: "Dec 4 10:00 PM, BWI → DEN, 22,000 pts"
 // (date/time, depart airport → arrival airport, points or cash paid)
 // Round trip: "Dec 4 → Dec 8, BWI ⇄ DEN, 22,000 pts"
-function flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate){
+// Card title: who's flying it, when each leg goes, and what it cost when you
+// started watching. Takes an object rather than nine positional arguments —
+// adding the airline and the return time to the old signature would have made
+// the call sites unreadable.
+function flightTitle(o){
+  const { origin, destination, departDate, departTime, returnDate, returnTime,
+          paidCash, paidPoints, leg, airline } = o || {};
   if (!origin || !destination) return "";
   const parts = [];
+  if (airline) parts.push(String(airline).trim());
+  const stamp = (date, time) => [fmtShortDate(date), fmtTime(time)].filter(Boolean).join(" ");
   if (leg === "roundtrip" && returnDate){
-    parts.push(`${fmtShortDate(departDate)} → ${fmtShortDate(returnDate)}`);
+    parts.push(`${stamp(departDate, departTime)} → ${stamp(returnDate, returnTime)}`);
     parts.push(`${origin.toUpperCase()} ⇄ ${destination.toUpperCase()}`);
   } else {
-    const when = [fmtShortDate(departDate), fmtTime(departTime)].filter(Boolean).join(" ");
+    const when = stamp(departDate, departTime);
     if (when) parts.push(when);
     parts.push(`${origin.toUpperCase()} → ${destination.toUpperCase()}`);
   }
@@ -1222,6 +1230,10 @@ function parseFlightUrl(url){
       departDate: m[3],
       returnDate: m[4] || null,
       passengers: pax ? parseInt(pax[1], 10) : null,
+      // Kayak searches here are always round trips, so assume one even when
+      // the path carries a single date — the return date gets filled in by
+      // hand rather than the leg being wrong and the field hidden.
+      assumeRoundTrip: true,
     };
   } catch {}
   return null;
@@ -1414,9 +1426,79 @@ const MONTHS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov
 // Best-effort text -> {date, time, flightNumber, confirmationCode}. Every
 // field can be wrong or missing — this only suggests values for the user
 // to review, it never saves anything on its own.
-function parseScreenshotText(text){
-  const out = { date: null, time: null, flightNumber: null, confirmationCode: null };
+// A pasted (or OCR'd) search result, which is where the flight times live —
+// a search URL only ever carries the route and dates. Kayak renders a result
+// row roughly as:
+//
+//   7:35 am – 10:05 am   BWI–DEN   Alaska   5h 30m   nonstop
+//   2:40 pm – 8:15 pm    DEN–BWI   Alaska   4h 35m   1 stop
+//   $412
+//
+// but the exact arrangement shifts between layouts and OCR mangles it further,
+// so nothing here depends on line order or position. It finds every departure–
+// arrival pair in the text and takes the first as the outbound and the second
+// as the return, which is the one thing that holds across all of them.
+function parseFlightResultText(text){
+  const out = { departTime: null, returnTime: null, airline: null, price: null, stops: null, ranges: 0 };
   if (!text) return out;
+  // Normalise the dash variants and the no-break spaces OCR likes to emit.
+  const t = String(text).replace(/[\u2010-\u2015\u2212]/g, "-").replace(/\u00a0/g, " ");
+
+  const to24 = (h, m, ap) => {
+    h = parseInt(h, 10);
+    if (ap){
+      const a = ap.toLowerCase();
+      if (a === "pm" && h !== 12) h += 12;
+      if (a === "am" && h === 12) h = 0;
+    }
+    if (h > 23 || parseInt(m, 10) > 59) return null;
+    return `${String(h).padStart(2,"0")}:${m}`;
+  };
+
+  // "7:35 am - 10:05 am", "11:30 pm - 6:45 am+1", "17:35 - 20:05"
+  const TIME = String.raw`(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?`;
+  const rangeRe = new RegExp(TIME + String.raw`\s*-\s*` + TIME + String.raw`(?:\s*\+\d)?`, "gi");
+  const departures = [];
+  let m;
+  while ((m = rangeRe.exec(t)) !== null){
+    const ap1 = m[3] ? m[3].replace(/\./g, "") : null;
+    const ap2 = m[6] ? m[6].replace(/\./g, "") : null;
+    // "7:35 - 10:05 pm" leaves the first half unmarked; borrow the second's.
+    const dep = to24(m[1], m[2], ap1 || ap2);
+    if (dep) departures.push(dep);
+  }
+  out.ranges = departures.length;
+  out.departTime = departures[0] || null;
+  out.returnTime = departures[1] || null;
+
+  // Airline: prefer a name we already know, so "Alaska" isn't mistaken for a
+  // city and a two-word carrier isn't cut in half.
+  const known = (typeof AIRLINE_PROGRAMS !== "undefined" ? AIRLINE_PROGRAMS : [])
+    .filter(a => new RegExp(`\\b${a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(t));
+  if (known.length) out.airline = known.sort((a,b) => b.length - a.length)[0];
+
+  const price = t.match(/\$\s?(\d[\d,]*(?:\.\d{2})?)/);
+  if (price) out.price = parseFloat(price[1].replace(/,/g, ""));
+
+  const stops = t.match(/\b(nonstop|direct|\d\s*stops?)\b/i);
+  if (stops) out.stops = stops[1].toLowerCase();
+  return out;
+}
+
+function parseScreenshotText(text){
+  const out = { date: null, time: null, flightNumber: null, confirmationCode: null,
+                returnTime: null, airline: null, price: null };
+  if (!text) return out;
+
+  // A screenshot of a search result carries the same things a pasted one does,
+  // so run it through the same parser rather than teaching this one to find
+  // two legs. Confirmation emails have no second leg or price and simply come
+  // back empty here, leaving the per-field logic below untouched.
+  const res = parseFlightResultText(text);
+  out.returnTime = res.returnTime;
+  out.airline = res.airline;
+  out.price = res.price;
+  if (res.ranges) out.time = res.departTime;
 
   let m = text.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
   if (m) out.date = `${m[1]}-${m[2]}-${m[3]}`;
@@ -1437,7 +1519,7 @@ function parseScreenshotText(text){
     }
   }
 
-  m = text.match(/\b(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)\b/);
+  m = out.time ? null : text.match(/\b(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)\b/);
   if (m){
     let h = parseInt(m[1], 10);
     const ampm = m[3].toLowerCase();
@@ -2534,6 +2616,10 @@ function renderEditForm(f){
       <input type="text" data-f-url value="" placeholder="Southwest or Kayak URL">
       <span class="field-hint">Airports and dates fill themselves in from the link.</span>
     </label>
+    <label class="field span2">Paste the flight from the search results <span class="field-opt">— optional</span>
+      <textarea data-f-result rows="2" placeholder="Copy the result row on Kayak and paste it here — times, airline and price fill themselves in"></textarea>
+      <span class="field-hint" data-f-result-read>The search link gives the route and dates; the times only exist in the results, so paste the one you picked.</span>
+    </label>
     <label class="field field-narrow">From
       <input type="text" data-f-origin placeholder="BWI" maxlength="4" style="text-transform:uppercase">
     </label>
@@ -2623,6 +2709,10 @@ function addFlightFormHTML(tripId, trip){
     <label class="field span2">Paste a link <span class="field-opt">— optional</span>
       <input type="text" data-nf-url placeholder="Southwest or Kayak URL">
       <span class="field-hint">Airports and dates fill themselves in from the link.</span>
+    </label>
+    <label class="field span2">Paste the flight from the search results <span class="field-opt">— optional</span>
+      <textarea data-nf-result rows="2" placeholder="Copy the result row on Kayak and paste it here — times, airline and price fill themselves in"></textarea>
+      <span class="field-hint" data-nf-result-read>The search link gives the route and dates; the times only exist in the results, so paste the one you picked.</span>
     </label>
     <label class="field field-narrow">From
       <input type="text" data-nf-origin placeholder="BWI" maxlength="4" style="text-transform:uppercase">
@@ -2991,14 +3081,21 @@ function wireAutoTitle(container, sel){
   const legEl = sel.leg ? container.querySelector(sel.leg) : null;
   const returnDateEl = sel.returnDate ? container.querySelector(sel.returnDate) : null;
   const returnWrap = sel.returnWrap ? container.querySelector(sel.returnWrap) : null;
+  const returnTimeEl = sel.returnTime ? container.querySelector(sel.returnTime) : null;
+  const airlineEl = sel.airline ? container.querySelector(sel.airline) : null;
 
   const regen = () => {
     if (labelEl.dataset.auto === "0") return;
-    const t = flightTitle(originEl.value.trim(), destEl.value.trim(),
-      dateEl.value, timeEl.value,
-      cashEl.value === "" ? null : parseFloat(cashEl.value),
-      pointsEl.value === "" ? null : parseFloat(pointsEl.value),
-      legEl ? legEl.value : null, returnDateEl ? returnDateEl.value : null);
+    const t = flightTitle({
+      origin: originEl.value.trim(), destination: destEl.value.trim(),
+      departDate: dateEl.value, departTime: timeEl.value,
+      returnDate: returnDateEl ? returnDateEl.value : null,
+      returnTime: returnTimeEl ? returnTimeEl.value : null,
+      paidCash: cashEl.value === "" ? null : parseFloat(cashEl.value),
+      paidPoints: pointsEl.value === "" ? null : parseFloat(pointsEl.value),
+      leg: legEl ? legEl.value : null,
+      airline: airlineEl ? airlineEl.value.trim() : null,
+    });
     if (t) labelEl.value = t;
   };
   const syncReturnVisibility = () => {
@@ -3008,9 +3105,46 @@ function wireAutoTitle(container, sel){
   labelEl.addEventListener("input", () => { labelEl.dataset.auto = "0"; });
   [originEl, destEl, dateEl, timeEl, cashEl, pointsEl].forEach(el => el.addEventListener("input", regen));
   if (returnDateEl) returnDateEl.addEventListener("input", regen);
+  if (returnTimeEl) returnTimeEl.addEventListener("input", regen);
+  if (airlineEl) airlineEl.addEventListener("input", regen);
   if (legEl) legEl.addEventListener("change", () => { syncReturnVisibility(); regen(); });
   syncReturnVisibility();
   const paxEl = sel.passengers ? container.querySelector(sel.passengers) : null;
+
+  // Paste a search result and take the times, airline and price out of it.
+  // Fills rather than overwrites where you've already typed something, and
+  // reports what it found so a bad parse is visible instead of silent.
+  const resultEl = sel.result ? container.querySelector(sel.result) : null;
+  const readoutEl = sel.resultRead ? container.querySelector(sel.resultRead) : null;
+  if (resultEl){
+    const applyResult = () => {
+      const raw = resultEl.value.trim();
+      if (!raw){ if (readoutEl) readoutEl.textContent = readoutEl.dataset.idle || ""; return; }
+      const r = parseFlightResultText(raw);
+      const got = [];
+      const fill = (el, val, label) => {
+        if (!el || val == null || val === "") return;
+        el.value = val; got.push(label);
+      };
+      fill(timeEl, r.departTime, `out ${fmtTime(r.departTime)}`);
+      if (r.returnTime && legEl){
+        legEl.value = "roundtrip";
+        syncReturnVisibility();
+        fill(returnTimeEl, r.returnTime, `back ${fmtTime(r.returnTime)}`);
+      }
+      if (airlineEl && r.airline && !airlineEl.value.trim()) fill(airlineEl, r.airline, r.airline);
+      if (cashEl && r.price != null && cashEl.value === "") fill(cashEl, r.price, fmtCash(r.price));
+      if (readoutEl){
+        readoutEl.textContent = got.length
+          ? `Found ${got.join(" · ")}${r.stops ? ` · ${r.stops}` : ""}`
+          : "Couldn't find any times in that — paste the row with the departure and arrival times in it.";
+      }
+      regen();
+    };
+    if (readoutEl) readoutEl.dataset.idle = readoutEl.textContent;
+    resultEl.addEventListener("input", applyResult);
+  }
+
   urlEl.addEventListener("input", () => {
     const parsed = parseFlightUrl(urlEl.value.trim());
     if (!parsed) return;
@@ -3021,10 +3155,10 @@ function wireAutoTitle(container, sel){
     // A search with a return date is a round trip. Set the leg so the return
     // fields appear, then fill them — otherwise the second half of the search
     // is silently dropped and has to be re-entered by hand.
-    if (parsed.returnDate && returnDateEl && legEl){
+    if ((parsed.returnDate || parsed.assumeRoundTrip) && legEl){
       legEl.value = "roundtrip";
       syncReturnVisibility();
-      returnDateEl.value = parsed.returnDate;
+      if (parsed.returnDate && returnDateEl) returnDateEl.value = parsed.returnDate;
     }
     regen();
   });
@@ -4949,15 +5083,21 @@ function wireEvents(activeTrip){
       // Only keep auto-regenerating if the current label matches what we'd generate.
       const labelEl = form.querySelector("[data-f-label]");
       labelEl.dataset.auto =
-        (!flight.label || flight.label === flightTitle(flight.origin, flight.destination,
-          flight.depart_date, (flight.depart_time || "").slice(0,5),
-          flight.paid_cash, flight.paid_points, flight.leg, flight.return_date)) ? "1" : "0";
+        (!flight.label || flight.label === flightTitle({
+          origin: flight.origin, destination: flight.destination,
+          departDate: flight.depart_date, departTime: (flight.depart_time || "").slice(0,5),
+          returnDate: flight.return_date, returnTime: (flight.return_time || "").slice(0,5),
+          paidCash: flight.paid_cash, paidPoints: flight.paid_points,
+          leg: flight.leg, airline: flight.airline,
+        })) ? "1" : "0";
       wireAutoTitle(form, { url: "[data-f-url]", origin: "[data-f-origin]",
         dest: "[data-f-dest]", date: "[data-f-date]", time: "[data-f-time]",
         paidCash: "[data-f-paidcash]", paidPoints: "[data-f-paidpoints]",
         label: "[data-f-label]", leg: "[data-f-leg]",
         returnDate: "[data-f-return-date]", returnWrap: "[data-f-return-wrap]",
-        passengers: "[data-f-passengers]" });
+        passengers: "[data-f-passengers]", returnTime: "[data-f-return-time]",
+        airline: "[data-f-airline]",
+        result: "[data-f-result]", resultRead: "[data-f-result-read]" });
 
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
@@ -4975,7 +5115,9 @@ function wireEvents(activeTrip){
         const passengers = parseInt(form.querySelector("[data-f-passengers]").value, 10) || 1;
         await updateFlight(fid, {
           label: form.querySelector("[data-f-label]").value.trim()
-            || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate)
+            || flightTitle({ origin, destination, departDate, departTime, returnDate, returnTime,
+                 paidCash, paidPoints, leg,
+                 airline: form.querySelector("[data-f-airline]")?.value.trim() || null })
             || flight.label,
           leg,
           currency: form.querySelector("[data-f-currency]").value.trim() || "USD",
@@ -5102,7 +5244,9 @@ function wireAddFlightForm(tripId){
     paidCash: "[data-nf-paidcash]", paidPoints: "[data-nf-paidpoints]",
     label: "[data-nf-label]", leg: "[data-nf-leg]",
     returnDate: "[data-nf-return-date]", returnWrap: "[data-nf-return-wrap]",
-    passengers: "[data-nf-passengers]" });
+    passengers: "[data-nf-passengers]", returnTime: "[data-nf-return-time]",
+    airline: "[data-nf-airline]",
+    result: "[data-nf-result]", resultRead: "[data-nf-result-read]" });
   saveBtn.addEventListener("click", async () => {
     const url = holder.querySelector("[data-nf-url]").value.trim();
     const origin = holder.querySelector("[data-nf-origin]").value.trim().toUpperCase() || null;
@@ -5118,7 +5262,9 @@ function wireAddFlightForm(tripId){
     const paidPoints = pp === "" ? null : parseFloat(pp);
     const passengers = parseInt(holder.querySelector("[data-nf-passengers]").value, 10) || 1;
     const label = holder.querySelector("[data-nf-label]").value.trim()
-      || flightTitle(origin, destination, departDate, departTime, paidCash, paidPoints, leg, returnDate);
+      || flightTitle({ origin, destination, departDate, departTime, returnDate, returnTime,
+           paidCash, paidPoints, leg,
+           airline: holder.querySelector("[data-nf-airline]")?.value.trim() || null });
     if (!label) { alert("A title, or From/To airports to auto-generate one, is required."); return; }
     const currency = holder.querySelector("[data-nf-currency]").value.trim() || "USD";
     const ab = holder.querySelector("[data-nf-alert]").value;
@@ -5173,6 +5319,17 @@ function applySuggestionToFlight(itemId, suggestion){
   setIfEmpty("[data-f-time]", suggestion.time);
   setIfEmpty("[data-f-flightnumber]", suggestion.flightNumber);
   setIfEmpty("[data-f-confirmation]", suggestion.confirmationCode);
+  setIfEmpty("[data-f-airline]", suggestion.airline);
+  setIfEmpty("[data-f-paidcash]", suggestion.price);
+  // A second leg means it's a round trip, so open those fields before filling.
+  if (suggestion.returnTime){
+    const legEl = document.querySelector("[data-f-leg]");
+    if (legEl && legEl.value !== "roundtrip"){
+      legEl.value = "roundtrip";
+      legEl.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    setIfEmpty("[data-f-return-time]", suggestion.returnTime);
+  }
 }
 
 function applySuggestionToRental(itemId, suggestion){
@@ -5185,7 +5342,10 @@ function applySuggestionToRental(itemId, suggestion){
 function renderSuggestionBanner(kind, itemId, suggestion){
   const bits = [];
   if (suggestion.date) bits.push(`Date <b>${esc(fmtShortDate(suggestion.date))}</b>`);
-  if (suggestion.time) bits.push(`Time <b>${esc(fmtTime(suggestion.time))}</b>`);
+  if (suggestion.time) bits.push(`Out <b>${esc(fmtTime(suggestion.time))}</b>`);
+  if (suggestion.returnTime) bits.push(`Back <b>${esc(fmtTime(suggestion.returnTime))}</b>`);
+  if (suggestion.airline) bits.push(`<b>${esc(suggestion.airline)}</b>`);
+  if (suggestion.price != null) bits.push(`<b>${esc(fmtCash(suggestion.price))}</b>`);
   if (kind === "flight" && suggestion.flightNumber) bits.push(`Flight <b>${esc(suggestion.flightNumber)}</b>`);
   if (suggestion.confirmationCode) bits.push(`Conf. <b>${esc(suggestion.confirmationCode)}</b>`);
   if (!bits.length) return "";
