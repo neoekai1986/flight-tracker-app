@@ -3525,7 +3525,11 @@ function renderBookmarkletPanel(){
   const code = `javascript:(function(){var m=location.hash.match(/farelog=([^&]+)/);if(!m){alert('Open this page via a "Check price" link in Yes, Yes, with E-Kai You Travel first.');return;}var id=m[1];var sel=(window.getSelection?window.getSelection().toString():'')||'';var pm=sel.match(/[\\d,]+\\.?\\d*/);var price=pm?pm[0].replace(/,/g,''):prompt('Price shown on this page?');if(!price)return;window.open(${JSON.stringify(fareBoardUrl)}+'#logprice='+id+'&price='+encodeURIComponent(price),'farelog');})();`;
   return `
     <div class="watching-block" style="margin-bottom:20px">
-      <b>Log price from your browser, one click</b>
+      <b>One-click helpers for your bookmarks bar</b>
+      <p style="margin:6px 0 10px;color:var(--muted)">Two small bookmarks that send things here from the
+        site you're already looking at. Nothing automated touches those sites — they only read what you
+        highlight.</p>
+      <b>Log a price you're looking at</b>
       <p style="margin:6px 0">Drag this to your bookmarks bar:
         <a class="btn btn-sm" href="${esc(code)}" onclick="return false" style="cursor:grab">📌 Log price</a>
       </p>
@@ -3776,7 +3780,7 @@ function renderViewMenu(showImport){
         ${showImport ? `<button type="button" data-menu-action="importLocal">Import from this browser's saved data</button>` : ""}
         <button type="button" data-menu-action="export">Export all</button>
         <button type="button" data-menu-action="importJson">Import JSON</button>
-        <button type="button" data-menu-action="bookmarklet">Get price-logging bookmarklet</button>
+        <button type="button" data-menu-action="bookmarklet">Get the browser bookmarklets</button>
       </div>
     </details>
     <input type="file" id="importFile" accept="application/json" hidden>`;
