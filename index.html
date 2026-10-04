@@ -3516,6 +3516,12 @@ function renderStatsBar(){
 // never touches Supabase or holds any credentials.
 function renderBookmarkletPanel(){
   const fareBoardUrl = location.origin + location.pathname;
+  // Grabs the page it's clicked on plus the highlighted result, and hands both
+  // to the tracker. Selection is used rather than reading Kayak's DOM: the
+  // markup is obfuscated and changes, whereas "what you highlighted" doesn't.
+  const addCode = `javascript:(function(){var s=(window.getSelection?window.getSelection().toString():'')||'';`
+    + `window.open(${JSON.stringify(fareBoardUrl)}+'#addflight='+encodeURIComponent(location.href)`
+    + `+'&result='+encodeURIComponent(s.slice(0,1500)),'fareboard');})();`;
   const code = `javascript:(function(){var m=location.hash.match(/farelog=([^&]+)/);if(!m){alert('Open this page via a "Check price" link in Yes, Yes, with E-Kai You Travel first.');return;}var id=m[1];var sel=(window.getSelection?window.getSelection().toString():'')||'';var pm=sel.match(/[\\d,]+\\.?\\d*/);var price=pm?pm[0].replace(/,/g,''):prompt('Price shown on this page?');if(!price)return;window.open(${JSON.stringify(fareBoardUrl)}+'#logprice='+id+'&price='+encodeURIComponent(price),'farelog');})();`;
   return `
     <div class="watching-block" style="margin-bottom:20px">
@@ -3526,6 +3532,16 @@ function renderBookmarkletPanel(){
       <p style="margin:6px 0">Then: click a flight's <b>Check price →</b> link to open the airline site, highlight
         the price on the page, and click the bookmark. It logs straight into that flight — no typing, no
         automation touching the airline's site.</p>
+
+      <div class="menu-divider" style="margin:14px 0"></div>
+
+      <b>Send a flight here from a search, one click</b>
+      <p style="margin:6px 0">Drag this one too:
+        <a class="btn btn-sm" href="${esc(addCode)}" onclick="return false" style="cursor:grab">✈️ Add flight</a>
+      </p>
+      <p style="margin:6px 0">Then: on a Kayak search, highlight the result you like and click the bookmark.
+        It opens the tracker with the search link and that result already in the form — no switching back and
+        forth to copy and paste. Lands on whichever trip is open here.</p>
       <button class="btn-link" id="hideBookmarkletPanel">Got it, hide this</button>
     </div>`;
 }
@@ -5705,6 +5721,44 @@ function wireDragEvents(activeTrip){
 // Picks up after the price-logging bookmarklet (see renderBookmarkletPanel)
 // hands off via "#logprice=<flightId>&price=<value>" — logs the price
 // straight in, no form to fill out. Requires trips to already be loaded.
+// The "Add flight" bookmarklet hands off here: the Kayak search URL it was
+// clicked on, plus whatever result row was selected. Opens the add-flight form
+// on the active trip and feeds both through the parsers that already exist, so
+// this adds a delivery route rather than a second way of reading the data.
+//
+// Nothing is written — it fills a form you still have to save — so unlike the
+// price-logging hash there's no confirm to get in the way.
+async function processAddFlightHash(){
+  const m = location.hash.match(/addflight=([^&]*)(?:&result=([^&]*))?/);
+  if (!m) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  const url = decodeURIComponent(m[1] || "");
+  const result = decodeURIComponent(m[2] || "");
+
+  const trip = trips.find(t => t.id === activeTripId) || trips[0];
+  if (!trip){ alert("Make a trip first, then send a flight to it."); return; }
+  activeTripId = trip.id;
+  activeSection = "trips";
+  render();
+
+  const toggle = document.querySelector(`[data-add-flight-toggle="${trip.id}"]`);
+  if (!toggle) return;
+  const holder = document.querySelector(`[data-add-flight-form="${trip.id}"]`);
+  if (!holder || !holder.innerHTML) toggle.click();
+
+  const fire = (sel, value) => {
+    const el = document.querySelector(sel);
+    if (!el || !value) return;
+    el.value = value;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  fire("[data-nf-url]", url);
+  fire("[data-nf-result]", result);
+  document.querySelector(`[data-add-flight-form="${trip.id}"]`)
+    ?.scrollIntoView({ block: "start" });
+}
+
 async function processBookmarkletHash(){
   const m = location.hash.match(/logprice=([^&]+)&price=([^&]+)/);
   if (!m) return;
@@ -5740,11 +5794,15 @@ supabase.auth.onAuthStateChange((event, newSession) => {
 
 // The bookmarklet reuses one named tab, so repeat clicks often just change
 // the hash on an already-loaded page (no reload) — catch those too.
-window.addEventListener("hashchange", () => { if (session) processBookmarkletHash(); });
+window.addEventListener("hashchange", () => {
+  if (!session) return;
+  processBookmarkletHash();
+  processAddFlightHash();
+});
 
 const { data: { session: initSession } } = await supabase.auth.getSession();
 session = initSession;
-if (session){ await refresh(); await processBookmarkletHash(); }
+if (session){ await refresh(); await processBookmarkletHash(); await processAddFlightHash(); }
 else render();
 </script>
 </body>
