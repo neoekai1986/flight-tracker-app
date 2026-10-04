@@ -428,8 +428,12 @@
   .card h3{font-size:15px;font-weight:600;margin-bottom:4px}
   .drag-handle{cursor:grab;color:var(--muted);font-size:13px;margin-right:6px;user-select:none}
   .card-title-row{display:flex;align-items:center;gap:8px}
+  /* break-word, not anywhere: "anywhere" will split inside a word to avoid any
+     overflow at all, and on a narrow card that turned "Delta," into one letter
+     per line. This breaks between words and only splits a word that genuinely
+     cannot fit. */
   .card-title-row h3{min-width:0;overflow:hidden;display:-webkit-box;
-      -webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+      -webkit-line-clamp:3;-webkit-box-orient:vertical;overflow-wrap:break-word}
   .meta-line{font-size:12.5px;color:var(--muted);margin-bottom:8px;font-family:Inter,system-ui,sans-serif;line-height:1.6}
   .meta-line b{color:var(--ink);font-weight:600}
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
@@ -1221,17 +1225,25 @@ function parseFlightUrl(url){
         passengers: Number.isFinite(n) && n > 0 ? n : null,
       };
     }
-    const m = u.pathname.match(/\/flights\/([A-Za-z]{3})-([A-Za-z]{3})\/(\d{4}-\d{2}-\d{2})(?:\/(\d{4}-\d{2}-\d{2}))?/);
+    // Airport codes can carry qualifiers ("IAD,nearby-SMF,nearby"), so match the
+    // codes themselves rather than assuming the segment is exactly seven chars.
+    const m = u.pathname.match(/\/flights\/([A-Za-z]{3})[^/-]*-([A-Za-z]{3})[^/]*\//);
     if (!m) return null;
     // Passengers can sit in any later segment, e.g. ".../2adults" or
     // ".../2adults/business" — match it wherever it lands rather than
     // assuming a position.
     const pax = u.pathname.match(/\/(\d+)adults?\b/i);
+    // Dates are taken wherever they appear in the path, first two in order,
+    // rather than from fixed positions. Kayak appends qualifiers to them —
+    // "/2027-03-20-flexible/" or "-flexible-3days" — and a positional match
+    // silently lost the return date, after which the form quietly kept the
+    // trip's own end date and a March flight came back landing in December.
+    const dates = (u.pathname.match(/\d{4}-\d{2}-\d{2}/g) || []);
     return {
       origin: m[1].toUpperCase(),
       destination: m[2].toUpperCase(),
-      departDate: m[3],
-      returnDate: m[4] || null,
+      departDate: dates[0] || null,
+      returnDate: dates[1] || null,
       passengers: pax ? parseInt(pax[1], 10) : null,
       // Kayak searches here are always round trips, so assume one even when
       // the path carries a single date — the return date gets filled in by
@@ -2500,9 +2512,15 @@ function renderCard(trip, f){
   // What used to lead the meta line now has its own right-aligned block, so
   // the line is free for the details you scan past the price.
   const metaBits = [];
+  // Both legs, not just the return — the outbound was only ever in the title,
+  // which clamps to a couple of lines and was cutting it off on a narrow card.
+  const outbound = [fmtShortDate(f.depart_date), fmtTime(f.depart_time)].filter(Boolean).join(" ");
   if (f.leg === "roundtrip" && f.return_date){
     const ret = [fmtShortDate(f.return_date), fmtTime(f.return_time)].filter(Boolean).join(" ");
-    metaBits.push(`Return <b>${esc(ret)}</b>`);
+    if (outbound) metaBits.push(`Out <b>${esc(outbound)}</b>`);
+    metaBits.push(`Back <b>${esc(ret)}</b>`);
+  } else if (outbound){
+    metaBits.push(`Out <b>${esc(outbound)}</b>`);
   }
   if (f.airline) metaBits.push(`<b>${esc(f.airline)}</b>`);
   if (f.flight_number) metaBits.push(`Flight <b>${esc(f.flight_number)}</b>`);
@@ -3161,7 +3179,13 @@ function wireAutoTitle(container, sel){
     if ((parsed.returnDate || parsed.assumeRoundTrip) && legEl){
       legEl.value = "roundtrip";
       syncReturnVisibility();
-      if (parsed.returnDate && returnDateEl) returnDateEl.value = parsed.returnDate;
+      if (returnDateEl){
+        // Clear rather than leave the trip's own end date sitting there: it is
+        // prefilled as a convenience for typing a flight in by hand, and when
+        // a search says otherwise an unrelated date would silently become this
+        // flight's return.
+        returnDateEl.value = parsed.returnDate || "";
+      }
     }
     regen();
   });
