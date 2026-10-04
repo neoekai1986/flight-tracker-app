@@ -3522,7 +3522,7 @@ function renderBookmarkletPanel(){
   const addCode = `javascript:(function(){var s=(window.getSelection?window.getSelection().toString():'')||'';`
     + `window.open(${JSON.stringify(fareBoardUrl)}+'#addflight='+encodeURIComponent(location.href)`
     + `+'&result='+encodeURIComponent(s.slice(0,1500)),'fareboard');})();`;
-  const code = `javascript:(function(){var m=location.hash.match(/farelog=([^&]+)/);if(!m){alert('Open this page via a "Check price" link in Yes, Yes, with E-Kai You Travel first.');return;}var id=m[1];var sel=(window.getSelection?window.getSelection().toString():'')||'';var pm=sel.match(/[\\d,]+\\.?\\d*/);var price=pm?pm[0].replace(/,/g,''):prompt('Price shown on this page?');if(!price)return;window.open(${JSON.stringify(fareBoardUrl)}+'#logprice='+id+'&price='+encodeURIComponent(price),'farelog');})();`;
+  const code = `javascript:(function(){var m=location.hash.match(/farelog=([^&]+)/);if(!m){alert('Wrong bookmark for this page.\\n\\nTo track a flight you found in a search: highlight the result, then click the "Add flight" bookmark.\\n\\n"Log price" is for a flight you are already tracking - open the page with that flight\\'s "Check price" link first.');return;}var id=m[1];var sel=(window.getSelection?window.getSelection().toString():'')||'';var pm=sel.match(/[\\d,]+\\.?\\d*/);var price=pm?pm[0].replace(/,/g,''):prompt('Price shown on this page?');if(!price)return;window.open(${JSON.stringify(fareBoardUrl)}+'#logprice='+id+'&price='+encodeURIComponent(price),'farelog');})();`;
   return `
     <div class="watching-block" style="margin-bottom:20px">
       <b>One-click helpers for your bookmarks bar</b>
