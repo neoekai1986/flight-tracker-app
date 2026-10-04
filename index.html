@@ -1181,21 +1181,15 @@ function fmtTime(t){
 // started watching. Takes an object rather than nine positional arguments —
 // adding the airline and the return time to the old signature would have made
 // the call sites unreadable.
+// Just the route and the price. The airline, both legs with their times, and
+// the stops all sit on the meta line directly underneath, so putting them in
+// the title too made it three wrapped lines of things already written below it.
+// The arrow carries the one thing the meta line doesn't: round trip or one way.
 function flightTitle(o){
-  const { origin, destination, departDate, departTime, returnDate, returnTime,
-          paidCash, paidPoints, leg, airline } = o || {};
+  const { origin, destination, paidCash, paidPoints, leg } = o || {};
   if (!origin || !destination) return "";
-  const parts = [];
-  if (airline) parts.push(String(airline).trim());
-  const stamp = (date, time) => [fmtShortDate(date), fmtTime(time)].filter(Boolean).join(" ");
-  if (leg === "roundtrip" && returnDate){
-    parts.push(`${stamp(departDate, departTime)} → ${stamp(returnDate, returnTime)}`);
-    parts.push(`${origin.toUpperCase()} ⇄ ${destination.toUpperCase()}`);
-  } else {
-    const when = stamp(departDate, departTime);
-    if (when) parts.push(when);
-    parts.push(`${origin.toUpperCase()} → ${destination.toUpperCase()}`);
-  }
+  const arrow = leg === "roundtrip" ? "⇄" : "→";
+  const parts = [`${origin.toUpperCase()} ${arrow} ${destination.toUpperCase()}`];
   if (paidPoints != null && paidPoints !== "" && !isNaN(paidPoints)) parts.push(fmtPoints(paidPoints));
   else if (paidCash != null && paidCash !== "" && !isNaN(paidCash)) parts.push(fmtCash(paidCash));
   return parts.join(", ");
