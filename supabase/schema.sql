@@ -74,6 +74,10 @@ create table public.flights (
   -- Which carrier. A flight-search URL carries the route and dates but never
   -- the airline (it only exists in the results), so this is entered by hand.
   airline     text,
+  -- Stops per leg, e.g. "nonstop" / "1 stop (ATL)". Separate columns because
+  -- the two legs of a round trip routinely differ.
+  stops_out   text,
+  stops_back  text,
   flight_number     text,
   confirmation_code text,
   alert_below numeric,

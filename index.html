@@ -436,6 +436,8 @@
       -webkit-line-clamp:3;-webkit-box-orient:vertical;overflow-wrap:break-word}
   .meta-line{font-size:12.5px;color:var(--muted);margin-bottom:8px;font-family:Inter,system-ui,sans-serif;line-height:1.6}
   .meta-line b{color:var(--ink);font-weight:600}
+  /* Stops ride with their leg, dimmer than the time they qualify. */
+  .leg-stops{color:var(--muted);font-weight:400}
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
 
@@ -1454,7 +1456,7 @@ const MONTHS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov
 // arrival pair in the text and takes the first as the outbound and the second
 // as the return, which is the one thing that holds across all of them.
 function parseFlightResultText(text){
-  const out = { departTime: null, returnTime: null, airline: null, price: null, stops: null, ranges: 0 };
+  const out = { departTime: null, returnTime: null, airline: null, price: null, stops: [], ranges: 0 };
   if (!text) return out;
   // Normalise the dash variants and the no-break spaces OCR likes to emit.
   const t = String(text).replace(/[\u2010-\u2015\u2212]/g, "-").replace(/\u00a0/g, " ");
@@ -1495,8 +1497,20 @@ function parseFlightResultText(text){
   const price = t.match(/\$\s?(\d[\d,]*(?:\.\d{2})?)/);
   if (price) out.price = parseFloat(price[1].replace(/,/g, ""));
 
-  const stops = t.match(/\b(nonstop|direct|\d\s*stops?)\b/i);
-  if (stops) out.stops = stops[1].toLowerCase();
+  // Stops per leg, in the order they appear, so they line up with the time
+  // ranges above — a round trip is routinely nonstop one way and not the
+  // other, and a single value would have to pick one and be wrong.
+  //
+  // A layover airport sits immediately after the stop count ("1 stop ATL"),
+  // but a route pair looks the same ("IAD-SMF"), so only a code that isn't
+  // part of a hyphenated pair counts.
+  const stopRe = /\b(nonstop|direct|(\d)\s*stops?)\b(?:\s*[^A-Za-z0-9]*\s*(?!\d)([A-Z]{3})(?![-\u2013\u2014A-Z0-9]))?/gi;
+  let sm;
+  while ((sm = stopRe.exec(t)) !== null){
+    const label = /non|direct/i.test(sm[1]) ? "nonstop"
+      : `${sm[2]} stop${sm[2] === "1" ? "" : "s"}`;
+    out.stops.push(sm[3] && label !== "nonstop" ? `${label} (${sm[3]})` : label);
+  }
   return out;
 }
 
@@ -1742,7 +1756,10 @@ async function loadTrips(){
   // flight says whether the airline migration has run. Keeps the field out of
   // the form and the writes until it has.
   const sample = data.flatMap(t => t.flights || [])[0];
-  if (sample) flightAirlineAvailable = "airline" in sample;
+  if (sample){
+    flightAirlineAvailable = "airline" in sample;
+    flightStopsAvailable = "stops_out" in sample;
+  }
   return data;
 }
 
@@ -1803,6 +1820,9 @@ let wishlistNotesAvailable = true;
 
 // Likewise for flights.airline.
 let flightAirlineAvailable = true;
+
+// ...and for the per-leg stops columns.
+let flightStopsAvailable = true;
 
 async function loadWishlistBoards(){
   const withReactions =
@@ -2046,6 +2066,10 @@ async function createFlight(tripId, fields){
     alert_below: fields.alertBelow, notes: fields.notes, position
   };
   if (flightAirlineAvailable) row.airline = fields.airline || null;
+  if (flightStopsAvailable){
+    row.stops_out = fields.stopsOut || null;
+    row.stops_back = fields.stopsBack || null;
+  }
   let { data, error } = await supabase.from("flights").insert(row).select().single();
   // PGRST204 is "no such column" — the migration hasn't run. PostgREST rejects
   // the whole write for one unknown field, so without this, adding any flight
@@ -2054,7 +2078,8 @@ async function createFlight(tripId, fields){
   // covers an account with no flights yet, where there was nothing to inspect.
   if (error && error.code === "PGRST204"){
     flightAirlineAvailable = false;
-    delete row.airline;
+    flightStopsAvailable = false;
+    delete row.airline; delete row.stops_out; delete row.stops_back;
     ({ data, error } = await supabase.from("flights").insert(row).select().single());
   }
   if (error) { alert(error.message); return null; }
@@ -2515,12 +2540,14 @@ function renderCard(trip, f){
   // Both legs, not just the return — the outbound was only ever in the title,
   // which clamps to a couple of lines and was cutting it off on a narrow card.
   const outbound = [fmtShortDate(f.depart_date), fmtTime(f.depart_time)].filter(Boolean).join(" ");
+  const withStops = (when, stops) =>
+    `<b>${esc(when)}</b>${stops ? ` <span class="leg-stops">${esc(stops)}</span>` : ""}`;
   if (f.leg === "roundtrip" && f.return_date){
     const ret = [fmtShortDate(f.return_date), fmtTime(f.return_time)].filter(Boolean).join(" ");
-    if (outbound) metaBits.push(`Out <b>${esc(outbound)}</b>`);
-    metaBits.push(`Back <b>${esc(ret)}</b>`);
+    if (outbound) metaBits.push(`Out ${withStops(outbound, f.stops_out)}`);
+    metaBits.push(`Back ${withStops(ret, f.stops_back)}`);
   } else if (outbound){
-    metaBits.push(`Out <b>${esc(outbound)}</b>`);
+    metaBits.push(`Out ${withStops(outbound, f.stops_out)}`);
   }
   if (f.airline) metaBits.push(`<b>${esc(f.airline)}</b>`);
   if (f.flight_number) metaBits.push(`Flight <b>${esc(f.flight_number)}</b>`);
@@ -2638,6 +2665,7 @@ function renderEditForm(f){
       <span class="field-hint">Airports and dates fill themselves in from the link.</span>
     </label>
     <label class="field span2">Paste the flight from the search results <span class="field-opt">— optional</span>
+    ${flightStopsAvailable ? `<input type="hidden" data-f-stops-out><input type="hidden" data-f-stops-back>` : ""}
       <textarea data-f-result rows="2" placeholder="Copy the result row on Kayak and paste it here — times, airline and price fill themselves in"></textarea>
       <span class="field-hint" data-f-result-read>The search link gives the route and dates; the times only exist in the results, so paste the one you picked.</span>
     </label>
@@ -2732,6 +2760,7 @@ function addFlightFormHTML(tripId, trip){
       <span class="field-hint">Airports and dates fill themselves in from the link.</span>
     </label>
     <label class="field span2">Paste the flight from the search results <span class="field-opt">— optional</span>
+    ${flightStopsAvailable ? `<input type="hidden" data-nf-stops-out><input type="hidden" data-nf-stops-back>` : ""}
       <textarea data-nf-result rows="2" placeholder="Copy the result row on Kayak and paste it here — times, airline and price fill themselves in"></textarea>
       <span class="field-hint" data-nf-result-read>The search link gives the route and dates; the times only exist in the results, so paste the one you picked.</span>
     </label>
@@ -3153,11 +3182,15 @@ function wireAutoTitle(container, sel){
         syncReturnVisibility();
         fill(returnTimeEl, r.returnTime, `back ${fmtTime(r.returnTime)}`);
       }
+      const stopsOutEl = container.querySelector(sel.stopsOut || "\0");
+      const stopsBackEl = container.querySelector(sel.stopsBack || "\0");
+      if (stopsOutEl && r.stops[0]) fill(stopsOutEl, r.stops[0], r.stops[0]);
+      if (stopsBackEl && r.stops[1]) fill(stopsBackEl, r.stops[1], r.stops[1]);
       if (airlineEl && r.airline && !airlineEl.value.trim()) fill(airlineEl, r.airline, r.airline);
       if (cashEl && r.price != null && cashEl.value === "") fill(cashEl, r.price, fmtCash(r.price));
       if (readoutEl){
         readoutEl.textContent = got.length
-          ? `Found ${got.join(" · ")}${r.stops ? ` · ${r.stops}` : ""}`
+          ? `Found ${got.join(" · ")}`
           : "Couldn't find any times in that — paste the row with the departure and arrival times in it.";
       }
       regen();
@@ -5118,6 +5151,10 @@ function wireEvents(activeTrip){
       form.querySelector("[data-f-return-time]").value = (flight.return_time || "").slice(0,5);
       form.querySelector("[data-f-passengers]").value = flight.passengers || 1;
       if (flightAirlineAvailable) form.querySelector("[data-f-airline]").value = flight.airline || "";
+      if (flightStopsAvailable){
+        form.querySelector("[data-f-stops-out]").value = flight.stops_out || "";
+        form.querySelector("[data-f-stops-back]").value = flight.stops_back || "";
+      }
       form.querySelector("[data-f-flightnumber]").value = flight.flight_number || "";
       form.querySelector("[data-f-confirmation]").value = flight.confirmation_code || "";
       form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
@@ -5144,7 +5181,8 @@ function wireEvents(activeTrip){
         returnDate: "[data-f-return-date]", returnWrap: "[data-f-return-wrap]",
         passengers: "[data-f-passengers]", returnTime: "[data-f-return-time]",
         airline: "[data-f-airline]",
-        result: "[data-f-result]", resultRead: "[data-f-result-read]" });
+        result: "[data-f-result]", resultRead: "[data-f-result-read]",
+        stopsOut: "[data-f-stops-out]", stopsBack: "[data-f-stops-back]" });
 
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
@@ -5178,6 +5216,10 @@ function wireEvents(activeTrip){
           passengers,
           ...(flightAirlineAvailable
             ? { airline: form.querySelector("[data-f-airline]")?.value.trim() || null } : {}),
+          ...(flightStopsAvailable ? {
+            stops_out: form.querySelector("[data-f-stops-out]")?.value || null,
+            stops_back: form.querySelector("[data-f-stops-back]")?.value || null,
+          } : {}),
           flight_number: form.querySelector("[data-f-flightnumber]").value.trim() || null,
           confirmation_code: form.querySelector("[data-f-confirmation]").value.trim() || null,
           alert_below: ab === "" ? null : parseFloat(ab),
@@ -5293,7 +5335,8 @@ function wireAddFlightForm(tripId){
     returnDate: "[data-nf-return-date]", returnWrap: "[data-nf-return-wrap]",
     passengers: "[data-nf-passengers]", returnTime: "[data-nf-return-time]",
     airline: "[data-nf-airline]",
-    result: "[data-nf-result]", resultRead: "[data-nf-result-read]" });
+    result: "[data-nf-result]", resultRead: "[data-nf-result-read]",
+    stopsOut: "[data-nf-stops-out]", stopsBack: "[data-nf-stops-back]" });
   saveBtn.addEventListener("click", async () => {
     const url = holder.querySelector("[data-nf-url]").value.trim();
     const origin = holder.querySelector("[data-nf-origin]").value.trim().toUpperCase() || null;
@@ -5322,6 +5365,8 @@ function wireAddFlightForm(tripId){
       pointsProgram: holder.querySelector("[data-nf-pointsprogram]").value.trim() || null,
       passengers,
       airline: holder.querySelector("[data-nf-airline]")?.value.trim() || null,
+      stopsOut: holder.querySelector("[data-nf-stops-out]")?.value || null,
+      stopsBack: holder.querySelector("[data-nf-stops-back]")?.value || null,
       flightNumber: holder.querySelector("[data-nf-flightnumber]").value.trim() || null,
       confirmationCode: holder.querySelector("[data-nf-confirmation]").value.trim() || null,
       alertBelow: ab === "" ? null : parseFloat(ab),
