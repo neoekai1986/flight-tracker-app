@@ -427,7 +427,8 @@
   }
   .card h3{font-size:15px;font-weight:600;margin-bottom:4px}
   .drag-handle{cursor:grab;color:var(--muted);font-size:13px;margin-right:6px;user-select:none}
-  .card-title-row{display:flex;align-items:center;gap:8px}
+  /* wrap so the badge drops below rather than eating the title's width */
+  .card-title-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   /* break-word, not anywhere: "anywhere" will split inside a word to avoid any
      overflow at all, and on a narrow card that turned "Delta," into one letter
      per line. This breaks between words and only splits a word that genuinely
@@ -469,19 +470,17 @@
      line — they're the widest column and the least useful to scan — while the
      price stays beside the title, which is the pairing the row exists for. Only
      when even that won't fit does the price stack too. */
+  /* Below this the price column leaves the title too little to work with —
+     a flight title now carries the airline, both legs with times, the route
+     and the price, and sharing the line with the price block squeezed it into
+     a few characters per row. So the title and its details take the whole
+     card, and the price drops underneath. The side-by-side row is what makes
+     a wide lane scannable; on a narrow card it was costing more than it gave. */
   @container card (max-width:520px){
-    /* fit-content rather than auto: "$640.00" takes only the ~70px it needs,
-       while a long award price like "8,000 pts (Chase Ultimate Rewards)" is
-       capped at 45% instead of taking the row and leaving the title wrapping a
-       word per line. */
-    .res-row{grid-template-columns:minmax(0,1fr) fit-content(45%);gap:8px 14px}
-    .res-price{white-space:normal}
+    .res-row{grid-template-columns:minmax(0,1fr);gap:8px}
+    .res-price{text-align:left;white-space:normal}
     .res-price .res-price-main{font-size:17px}
-    .res-actions{grid-column:1 / -1;justify-content:flex-start;flex-wrap:wrap}
-  }
-  @container card (max-width:330px){
-    .res-row{grid-template-columns:minmax(0,1fr)}
-    .res-price{text-align:left}
+    .res-actions{justify-content:flex-start;flex-wrap:wrap}
   }
 
   .wishlist-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:16px}
