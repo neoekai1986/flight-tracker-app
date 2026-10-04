@@ -512,6 +512,9 @@
   .wl-profile-list li{padding:10px 12px;background:var(--panel2);border:1px solid var(--line);
       border-radius:10px;font-size:13.5px;display:flex;flex-direction:column;gap:2px}
   .wl-profile-loc{font-size:12px;color:var(--muted)}
+  .trip-pick{display:flex;flex-direction:column;gap:2px;width:100%;text-align:left;
+      background:none;border:none;padding:0;cursor:pointer;font:inherit;color:inherit}
+  .wl-profile-list li:has(.trip-pick):hover{border-color:var(--amber)}
 
   .wl-openable{cursor:pointer}
   .wl-openable:hover{opacity:.9}
@@ -5739,8 +5742,13 @@ async function processAddFlightHash(){
   const url = decodeURIComponent(m[1] || "");
   const result = decodeURIComponent(m[2] || "");
 
-  const trip = trips.find(t => t.id === activeTripId) || trips[0];
-  if (!trip){ alert("Make a trip first, then send a flight to it."); return; }
+  if (!trips.length){ alert("Make a trip first, then send a flight to it."); return; }
+  // Landing on whatever trip happened to be open was wrong: the app opens on
+  // the same trip every time you sign in, so a flight sent from a search went
+  // there regardless of which trip it was for. Ask instead — the bookmarklet
+  // comes from another tab and carries no clue which trip you meant.
+  const trip = trips.length === 1 ? trips[0] : await askWhichTrip();
+  if (!trip) return;
   activeTripId = trip.id;
   activeSection = "trips";
   render();
@@ -5761,6 +5769,46 @@ async function processAddFlightHash(){
   fire("[data-nf-result]", result);
   document.querySelector(`[data-add-flight-form="${trip.id}"]`)
     ?.scrollIntoView({ block: "start" });
+}
+
+// Which trip is this flight for? Resolves to a trip, or null if dismissed.
+function askWhichTrip(){
+  return new Promise(resolve => {
+    const host = document.createElement("div");
+    const byFolder = new Map();
+    for (const t of trips){
+      const key = folders.find(f => f.id === t.folder_id)?.title || "";
+      if (!byFolder.has(key)) byFolder.set(key, []);
+      byFolder.get(key).push(t);
+    }
+    host.innerHTML = `
+      <div class="wl-profile-overlay" data-trip-pick-overlay>
+        <div class="wl-profile" role="dialog" aria-label="Choose a trip">
+          <button type="button" class="wl-profile-close" data-trip-pick-close aria-label="Cancel">×</button>
+          <div class="wl-profile-head"><div>
+            <h3>Add this flight to…</h3>
+            <p class="wl-profile-count">Sent from your browser — pick the trip it belongs to.</p>
+          </div></div>
+          <ul class="wl-profile-list">
+            ${[...byFolder.entries()].map(([folder, list]) => list.map(t => `
+              <li><button type="button" class="trip-pick" data-trip-pick="${t.id}">
+                <strong>${esc(t.title)}</strong>
+                <span class="wl-profile-loc">${folder ? esc(folder) + " · " : ""}${
+                  t.travel_start ? esc(fmtShortDate(t.travel_start)) : "no dates"}</span>
+              </button></li>`).join("")).join("")}
+          </ul>
+        </div>
+      </div>`;
+    document.body.appendChild(host);
+    const done = (val) => { host.remove(); resolve(val); };
+    host.querySelector("[data-trip-pick-close]").addEventListener("click", () => done(null));
+    host.querySelector("[data-trip-pick-overlay]").addEventListener("click", (e) => {
+      if (e.target === e.currentTarget) done(null);
+    });
+    host.querySelectorAll("[data-trip-pick]").forEach(btn => {
+      btn.addEventListener("click", () => done(trips.find(t => t.id === btn.dataset.tripPick) || null));
+    });
+  });
 }
 
 async function processBookmarkletHash(){
