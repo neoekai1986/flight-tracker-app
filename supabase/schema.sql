@@ -81,6 +81,8 @@ create table public.flights (
   flight_number     text,
   confirmation_code text,
   alert_below numeric,
+  -- Who paid. Null means the trip's owner, which is the default.
+  paid_by     uuid references public.trip_people(id) on delete set null,
   notes       text,
   position    double precision not null default 0,
   created_at  timestamptz not null default now(),
@@ -102,6 +104,8 @@ create table public.rentals (
   rental_start date,
   rental_end   date,
   cancel_by    date,
+  address      text,   -- where it is, for the summary itinerary
+  paid_by      uuid references public.trip_people(id) on delete set null,
   reminded_at  timestamptz,  -- set by the reminder job once the 5-days-out email is sent
   confirmation_code text,
   -- Up to 5 "who paid what" entries: [{name, percent, amount}, ...]. Each
@@ -112,6 +116,34 @@ create table public.rentals (
   position     double precision not null default 0,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
+);
+
+-- The travellers on a trip. Replaces the free-text trips.attendees array: a
+-- stable id means a cost recorded against someone survives renaming them.
+create table public.trip_people (
+  id          uuid primary key default gen_random_uuid(),
+  trip_id     uuid not null references public.trips(id) on delete cascade,
+  name        text not null,
+  position    double precision not null default 0,
+  created_at  timestamptz not null default now()
+);
+
+-- Per-person detail on one booking. A row means "this person is on this
+-- booking"; reference and cost are theirs where they differ. cost is what
+-- they owe for it, not what they handed over — who actually paid is
+-- flights.paid_by / rentals.paid_by.
+create table public.booking_people (
+  id          uuid primary key default gen_random_uuid(),
+  trip_id     uuid not null references public.trips(id) on delete cascade,
+  person_id   uuid not null references public.trip_people(id) on delete cascade,
+  flight_id   uuid references public.flights(id) on delete cascade,
+  rental_id   uuid references public.rentals(id) on delete cascade,
+  reference   text,
+  cost        numeric,
+  created_at  timestamptz not null default now(),
+  check ( (flight_id is not null)::int + (rental_id is not null)::int = 1 ),
+  unique (person_id, flight_id),
+  unique (person_id, rental_id)
 );
 
 create table public.price_logs (
@@ -218,6 +250,10 @@ create table public.wishlist_comments (
   created_at  timestamptz not null default now()
 );
 
+create index on public.trip_people (trip_id, position);
+create index on public.booking_people (trip_id);
+create index on public.booking_people (flight_id);
+create index on public.booking_people (rental_id);
 create index on public.trip_folders (owner_id, position);
 create index on public.wishlist_votes (entry_id);
 create index on public.wishlist_comments (entry_id, created_at);

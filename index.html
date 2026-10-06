@@ -266,6 +266,9 @@
      there's already a trip sidebar, so on a wide screen this is two left rails
      — the sidebar picks the trip, this rail filters within it. */
   .results-layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:20px;align-items:start}
+  /* No rail on the summary, so don't keep its column reserved — an empty
+     216px track squeezed the sheet into the remainder. */
+  .results-layout-solo{grid-template-columns:minmax(0,1fr)}
   .filter-rail{position:sticky;top:20px;background:var(--panel);border:1px solid var(--line);
       border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:2px}
   .filter-rail-head{display:flex;align-items:baseline;justify-content:space-between;
@@ -710,6 +713,39 @@
   .form-section:first-child{margin-top:0}
   .form-section::after{content:"";flex:1;height:1px;background:var(--line)}
   @media (max-width:520px){ .edit-grid{grid-template-columns:1fr} }
+  .summary-sheet{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+      padding:26px 28px;max-width:760px}
+  .summary-head{padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  .summary-head h2{font-family:'Poppins',sans-serif;font-weight:700;font-size:22px}
+  .summary-head p{font-size:13px;color:var(--muted);margin-top:4px}
+  .summary-block{padding-top:20px}
+  .summary-block h3{font-family:'Poppins',sans-serif;font-weight:600;font-size:15px;
+      margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .summary-block h3 img{width:22px;height:22px}
+  .summary-item{padding:12px 14px;background:var(--panel2);border:1px solid var(--line);
+      border-radius:10px;margin-bottom:8px}
+  .summary-item-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;font-size:14.5px}
+  .summary-tag{font-size:11.5px;color:var(--muted);border:1px solid var(--line);
+      border-radius:20px;padding:1px 8px}
+  .summary-lines{font-size:13px;color:var(--muted);line-height:1.7}
+  .summary-lines b{color:var(--ink);font-weight:600}
+  .summary-money{width:100%;margin-top:4px}
+  .summary-warn{font-size:12.5px;color:var(--bad);margin-top:8px;line-height:1.6}
+  @media print{
+    .sidebar,.filter-rail,.panel-head,.share-block,.view-menu{display:none!important}
+    .summary-sheet{border:none;padding:0;max-width:none}
+  }
+  .booking-people{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  .bp-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,1.2fr) 110px;
+      gap:8px;align-items:center}
+  .bp-who{display:flex;align-items:center;gap:7px;font-size:13px;min-width:0}
+  .bp-who input{accent-color:var(--amber);flex-shrink:0;margin:0}
+  .bp-who span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bp-row input[type=text],.bp-row input[type=number]{width:100%;max-width:none;margin-top:0}
+  @media (max-width:560px){ .bp-row{grid-template-columns:1fr} }
+  .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  .person-row{display:flex;align-items:center;gap:8px}
+  .person-row input{flex:0 1 240px}
   .split-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
       font-family:Inter,system-ui,sans-serif;margin-bottom:5px}
   .split-grid{display:grid;grid-template-columns:1.6fr 0.7fr 0.9fr;gap:6px}
@@ -909,6 +945,9 @@ function setTrackingMode(on){
 // Wishlist entry ids whose comment thread is expanded. Same lifetime and
 // reasoning as cardDetailOverrides — view state, never persisted.
 let openWishlistComments = new Set();
+
+// Which trip is showing its summary sheet instead of its lanes. View state.
+let summaryForTrip = null;
 
 // Filter rail state — trip.id -> { status, type, program }, each a Set. An
 // empty Set means "no filter on this facet", not "nothing matches", so a fresh
@@ -1737,7 +1776,8 @@ function renderAuth(){
 async function loadTrips(){
   const { data, error } = await supabase
     .from("trips")
-    .select("*, flights(*, price_logs(*), attachments(*)), rentals(*, attachments(*)), trip_collaborators(*)")
+    .select("*, flights(*, price_logs(*), attachments(*)), rentals(*, attachments(*)), " +
+            "trip_collaborators(*), trip_people(*), booking_people(*)")
     .order("created_at", { ascending: true });
   if (error) { console.error(error); return []; }
   for (const t of data){
@@ -1748,6 +1788,7 @@ async function loadTrips(){
   // select("*") returns exactly the columns that exist, so the first loaded
   // flight says whether the airline migration has run. Keeps the field out of
   // the form and the writes until it has.
+  for (const t of data) (t.trip_people || []).sort((a,b) => a.position - b.position);
   const sample = data.flatMap(t => t.flights || [])[0];
   if (sample){
     flightAirlineAvailable = "airline" in sample;
@@ -2041,6 +2082,120 @@ async function removeCollaborator(id){
   if (error) alert(error.message);
 }
 
+// ---------------- Trip people ----------------
+// These replace the free-text attendees list. A person is a row with a stable
+// id, so a cost recorded against them survives being renamed.
+
+async function createTripPerson(tripId, name){
+  const siblings = (trips.find(t => t.id === tripId)?.trip_people || []).map(p => p.position);
+  const position = siblings.length ? Math.max(...siblings) + 1000 : 0;
+  const { data, error } = await supabase.from("trip_people")
+    .insert({ trip_id: tripId, name, position }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function renameTripPerson(id, name){
+  const { error } = await supabase.from("trip_people").update({ name }).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deleteTripPerson(id){
+  // booking_people rows cascade, so removing someone takes their shares with
+  // them rather than leaving orphans pointing at nobody.
+  const { error } = await supabase.from("trip_people").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+function tripPeople(trip){ return (trip?.trip_people || []); }
+function personName(trip, id){
+  if (!id) return "You";
+  return tripPeople(trip).find(p => p.id === id)?.name || "Someone";
+}
+
+// ---------------- Per-booking people ----------------
+// A row here means "this person is on this booking". reference and cost are
+// theirs; cost is what they owe for it, not what they handed over — who paid
+// is flights.paid_by / rentals.paid_by, defaulting to you.
+
+function bookingPeopleFor(trip, kind, id){
+  return (trip?.booking_people || []).filter(b => b[kind === "flight" ? "flight_id" : "rental_id"] === id);
+}
+
+// Replaces the whole set for one booking in a single round trip: delete what's
+// there, insert what's wanted. Simpler than diffing, and these sets are a
+// handful of rows at most.
+async function saveBookingPeople(tripId, kind, id, rows){
+  const col = kind === "flight" ? "flight_id" : "rental_id";
+  const { error: delErr } = await supabase.from("booking_people").delete().eq(col, id);
+  if (delErr) { alert(delErr.message); return; }
+  if (!rows.length) return;
+  const { error } = await supabase.from("booking_people").insert(
+    rows.map(r => ({ trip_id: tripId, person_id: r.personId, [col]: id,
+                     reference: r.reference || null, cost: r.cost })));
+  if (error) alert(error.message);
+}
+
+// The per-person block shown inside a flight or rental form.
+function bookingPeopleFieldsHTML(trip, prefix, existing){
+  const people = tripPeople(trip);
+  if (!people.length){
+    return `<div class="field span2">Who's on this booking
+      <span class="field-hint">No one listed on this trip yet — add people in
+        <b>Trip details</b> and they'll show up here.</span>
+    </div>`;
+  }
+  const byPerson = new Map((existing || []).map(b => [b.person_id, b]));
+  return `
+    <div class="form-section">Who's on this booking <span class="field-opt">(leave empty if it's just you)</span></div>
+    <div class="field span2">
+      <div class="booking-people">
+        ${people.map(p => {
+          const row = byPerson.get(p.id);
+          return `<div class="bp-row" data-bp-row="${p.id}">
+            <label class="bp-who">
+              <input type="checkbox" data-${prefix}-bp-on="${p.id}" ${row ? "checked" : ""}>
+              <span>${esc(p.name)}</span>
+            </label>
+            <input type="text" data-${prefix}-bp-ref="${p.id}" placeholder="their reference"
+              value="${esc(row?.reference || "")}">
+            <input type="number" step="0.01" data-${prefix}-bp-cost="${p.id}" placeholder="their share"
+              value="${row?.cost ?? ""}">
+          </div>`;
+        }).join("")}
+      </div>
+      <span class="field-hint">Tick who this covers. A reference or share is only needed where
+        theirs differs — anything left blank stays on you.</span>
+    </div>`;
+}
+
+function readBookingPeople(container, prefix){
+  const rows = [];
+  container.querySelectorAll(`[data-${prefix}-bp-on]`).forEach(box => {
+    if (!box.checked) return;
+    const id = box.dataset[`${prefix}BpOn`];
+    const costRaw = container.querySelector(`[data-${prefix}-bp-cost="${id}"]`)?.value;
+    rows.push({
+      personId: id,
+      reference: container.querySelector(`[data-${prefix}-bp-ref="${id}"]`)?.value.trim() || null,
+      cost: costRaw === "" || costRaw == null ? null : parseFloat(costRaw),
+    });
+  });
+  return rows;
+}
+
+// "Paid by" — null means you, which is the default and the common case.
+function paidByFieldHTML(trip, prefix, current){
+  const people = tripPeople(trip);
+  if (!people.length) return "";
+  return `<label class="field field-narrow">Paid by
+    <select data-${prefix}-paidby>
+      <option value="">You</option>
+      ${people.map(p => `<option value="${p.id}" ${p.id===current?"selected":""}>${esc(p.name)}</option>`).join("")}
+    </select>
+  </label>`;
+}
+
 async function createFlight(tripId, fields){
   const siblingPositions = (trips.find(t => t.id === tripId)?.flights || [])
     .filter(f => legScope(f.leg) === legScope(fields.leg))
@@ -2058,6 +2213,7 @@ async function createFlight(tripId, fields){
     flight_number: fields.flightNumber || null, confirmation_code: fields.confirmationCode || null,
     alert_below: fields.alertBelow, notes: fields.notes, position
   };
+  row.paid_by = fields.paidBy || null;
   if (flightAirlineAvailable) row.airline = fields.airline || null;
   if (flightStopsAvailable){
     row.stops_out = fields.stopsOut || null;
@@ -2082,16 +2238,18 @@ async function createFlight(tripId, fields){
 async function createRental(tripId, fields){
   const siblingPositions = (trips.find(t => t.id === tripId)?.rentals || []).map(r => r.position);
   const position = siblingPositions.length ? Math.max(...siblingPositions) + 1000 : 0;
-  const { error } = await supabase.from("rentals").insert({
+  const { data, error } = await supabase.from("rentals").insert({
     trip_id: tripId, kind: fields.kind || "housing", label: fields.label, url: fields.url || null,
     currency: fields.currency || "USD", paid_cash: fields.paidCash, paid_points: fields.paidPoints,
     points_program: fields.pointsProgram || null,
     status: fields.status || "booked",
     rental_start: fields.rentalStart || null, rental_end: fields.rentalEnd || null,
     cancel_by: fields.cancelBy || null, confirmation_code: fields.confirmationCode || null,
+    address: fields.address || null, paid_by: fields.paidBy || null,
     splits: fields.splits || [], notes: fields.notes || null, position
-  });
-  if (error) alert(error.message);
+  }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
 }
 
 async function updateRental(id, patch){
@@ -2649,7 +2807,7 @@ function renderCard(trip, f){
   </div>`;
 }
 
-function renderEditForm(f){
+function renderEditForm(f, trip){
   return `
   <div class="edit-grid" data-edit-form="${f.id}">
     <div class="form-section">Which flight</div>
@@ -2737,6 +2895,8 @@ function renderEditForm(f){
     <label class="field span2">Notes
       <textarea data-f-notes placeholder="Seat preferences, who's on this booking, anything worth remembering"></textarea>
     </label>
+    ${paidByFieldHTML(trip, "f", f.paid_by)}
+    ${bookingPeopleFieldsHTML(trip, "f", bookingPeopleFor(trip, "flight", f.id))}
     <div class="span2 row form-actions">
       <button class="btn btn-sm" data-save-flight="${f.id}">Save</button>
       <button class="btn-link" data-cancel-flight="${f.id}">cancel</button>
@@ -2832,6 +2992,8 @@ function addFlightFormHTML(tripId, trip){
     <label class="field span2">Notes
       <textarea data-nf-notes placeholder="Seat preferences, who's on this booking, anything worth remembering"></textarea>
     </label>
+    ${paidByFieldHTML(trip, "nf", null)}
+    ${bookingPeopleFieldsHTML(trip, "nf", [])}
     <div class="span2 row form-actions">
       <button class="btn btn-sm" data-nf-save="${tripId}">Add flight</button>
       <button class="btn-link" data-nf-cancel="${tripId}">cancel</button>
@@ -2917,6 +3079,155 @@ function renderFilterRail(trip){
           </div>
         </details>`).join("")}
     </aside>`;
+}
+
+// ---------------- Trip summary ----------------
+// The itinerary plus who owes what. Built entirely from what's already stored,
+// so it's a view rather than another place to keep things in step.
+
+// What one person owes, and what they laid out. A booking with no per-person
+// rows sits wholly on whoever paid it, which by default is you — so a trip
+// with nothing filled in still adds up.
+function tripMoney(trip){
+  const people = tripPeople(trip);
+  const ledger = new Map(people.map(p => [p.id, { name: p.name, owes: 0, paid: 0 }]));
+  const you = { name: "You", owes: 0, paid: 0 };
+  const entryFor = id => (id ? ledger.get(id) : you) || you;
+  const over = [];
+
+  const bookings = [
+    ...(trip.flights || []).filter(f => f.status !== "watching")
+      .map(f => ({ kind: "flight", row: f, total: (f.paid_cash || 0) * (f.passengers || 1) })),
+    ...(trip.rentals || []).filter(r => r.status !== "watching")
+      .map(r => ({ kind: "rental", row: r, total: r.paid_cash || 0 })),
+  ];
+
+  for (const b of bookings){
+    entryFor(b.row.paid_by).paid += b.total;
+    const shares = bookingPeopleFor(trip, b.kind, b.row.id);
+    const stated = shares.filter(x => x.cost != null);
+    for (const x of stated) entryFor(x.person_id).owes += Number(x.cost) || 0;
+    // Whatever nobody has claimed stays with the payer rather than vanishing,
+    // so the owed column always reconciles against what was actually spent.
+    const claimed = stated.reduce((n, x) => n + (Number(x.cost) || 0), 0);
+    const remainder = b.total - claimed;
+    if (remainder > 0.005) entryFor(b.row.paid_by).owes += remainder;
+    // Shares adding up to more than the booking cost is a typo, not a
+    // position worth representing — say so rather than quietly producing
+    // a ledger that can't reconcile.
+    else if (remainder < -0.005) over.push({ label: b.row.label, by: -remainder });
+  }
+
+  const rows = [you, ...ledger.values()].filter(e => e.owes || e.paid);
+  return { rows: rows.map(e => ({ ...e, net: e.paid - e.owes })), over,
+           total: bookings.reduce((n, b) => n + b.total, 0) };
+}
+
+function renderTripSummary(trip){
+  const fmt = n => fmtCash(n, "USD");
+  const money = tripMoney(trip);
+  const booked = (list) => (list || []).filter(x => x.status !== "watching");
+  const flights = booked(trip.flights).slice()
+    .sort((a,b) => (a.depart_date || "").localeCompare(b.depart_date || ""));
+  const rentals = booked(trip.rentals);
+  const stay = rentals.filter(r => r.kind !== "car");
+  const cars = rentals.filter(r => r.kind === "car");
+
+  const refsFor = (kind, row) => {
+    const rows = bookingPeopleFor(trip, kind, row.id).filter(x => x.reference);
+    if (!rows.length) return row.confirmation_code ? `Ref <b>${esc(row.confirmation_code)}</b>` : "";
+    return rows.map(x => `${esc(personName(trip, x.person_id))} <b>${esc(x.reference)}</b>`).join(" · ");
+  };
+  const whoFor = (kind, row) => {
+    const rows = bookingPeopleFor(trip, kind, row.id);
+    return rows.length ? rows.map(x => esc(personName(trip, x.person_id))).join(", ") : "";
+  };
+
+  const leg = (when, time, stops) =>
+    `${esc(fmtShortDate(when) || "?")}${time ? ` <b>${esc(fmtTime(time))}</b>` : ""}${
+      stops ? ` <span class="leg-stops">${esc(stops)}</span>` : ""}`;
+
+  return `
+    <div class="summary-sheet">
+      <div class="summary-head">
+        <h2>${esc(trip.title)}</h2>
+        <p>${trip.travel_start ? esc(fmtShortDate(trip.travel_start)) : "?"} → ${
+          trip.travel_end ? esc(fmtShortDate(trip.travel_end)) : "?"}${
+          tripPeople(trip).length ? ` · ${tripPeople(trip).map(p=>esc(p.name)).join(", ")}` : ""}</p>
+      </div>
+
+      <section class="summary-block">
+        <h3>${ICON_FLIGHT} Flights</h3>
+        ${flights.length ? flights.map(f => `
+          <div class="summary-item">
+            <div class="summary-item-head">
+              <b>${f.origin && f.destination
+                ? `${esc(f.origin)} ${f.leg === "roundtrip" ? "⇄" : "→"} ${esc(f.destination)}`
+                : esc(f.label)}</b>
+              ${f.airline ? `<span class="summary-tag">${esc(f.airline)}</span>` : ""}
+              ${f.flight_number ? `<span class="summary-tag">${esc(f.flight_number)}</span>` : ""}
+            </div>
+            <div class="summary-lines">
+              <div>Out ${leg(f.depart_date, f.depart_time, f.stops_out)}</div>
+              ${f.leg === "roundtrip" && f.return_date
+                ? `<div>Back ${leg(f.return_date, f.return_time, f.stops_back)}</div>` : ""}
+              ${whoFor("flight", f) ? `<div>Who: ${whoFor("flight", f)}</div>` : ""}
+              ${refsFor("flight", f) ? `<div>${refsFor("flight", f)}</div>` : ""}
+            </div>
+          </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
+      </section>
+
+      <section class="summary-block">
+        <h3>${ICON_HOTEL} Where you're staying</h3>
+        ${stay.length ? stay.map(r => `
+          <div class="summary-item">
+            <div class="summary-item-head"><b>${esc(r.label)}</b></div>
+            <div class="summary-lines">
+              <div>${esc(fmtShortDate(r.rental_start) || "?")} → ${esc(fmtShortDate(r.rental_end) || "?")}</div>
+              ${r.address ? `<div>${esc(r.address)}</div>` : ""}
+              ${whoFor("rental", r) ? `<div>Who: ${whoFor("rental", r)}</div>` : ""}
+              ${refsFor("rental", r) ? `<div>${refsFor("rental", r)}</div>` : ""}
+            </div>
+          </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
+      </section>
+
+      <section class="summary-block">
+        <h3>${ICON_CAR} Cars</h3>
+        ${cars.length ? cars.map(r => `
+          <div class="summary-item">
+            <div class="summary-item-head"><b>${esc(r.label)}</b></div>
+            <div class="summary-lines">
+              <div>${esc(fmtShortDate(r.rental_start) || "?")} → ${esc(fmtShortDate(r.rental_end) || "?")}</div>
+              ${r.address ? `<div>${esc(r.address)}</div>` : ""}
+              ${whoFor("rental", r) ? `<div>Who: ${whoFor("rental", r)}</div>` : ""}
+              ${refsFor("rental", r) ? `<div>${refsFor("rental", r)}</div>` : ""}
+            </div>
+          </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
+      </section>
+
+      <section class="summary-block">
+        <h3>Who owes what</h3>
+        ${money.rows.length ? `
+        <table class="hist summary-money">
+          <tr><th>Person</th><th>Their share</th><th>They paid</th><th>Net</th></tr>
+          ${money.rows.map(r => `<tr>
+            <td>${esc(r.name)}</td>
+            <td>${fmt(r.owes)}</td>
+            <td>${fmt(r.paid)}</td>
+            <td class="${r.net > 0.005 ? "down" : r.net < -0.005 ? "up" : "flat"}">${
+              Math.abs(r.net) < 0.005 ? "settled"
+                : r.net > 0 ? `owed ${fmt(r.net)}` : `owes ${fmt(-r.net)}`}</td>
+          </tr>`).join("")}
+          <tr><td><b>Trip total</b></td><td colspan="3"><b>${fmt(money.total)}</b></td></tr>
+        </table>
+        ${money.over.length ? `<p class="summary-warn">Shares add up to more than the booking cost on
+          ${money.over.map(o => `<b>${esc(o.label)}</b> (by ${fmt(o.by)})`).join(", ")} —
+          worth a look, the figures below can't reconcile while that's true.</p>` : ""}
+        <p class="field-hint">A booking with no per-person shares entered sits whole on whoever
+          paid it. Watching items aren't counted.</p>`
+        : `<p class="empty-hist">Nothing booked yet.</p>`}
+      </section>
+    </div>`;
 }
 
 function renderTripPanel(trip){
@@ -3032,8 +3343,9 @@ function renderTripPanel(trip){
     metaParts.push(`<div><b>Dates:</b> ${esc(trip.travel_start || "?")} → ${esc(trip.travel_end || "?")}</div>`);
   }
   if (trip.notes) metaParts.push(`<div><b>Notes:</b> ${esc(trip.notes)}</div>`);
-  if ((trip.attendees || []).length){
-    metaParts.push(`<div><b>Attendees:</b> <span class="tags">${trip.attendees.map(a=>`<span class="tag">${esc(a)}</span>`).join("")}</span></div>`);
+  if (tripPeople(trip).length){
+    metaParts.push(`<div><b>Who's going:</b> <span class="tags">${
+      tripPeople(trip).map(p=>`<span class="tag">${esc(p.name)}</span>`).join("")}</span></div>`);
   }
 
   return `
@@ -3042,6 +3354,8 @@ function renderTripPanel(trip){
         <h2 data-title="${trip.id}">${esc(trip.title)}</h2>
         <button class="btn btn-ghost btn-sm" data-rename-trip="${trip.id}">Rename</button>
         <button class="btn btn-ghost btn-sm" data-edit-meta="${trip.id}">Trip details</button>
+        <button class="btn btn-ghost btn-sm" data-trip-summary="${trip.id}">${
+          summaryForTrip === trip.id ? "Back to planning" : "Summary"}</button>
         <button class="btn btn-sm" data-add-flight-toggle="${trip.id}">+ Add flight</button>
         <button class="btn btn-sm" data-add-rental-toggle="${trip.id}">+ Add rental</button>
         <details class="menu search-trip-menu">
@@ -3074,9 +3388,10 @@ function renderTripPanel(trip){
       <div data-add-flight-form="${trip.id}"></div>
       <div data-add-rental-form="${trip.id}"></div>
 
-      <div class="results-layout">
-        ${renderFilterRail(trip)}
+      <div class="results-layout${summaryForTrip === trip.id ? " results-layout-solo" : ""}">
+        ${summaryForTrip === trip.id ? "" : renderFilterRail(trip)}
         <div class="results-col">
+      ${summaryForTrip === trip.id ? renderTripSummary(trip) : `
       ${!facetAllows(sel.status, "booked") ? "" : `
       <div class="lane-stack">
         ${facetAllows(sel.type, "flight") ? `<div class="lane">
@@ -3106,7 +3421,7 @@ function renderTripPanel(trip){
 
       ${watchingHTML}
         </div>
-      </div>
+      </div>`}
     </div>`;
 }
 
@@ -3366,7 +3681,7 @@ function renderRentalCard(trip, r){
   </div>`;
 }
 
-function rentalFormHTML(prefix, idAttr, defaults){
+function rentalFormHTML(prefix, idAttr, defaults, trip, existingPeople){
   const p = prefix; // "nr" (new) or "er" (edit)
   const d = defaults || {};
   return `
@@ -3393,6 +3708,9 @@ function rentalFormHTML(prefix, idAttr, defaults){
       <button type="button" class="btn-link daterange-btn" data-dr-btn
         data-dr-start="[data-${p}-start]" data-dr-end="[data-${p}-end]">📅 pick both dates on one calendar</button>
     </div>
+    <label class="field span2">Address
+      <input type="text" data-${p}-address placeholder="Where it is — shown on the trip summary">
+    </label>
     <label class="field">Free-cancel deadline
       <input type="date" data-${p}-cancelby>
     </label>
@@ -3417,6 +3735,8 @@ function rentalFormHTML(prefix, idAttr, defaults){
     <label class="field span2">Notes
       <textarea data-${p}-notes placeholder="optional"></textarea>
     </label>
+    ${paidByFieldHTML(trip, p, defaults && defaults.paidBy)}
+    ${bookingPeopleFieldsHTML(trip, p, existingPeople)}
     ${splitRowsHTML(p)}
     <div class="span2 row" style="margin:0">
       <button class="btn btn-sm" data-${p}-save>Save</button>
@@ -3452,9 +3772,21 @@ function renderMetaForm(trip){
         <option value="__new__">+ New category…</option>
       </select>
     </label>
-    <label class="field span2">Attendees (comma-separated)
-      <input type="text" data-m-attendees value="${esc((trip.attendees||[]).join(", "))}">
-    </label>
+    <div class="field span2">Who's on this trip
+      <span class="field-hint">Everyone here can be put on a booking, with their own reference
+        number and share of the cost. You're assumed to be paying unless you say otherwise.</span>
+      <div class="people-list" data-m-people>
+        ${tripPeople(trip).map(p => `
+          <div class="person-row" data-person-row="${p.id}">
+            <input type="text" value="${esc(p.name)}" data-person-name="${p.id}" aria-label="Name">
+            <button type="button" class="btn-link" data-person-del="${p.id}" title="Remove from trip">×</button>
+          </div>`).join("")}
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" data-person-new placeholder="Add someone…" style="flex:0 1 220px">
+        <button type="button" class="btn btn-ghost btn-sm" data-person-add>Add</button>
+      </div>
+    </div>
     <label class="field span2">Notes
       <textarea data-m-notes>${esc(trip.notes || "")}</textarea>
     </label>
@@ -4961,6 +5293,11 @@ function wireEvents(activeTrip){
     });
   });
 
+  document.querySelector(`[data-trip-summary="${activeTrip.id}"]`)?.addEventListener("click", () => {
+    summaryForTrip = summaryForTrip === activeTrip.id ? null : activeTrip.id;
+    render();
+  });
+
   document.querySelector(`[data-edit-meta="${activeTrip.id}"]`).addEventListener("click", () => {
     const holder = document.querySelector(`[data-meta-form="${activeTrip.id}"]`);
     holder.innerHTML = holder.innerHTML ? "" : renderMetaForm(activeTrip);
@@ -4970,10 +5307,10 @@ function wireEvents(activeTrip){
     saveBtn.addEventListener("click", async () => {
       const start = holder.querySelector(`[data-m-start]`).value || null;
       const end = holder.querySelector(`[data-m-end]`).value || null;
-      const attendeesRaw = holder.querySelector(`[data-m-attendees]`).value;
-      const attendees = attendeesRaw.split(",").map(s=>s.trim()).filter(Boolean);
       const notes = holder.querySelector(`[data-m-notes]`).value.trim();
-      await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, attendees, notes });
+      // People are rows of their own now, saved as you edit them rather than
+      // with the rest of the form — attendees is left untouched on the trip.
+      await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, notes });
       let folderSel = holder.querySelector(`[data-m-folder]`).value;
       if (folderSel === "__new__"){
         const title = prompt("Year name (e.g. 2026):");
@@ -4999,6 +5336,44 @@ function wireEvents(activeTrip){
       await refresh();
     });
     document.querySelector(`[data-meta-cancel="${activeTrip.id}"]`)?.addEventListener("click", render);
+
+    // People save as you edit them, not with the rest of the form — a person
+    // has to exist before anything can be recorded against them, and the form
+    // stays open afterwards so you can add the whole group in one go.
+    const addPerson = async () => {
+      const input = holder.querySelector("[data-person-new]");
+      const name = input.value.trim();
+      if (!name) { input.focus(); return; }
+      await createTripPerson(activeTrip.id, name);
+      await refresh();
+      document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      document.querySelector("[data-person-new]")?.focus();
+    };
+    holder.querySelector("[data-person-add]")?.addEventListener("click", addPerson);
+    holder.querySelector("[data-person-new]")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter"){ e.preventDefault(); addPerson(); }
+    });
+    holder.querySelectorAll("[data-person-name]").forEach(input => {
+      // on blur rather than per keystroke: one write when you stop typing.
+      input.addEventListener("blur", async () => {
+        const name = input.value.trim();
+        const person = tripPeople(activeTrip).find(p => p.id === input.dataset.personName);
+        if (!person || !name || name === person.name){ input.value = person?.name || name; return; }
+        await renameTripPerson(person.id, name);
+        await refresh();
+        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      });
+    });
+    holder.querySelectorAll("[data-person-del]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const person = tripPeople(activeTrip).find(p => p.id === btn.dataset.personDel);
+        if (!person) return;
+        if (!confirm(`Remove ${person.name} from this trip?\n\nAnything recorded against them on a booking goes too.`)) return;
+        await deleteTripPerson(person.id);
+        await refresh();
+        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      });
+    });
   });
 
   const inviteBtn = document.querySelector(`[data-invite-save="${activeTrip.id}"]`);
@@ -5025,7 +5400,7 @@ function wireEvents(activeTrip){
     if (holder.innerHTML){ holder.innerHTML = ""; return; }
     holder.innerHTML = rentalFormHTML("nr", "", {
       rentalStart: activeTrip.travel_start, rentalEnd: activeTrip.travel_end
-    });
+    }, activeTrip, []);
     wireDateRangeButtons();
     wirePointsProgramField("nr");
     applyRentalKindToProgramField("nr", "housing");
@@ -5038,7 +5413,9 @@ function wireEvents(activeTrip){
       if (!label){ alert("Name is required."); return; }
       const pc = holder.querySelector("[data-nr-paidcash]").value;
       const pp = holder.querySelector("[data-nr-paidpoints]").value;
-      await createRental(activeTrip.id, {
+      const createdRental = await createRental(activeTrip.id, {
+        address: holder.querySelector("[data-nr-address]").value.trim() || null,
+        paidBy: holder.querySelector("[data-nr-paidby]")?.value || null,
         kind: holder.querySelector("[data-nr-kind]").value,
         label, url: holder.querySelector("[data-nr-url]").value.trim(),
         rentalStart: holder.querySelector("[data-nr-start]").value || null,
@@ -5052,6 +5429,10 @@ function wireEvents(activeTrip){
         splits: gatherSplits(holder, "nr"),
         notes: holder.querySelector("[data-nr-notes]").value.trim(),
       });
+      if (createdRental){
+        await saveBookingPeople(activeTrip.id, "rental", createdRental.id,
+          readBookingPeople(holder, "nr"));
+      }
       await refresh();
     });
   });
@@ -5062,7 +5443,8 @@ function wireEvents(activeTrip){
       const { rental } = findRental(rid);
       const card = document.querySelector(`[data-rental-card="${rid}"]`);
       const wrap = document.createElement("div");
-      wrap.innerHTML = rentalFormHTML("er", `data-rental-edit-form="${rid}"`);
+      wrap.innerHTML = rentalFormHTML("er", `data-rental-edit-form="${rid}"`,
+        { paidBy: rental.paid_by }, activeTrip, bookingPeopleFor(activeTrip, "rental", rid));
       card.replaceWith(wrap.firstElementChild);
       wireDateRangeButtons();
       const form = document.querySelector(`[data-rental-edit-form="${rid}"]`);
@@ -5073,6 +5455,7 @@ function wireEvents(activeTrip){
       form.querySelector("[data-er-end]").value = rental.rental_end || "";
       form.querySelector("[data-er-cancelby]").value = rental.cancel_by || "";
       form.querySelector("[data-er-confirmation]").value = rental.confirmation_code || "";
+      form.querySelector("[data-er-address]").value = rental.address || "";
       form.querySelector("[data-er-paidcash]").value = rental.paid_cash ?? "";
       form.querySelector("[data-er-paidpoints]").value = rental.paid_points ?? "";
       populatePointsProgramField("er", "hotel", rental.points_program || "");
@@ -5097,6 +5480,8 @@ function wireEvents(activeTrip){
           rental_end: form.querySelector("[data-er-end]").value || null,
           cancel_by: newCancelBy,
           confirmation_code: form.querySelector("[data-er-confirmation]").value.trim() || null,
+          address: form.querySelector("[data-er-address]").value.trim() || null,
+          paid_by: form.querySelector("[data-er-paidby]")?.value || null,
           paid_cash: pc === "" ? null : parseFloat(pc),
           paid_points: pp === "" ? null : parseFloat(pp),
           points_program: form.querySelector("[data-er-pointsprogram]").value.trim() || null,
@@ -5107,6 +5492,7 @@ function wireEvents(activeTrip){
         // A changed deadline should get a fresh reminder email.
         if (newCancelBy !== rental.cancel_by) patch.reminded_at = null;
         await updateRental(rid, patch);
+        await saveBookingPeople(activeTrip.id, "rental", rid, readBookingPeople(form, "er"));
         await refresh();
       });
     });
@@ -5128,7 +5514,7 @@ function wireEvents(activeTrip){
       const { flight } = findFlight(fid);
       const card = document.querySelector(`[data-card="${fid}"]`);
       const wrap = document.createElement("div");
-      wrap.innerHTML = renderEditForm(flight);
+      wrap.innerHTML = renderEditForm(flight, activeTrip);
       card.replaceWith(wrap.firstElementChild);
       wireDateRangeButtons();
       const form = document.querySelector(`[data-edit-form="${fid}"]`);
@@ -5216,8 +5602,10 @@ function wireEvents(activeTrip){
           flight_number: form.querySelector("[data-f-flightnumber]").value.trim() || null,
           confirmation_code: form.querySelector("[data-f-confirmation]").value.trim() || null,
           alert_below: ab === "" ? null : parseFloat(ab),
+          paid_by: form.querySelector("[data-f-paidby]")?.value || null,
           notes: form.querySelector("[data-f-notes]").value.trim(),
         });
+        await saveBookingPeople(activeTrip.id, "flight", fid, readBookingPeople(form, "f"));
         await refresh();
       });
       form.querySelector("[data-cancel-flight]").addEventListener("click", render);
@@ -5364,8 +5752,12 @@ function wireAddFlightForm(tripId){
       confirmationCode: holder.querySelector("[data-nf-confirmation]").value.trim() || null,
       alertBelow: ab === "" ? null : parseFloat(ab),
       status: holder.querySelector("[data-nf-status]").value,
+      paidBy: holder.querySelector("[data-nf-paidby]")?.value || null,
       notes
     });
+    if (created){
+      await saveBookingPeople(tripId, "flight", created.id, readBookingPeople(holder, "nf"));
+    }
     // Record the price you entered as the first check, so a flight you add to
     // watch starts its history at the moment you found it rather than at
     // whenever you next remember to log one. Cash preferred when both are
