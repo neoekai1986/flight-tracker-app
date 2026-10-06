@@ -266,6 +266,9 @@
      there's already a trip sidebar, so on a wide screen this is two left rails
      — the sidebar picks the trip, this rail filters within it. */
   .results-layout{display:grid;grid-template-columns:216px minmax(0,1fr);gap:20px;align-items:start}
+  /* No rail on the summary, so don't keep its column reserved — an empty
+     216px track squeezed the sheet into the remainder. */
+  .results-layout-solo{grid-template-columns:minmax(0,1fr)}
   .filter-rail{position:sticky;top:20px;background:var(--panel);border:1px solid var(--line);
       border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:2px}
   .filter-rail-head{display:flex;align-items:baseline;justify-content:space-between;
@@ -710,6 +713,28 @@
   .form-section:first-child{margin-top:0}
   .form-section::after{content:"";flex:1;height:1px;background:var(--line)}
   @media (max-width:520px){ .edit-grid{grid-template-columns:1fr} }
+  .summary-sheet{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+      padding:26px 28px;max-width:760px}
+  .summary-head{padding-bottom:16px;border-bottom:1px solid var(--line);margin-bottom:4px}
+  .summary-head h2{font-family:'Poppins',sans-serif;font-weight:700;font-size:22px}
+  .summary-head p{font-size:13px;color:var(--muted);margin-top:4px}
+  .summary-block{padding-top:20px}
+  .summary-block h3{font-family:'Poppins',sans-serif;font-weight:600;font-size:15px;
+      margin-bottom:10px;display:flex;align-items:center;gap:8px}
+  .summary-block h3 img{width:22px;height:22px}
+  .summary-item{padding:12px 14px;background:var(--panel2);border:1px solid var(--line);
+      border-radius:10px;margin-bottom:8px}
+  .summary-item-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;font-size:14.5px}
+  .summary-tag{font-size:11.5px;color:var(--muted);border:1px solid var(--line);
+      border-radius:20px;padding:1px 8px}
+  .summary-lines{font-size:13px;color:var(--muted);line-height:1.7}
+  .summary-lines b{color:var(--ink);font-weight:600}
+  .summary-money{width:100%;margin-top:4px}
+  .summary-warn{font-size:12.5px;color:var(--bad);margin-top:8px;line-height:1.6}
+  @media print{
+    .sidebar,.filter-rail,.panel-head,.share-block,.view-menu{display:none!important}
+    .summary-sheet{border:none;padding:0;max-width:none}
+  }
   .booking-people{display:flex;flex-direction:column;gap:6px;margin-top:6px}
   .bp-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,1.2fr) 110px;
       gap:8px;align-items:center}
@@ -920,6 +945,9 @@ function setTrackingMode(on){
 // Wishlist entry ids whose comment thread is expanded. Same lifetime and
 // reasoning as cardDetailOverrides — view state, never persisted.
 let openWishlistComments = new Set();
+
+// Which trip is showing its summary sheet instead of its lanes. View state.
+let summaryForTrip = null;
 
 // Filter rail state — trip.id -> { status, type, program }, each a Set. An
 // empty Set means "no filter on this facet", not "nothing matches", so a fresh
@@ -3053,6 +3081,155 @@ function renderFilterRail(trip){
     </aside>`;
 }
 
+// ---------------- Trip summary ----------------
+// The itinerary plus who owes what. Built entirely from what's already stored,
+// so it's a view rather than another place to keep things in step.
+
+// What one person owes, and what they laid out. A booking with no per-person
+// rows sits wholly on whoever paid it, which by default is you — so a trip
+// with nothing filled in still adds up.
+function tripMoney(trip){
+  const people = tripPeople(trip);
+  const ledger = new Map(people.map(p => [p.id, { name: p.name, owes: 0, paid: 0 }]));
+  const you = { name: "You", owes: 0, paid: 0 };
+  const entryFor = id => (id ? ledger.get(id) : you) || you;
+  const over = [];
+
+  const bookings = [
+    ...(trip.flights || []).filter(f => f.status !== "watching")
+      .map(f => ({ kind: "flight", row: f, total: (f.paid_cash || 0) * (f.passengers || 1) })),
+    ...(trip.rentals || []).filter(r => r.status !== "watching")
+      .map(r => ({ kind: "rental", row: r, total: r.paid_cash || 0 })),
+  ];
+
+  for (const b of bookings){
+    entryFor(b.row.paid_by).paid += b.total;
+    const shares = bookingPeopleFor(trip, b.kind, b.row.id);
+    const stated = shares.filter(x => x.cost != null);
+    for (const x of stated) entryFor(x.person_id).owes += Number(x.cost) || 0;
+    // Whatever nobody has claimed stays with the payer rather than vanishing,
+    // so the owed column always reconciles against what was actually spent.
+    const claimed = stated.reduce((n, x) => n + (Number(x.cost) || 0), 0);
+    const remainder = b.total - claimed;
+    if (remainder > 0.005) entryFor(b.row.paid_by).owes += remainder;
+    // Shares adding up to more than the booking cost is a typo, not a
+    // position worth representing — say so rather than quietly producing
+    // a ledger that can't reconcile.
+    else if (remainder < -0.005) over.push({ label: b.row.label, by: -remainder });
+  }
+
+  const rows = [you, ...ledger.values()].filter(e => e.owes || e.paid);
+  return { rows: rows.map(e => ({ ...e, net: e.paid - e.owes })), over,
+           total: bookings.reduce((n, b) => n + b.total, 0) };
+}
+
+function renderTripSummary(trip){
+  const fmt = n => fmtCash(n, "USD");
+  const money = tripMoney(trip);
+  const booked = (list) => (list || []).filter(x => x.status !== "watching");
+  const flights = booked(trip.flights).slice()
+    .sort((a,b) => (a.depart_date || "").localeCompare(b.depart_date || ""));
+  const rentals = booked(trip.rentals);
+  const stay = rentals.filter(r => r.kind !== "car");
+  const cars = rentals.filter(r => r.kind === "car");
+
+  const refsFor = (kind, row) => {
+    const rows = bookingPeopleFor(trip, kind, row.id).filter(x => x.reference);
+    if (!rows.length) return row.confirmation_code ? `Ref <b>${esc(row.confirmation_code)}</b>` : "";
+    return rows.map(x => `${esc(personName(trip, x.person_id))} <b>${esc(x.reference)}</b>`).join(" · ");
+  };
+  const whoFor = (kind, row) => {
+    const rows = bookingPeopleFor(trip, kind, row.id);
+    return rows.length ? rows.map(x => esc(personName(trip, x.person_id))).join(", ") : "";
+  };
+
+  const leg = (when, time, stops) =>
+    `${esc(fmtShortDate(when) || "?")}${time ? ` <b>${esc(fmtTime(time))}</b>` : ""}${
+      stops ? ` <span class="leg-stops">${esc(stops)}</span>` : ""}`;
+
+  return `
+    <div class="summary-sheet">
+      <div class="summary-head">
+        <h2>${esc(trip.title)}</h2>
+        <p>${trip.travel_start ? esc(fmtShortDate(trip.travel_start)) : "?"} → ${
+          trip.travel_end ? esc(fmtShortDate(trip.travel_end)) : "?"}${
+          tripPeople(trip).length ? ` · ${tripPeople(trip).map(p=>esc(p.name)).join(", ")}` : ""}</p>
+      </div>
+
+      <section class="summary-block">
+        <h3>${ICON_FLIGHT} Flights</h3>
+        ${flights.length ? flights.map(f => `
+          <div class="summary-item">
+            <div class="summary-item-head">
+              <b>${f.origin && f.destination
+                ? `${esc(f.origin)} ${f.leg === "roundtrip" ? "⇄" : "→"} ${esc(f.destination)}`
+                : esc(f.label)}</b>
+              ${f.airline ? `<span class="summary-tag">${esc(f.airline)}</span>` : ""}
+              ${f.flight_number ? `<span class="summary-tag">${esc(f.flight_number)}</span>` : ""}
+            </div>
+            <div class="summary-lines">
+              <div>Out ${leg(f.depart_date, f.depart_time, f.stops_out)}</div>
+              ${f.leg === "roundtrip" && f.return_date
+                ? `<div>Back ${leg(f.return_date, f.return_time, f.stops_back)}</div>` : ""}
+              ${whoFor("flight", f) ? `<div>Who: ${whoFor("flight", f)}</div>` : ""}
+              ${refsFor("flight", f) ? `<div>${refsFor("flight", f)}</div>` : ""}
+            </div>
+          </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
+      </section>
+
+      <section class="summary-block">
+        <h3>${ICON_HOTEL} Where you're staying</h3>
+        ${stay.length ? stay.map(r => `
+          <div class="summary-item">
+            <div class="summary-item-head"><b>${esc(r.label)}</b></div>
+            <div class="summary-lines">
+              <div>${esc(fmtShortDate(r.rental_start) || "?")} → ${esc(fmtShortDate(r.rental_end) || "?")}</div>
+              ${r.address ? `<div>${esc(r.address)}</div>` : ""}
+              ${whoFor("rental", r) ? `<div>Who: ${whoFor("rental", r)}</div>` : ""}
+              ${refsFor("rental", r) ? `<div>${refsFor("rental", r)}</div>` : ""}
+            </div>
+          </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
+      </section>
+
+      <section class="summary-block">
+        <h3>${ICON_CAR} Cars</h3>
+        ${cars.length ? cars.map(r => `
+          <div class="summary-item">
+            <div class="summary-item-head"><b>${esc(r.label)}</b></div>
+            <div class="summary-lines">
+              <div>${esc(fmtShortDate(r.rental_start) || "?")} → ${esc(fmtShortDate(r.rental_end) || "?")}</div>
+              ${r.address ? `<div>${esc(r.address)}</div>` : ""}
+              ${whoFor("rental", r) ? `<div>Who: ${whoFor("rental", r)}</div>` : ""}
+              ${refsFor("rental", r) ? `<div>${refsFor("rental", r)}</div>` : ""}
+            </div>
+          </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
+      </section>
+
+      <section class="summary-block">
+        <h3>Who owes what</h3>
+        ${money.rows.length ? `
+        <table class="hist summary-money">
+          <tr><th>Person</th><th>Their share</th><th>They paid</th><th>Net</th></tr>
+          ${money.rows.map(r => `<tr>
+            <td>${esc(r.name)}</td>
+            <td>${fmt(r.owes)}</td>
+            <td>${fmt(r.paid)}</td>
+            <td class="${r.net > 0.005 ? "down" : r.net < -0.005 ? "up" : "flat"}">${
+              Math.abs(r.net) < 0.005 ? "settled"
+                : r.net > 0 ? `owed ${fmt(r.net)}` : `owes ${fmt(-r.net)}`}</td>
+          </tr>`).join("")}
+          <tr><td><b>Trip total</b></td><td colspan="3"><b>${fmt(money.total)}</b></td></tr>
+        </table>
+        ${money.over.length ? `<p class="summary-warn">Shares add up to more than the booking cost on
+          ${money.over.map(o => `<b>${esc(o.label)}</b> (by ${fmt(o.by)})`).join(", ")} —
+          worth a look, the figures below can't reconcile while that's true.</p>` : ""}
+        <p class="field-hint">A booking with no per-person shares entered sits whole on whoever
+          paid it. Watching items aren't counted.</p>`
+        : `<p class="empty-hist">Nothing booked yet.</p>`}
+      </section>
+    </div>`;
+}
+
 function renderTripPanel(trip){
   const sel = filtersFor(trip.id);
   // The rail narrows the lists only. Totals stay computed from everything
@@ -3177,6 +3354,8 @@ function renderTripPanel(trip){
         <h2 data-title="${trip.id}">${esc(trip.title)}</h2>
         <button class="btn btn-ghost btn-sm" data-rename-trip="${trip.id}">Rename</button>
         <button class="btn btn-ghost btn-sm" data-edit-meta="${trip.id}">Trip details</button>
+        <button class="btn btn-ghost btn-sm" data-trip-summary="${trip.id}">${
+          summaryForTrip === trip.id ? "Back to planning" : "Summary"}</button>
         <button class="btn btn-sm" data-add-flight-toggle="${trip.id}">+ Add flight</button>
         <button class="btn btn-sm" data-add-rental-toggle="${trip.id}">+ Add rental</button>
         <details class="menu search-trip-menu">
@@ -3209,9 +3388,10 @@ function renderTripPanel(trip){
       <div data-add-flight-form="${trip.id}"></div>
       <div data-add-rental-form="${trip.id}"></div>
 
-      <div class="results-layout">
-        ${renderFilterRail(trip)}
+      <div class="results-layout${summaryForTrip === trip.id ? " results-layout-solo" : ""}">
+        ${summaryForTrip === trip.id ? "" : renderFilterRail(trip)}
         <div class="results-col">
+      ${summaryForTrip === trip.id ? renderTripSummary(trip) : `
       ${!facetAllows(sel.status, "booked") ? "" : `
       <div class="lane-stack">
         ${facetAllows(sel.type, "flight") ? `<div class="lane">
@@ -3241,7 +3421,7 @@ function renderTripPanel(trip){
 
       ${watchingHTML}
         </div>
-      </div>
+      </div>`}
     </div>`;
 }
 
@@ -5111,6 +5291,11 @@ function wireEvents(activeTrip){
       (activeTrip.flights || []).forEach(f => inScope(f.status) && openSafely(f.url, `farecheck_${f.id}`));
       (activeTrip.rentals || []).forEach(r => inScope(r.status) && openSafely(r.url, `farecheck_${r.id}`));
     });
+  });
+
+  document.querySelector(`[data-trip-summary="${activeTrip.id}"]`)?.addEventListener("click", () => {
+    summaryForTrip = summaryForTrip === activeTrip.id ? null : activeTrip.id;
+    render();
   });
 
   document.querySelector(`[data-edit-meta="${activeTrip.id}"]`).addEventListener("click", () => {
