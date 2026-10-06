@@ -105,6 +105,8 @@ alter table public.trip_collaborators enable row level security;
 alter table public.flights enable row level security;
 alter table public.price_logs enable row level security;
 alter table public.rentals enable row level security;
+alter table public.trip_people enable row level security;
+alter table public.booking_people enable row level security;
 alter table public.attachments enable row level security;
 alter table public.favorite_points_programs enable row level security;
 alter table public.wishlist_boards enable row level security;
@@ -115,11 +117,12 @@ alter table public.wishlist_votes enable row level security;
 alter table public.wishlist_comments enable row level security;
 
 -- Only logged-in users get any access at all; RLS scopes it further per-row.
-revoke all on public.trip_folders, public.trip_categories, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments, public.favorite_points_programs, public.wishlist_boards, public.wishlist_collaborators, public.wishlist_profiles, public.wishlist_entries, public.wishlist_votes, public.wishlist_comments from anon;
+revoke all on public.trip_folders, public.trip_categories, public.trips, public.trip_collaborators, public.flights, public.price_logs, public.rentals, public.attachments, public.trip_people, public.booking_people, public.favorite_points_programs, public.wishlist_boards, public.wishlist_collaborators, public.wishlist_profiles, public.wishlist_entries, public.wishlist_votes, public.wishlist_comments from anon;
 grant select, insert, update, delete on public.trip_folders, public.trip_categories, public.trips, public.flights, public.price_logs, public.rentals to authenticated;
 grant select, insert, delete on public.trip_collaborators to authenticated;
 grant select, insert, delete on public.favorite_points_programs to authenticated;
 grant select, insert, update, delete on public.attachments to authenticated;
+grant select, insert, update, delete on public.trip_people, public.booking_people to authenticated;
 grant select, insert, update, delete on public.wishlist_boards, public.wishlist_profiles, public.wishlist_entries to authenticated;
 grant select, insert, delete on public.wishlist_collaborators to authenticated;
 grant select, insert, delete on public.wishlist_votes to authenticated;
@@ -269,6 +272,25 @@ create policy price_logs_update on public.price_logs
 
 create policy price_logs_delete on public.price_logs
   for delete using ( public.can_access_flight(flight_id) );
+
+-- trip_people / booking_people — same access as anything else under a trip.
+create policy trip_people_select on public.trip_people
+  for select using ( public.can_access_trip(trip_id) );
+create policy trip_people_insert on public.trip_people
+  for insert with check ( public.can_access_trip(trip_id) );
+create policy trip_people_update on public.trip_people
+  for update using ( public.can_access_trip(trip_id) ) with check ( public.can_access_trip(trip_id) );
+create policy trip_people_delete on public.trip_people
+  for delete using ( public.can_access_trip(trip_id) );
+
+create policy booking_people_select on public.booking_people
+  for select using ( public.can_access_trip(trip_id) );
+create policy booking_people_insert on public.booking_people
+  for insert with check ( public.can_access_trip(trip_id) );
+create policy booking_people_update on public.booking_people
+  for update using ( public.can_access_trip(trip_id) ) with check ( public.can_access_trip(trip_id) );
+create policy booking_people_delete on public.booking_people
+  for delete using ( public.can_access_trip(trip_id) );
 
 -- attachments
 create policy attachments_select on public.attachments

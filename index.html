@@ -710,6 +710,9 @@
   .form-section:first-child{margin-top:0}
   .form-section::after{content:"";flex:1;height:1px;background:var(--line)}
   @media (max-width:520px){ .edit-grid{grid-template-columns:1fr} }
+  .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  .person-row{display:flex;align-items:center;gap:8px}
+  .person-row input{flex:0 1 240px}
   .split-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
       font-family:Inter,system-ui,sans-serif;margin-bottom:5px}
   .split-grid{display:grid;grid-template-columns:1.6fr 0.7fr 0.9fr;gap:6px}
@@ -1737,7 +1740,8 @@ function renderAuth(){
 async function loadTrips(){
   const { data, error } = await supabase
     .from("trips")
-    .select("*, flights(*, price_logs(*), attachments(*)), rentals(*, attachments(*)), trip_collaborators(*)")
+    .select("*, flights(*, price_logs(*), attachments(*)), rentals(*, attachments(*)), " +
+            "trip_collaborators(*), trip_people(*), booking_people(*)")
     .order("created_at", { ascending: true });
   if (error) { console.error(error); return []; }
   for (const t of data){
@@ -1748,6 +1752,7 @@ async function loadTrips(){
   // select("*") returns exactly the columns that exist, so the first loaded
   // flight says whether the airline migration has run. Keeps the field out of
   // the form and the writes until it has.
+  for (const t of data) (t.trip_people || []).sort((a,b) => a.position - b.position);
   const sample = data.flatMap(t => t.flights || [])[0];
   if (sample){
     flightAirlineAvailable = "airline" in sample;
@@ -2039,6 +2044,37 @@ async function addCollaborator(tripId, email){
 async function removeCollaborator(id){
   const { error } = await supabase.from("trip_collaborators").delete().eq("id", id);
   if (error) alert(error.message);
+}
+
+// ---------------- Trip people ----------------
+// These replace the free-text attendees list. A person is a row with a stable
+// id, so a cost recorded against them survives being renamed.
+
+async function createTripPerson(tripId, name){
+  const siblings = (trips.find(t => t.id === tripId)?.trip_people || []).map(p => p.position);
+  const position = siblings.length ? Math.max(...siblings) + 1000 : 0;
+  const { data, error } = await supabase.from("trip_people")
+    .insert({ trip_id: tripId, name, position }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function renameTripPerson(id, name){
+  const { error } = await supabase.from("trip_people").update({ name }).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deleteTripPerson(id){
+  // booking_people rows cascade, so removing someone takes their shares with
+  // them rather than leaving orphans pointing at nobody.
+  const { error } = await supabase.from("trip_people").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+function tripPeople(trip){ return (trip?.trip_people || []); }
+function personName(trip, id){
+  if (!id) return "You";
+  return tripPeople(trip).find(p => p.id === id)?.name || "Someone";
 }
 
 async function createFlight(tripId, fields){
@@ -3032,8 +3068,9 @@ function renderTripPanel(trip){
     metaParts.push(`<div><b>Dates:</b> ${esc(trip.travel_start || "?")} → ${esc(trip.travel_end || "?")}</div>`);
   }
   if (trip.notes) metaParts.push(`<div><b>Notes:</b> ${esc(trip.notes)}</div>`);
-  if ((trip.attendees || []).length){
-    metaParts.push(`<div><b>Attendees:</b> <span class="tags">${trip.attendees.map(a=>`<span class="tag">${esc(a)}</span>`).join("")}</span></div>`);
+  if (tripPeople(trip).length){
+    metaParts.push(`<div><b>Who's going:</b> <span class="tags">${
+      tripPeople(trip).map(p=>`<span class="tag">${esc(p.name)}</span>`).join("")}</span></div>`);
   }
 
   return `
@@ -3452,9 +3489,21 @@ function renderMetaForm(trip){
         <option value="__new__">+ New category…</option>
       </select>
     </label>
-    <label class="field span2">Attendees (comma-separated)
-      <input type="text" data-m-attendees value="${esc((trip.attendees||[]).join(", "))}">
-    </label>
+    <div class="field span2">Who's on this trip
+      <span class="field-hint">Everyone here can be put on a booking, with their own reference
+        number and share of the cost. You're assumed to be paying unless you say otherwise.</span>
+      <div class="people-list" data-m-people>
+        ${tripPeople(trip).map(p => `
+          <div class="person-row" data-person-row="${p.id}">
+            <input type="text" value="${esc(p.name)}" data-person-name="${p.id}" aria-label="Name">
+            <button type="button" class="btn-link" data-person-del="${p.id}" title="Remove from trip">×</button>
+          </div>`).join("")}
+      </div>
+      <div class="row" style="margin-top:8px">
+        <input type="text" data-person-new placeholder="Add someone…" style="flex:0 1 220px">
+        <button type="button" class="btn btn-ghost btn-sm" data-person-add>Add</button>
+      </div>
+    </div>
     <label class="field span2">Notes
       <textarea data-m-notes>${esc(trip.notes || "")}</textarea>
     </label>
@@ -4970,10 +5019,10 @@ function wireEvents(activeTrip){
     saveBtn.addEventListener("click", async () => {
       const start = holder.querySelector(`[data-m-start]`).value || null;
       const end = holder.querySelector(`[data-m-end]`).value || null;
-      const attendeesRaw = holder.querySelector(`[data-m-attendees]`).value;
-      const attendees = attendeesRaw.split(",").map(s=>s.trim()).filter(Boolean);
       const notes = holder.querySelector(`[data-m-notes]`).value.trim();
-      await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, attendees, notes });
+      // People are rows of their own now, saved as you edit them rather than
+      // with the rest of the form — attendees is left untouched on the trip.
+      await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, notes });
       let folderSel = holder.querySelector(`[data-m-folder]`).value;
       if (folderSel === "__new__"){
         const title = prompt("Year name (e.g. 2026):");
@@ -4999,6 +5048,44 @@ function wireEvents(activeTrip){
       await refresh();
     });
     document.querySelector(`[data-meta-cancel="${activeTrip.id}"]`)?.addEventListener("click", render);
+
+    // People save as you edit them, not with the rest of the form — a person
+    // has to exist before anything can be recorded against them, and the form
+    // stays open afterwards so you can add the whole group in one go.
+    const addPerson = async () => {
+      const input = holder.querySelector("[data-person-new]");
+      const name = input.value.trim();
+      if (!name) { input.focus(); return; }
+      await createTripPerson(activeTrip.id, name);
+      await refresh();
+      document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      document.querySelector("[data-person-new]")?.focus();
+    };
+    holder.querySelector("[data-person-add]")?.addEventListener("click", addPerson);
+    holder.querySelector("[data-person-new]")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter"){ e.preventDefault(); addPerson(); }
+    });
+    holder.querySelectorAll("[data-person-name]").forEach(input => {
+      // on blur rather than per keystroke: one write when you stop typing.
+      input.addEventListener("blur", async () => {
+        const name = input.value.trim();
+        const person = tripPeople(activeTrip).find(p => p.id === input.dataset.personName);
+        if (!person || !name || name === person.name){ input.value = person?.name || name; return; }
+        await renameTripPerson(person.id, name);
+        await refresh();
+        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      });
+    });
+    holder.querySelectorAll("[data-person-del]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const person = tripPeople(activeTrip).find(p => p.id === btn.dataset.personDel);
+        if (!person) return;
+        if (!confirm(`Remove ${person.name} from this trip?\n\nAnything recorded against them on a booking goes too.`)) return;
+        await deleteTripPerson(person.id);
+        await refresh();
+        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      });
+    });
   });
 
   const inviteBtn = document.querySelector(`[data-invite-save="${activeTrip.id}"]`);
