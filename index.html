@@ -4328,6 +4328,17 @@ document.addEventListener("click", (e) => {
   render();
 });
 
+// Enter in the price box logs it, so a run of checks doesn't need a trip to
+// the mouse between each one. Delegated, and it clicks the button rather than
+// repeating its work, so the two can't drift apart.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  const input = e.target.closest("[data-log-input]");
+  if (!input) return;
+  e.preventDefault();
+  document.querySelector(`[data-save-log="${input.dataset.logInput}"]`)?.click();
+});
+
 // The price-tracking detail is always in the DOM and just hidden, so opening a
 // row is a `hidden` flip rather than a render() — same reasoning as the chart
 // ranges below, and it means an edit form open elsewhere survives the click.
@@ -5744,7 +5755,9 @@ function wireEvents(activeTrip){
       const unit = document.querySelector(`[data-log-unit="${fid}"]`);
       const val = parseFloat(input.value);
       if (isNaN(val)) return;
-      await addPriceLog(fid, new Date().toISOString().slice(0,10), val, unit?.value === "points");
+      // todayISO(), not toISOString(): the latter converts to UTC, so a check
+      // logged after about 7pm Eastern was being dated tomorrow.
+      await addPriceLog(fid, todayISO(), val, unit?.value === "points");
       await refresh();
     });
   });
@@ -6385,7 +6398,7 @@ async function processBookmarkletHash(){
   // history because a URL said so is a state change with no consent behind it,
   // so confirm what's about to be recorded and against which flight.
   if (!confirm(`Log ${fmtCash(price)} as a price check for "${found.flight.label}"?`)) return;
-  await addPriceLog(flightId, new Date().toISOString().slice(0,10), price);
+  await addPriceLog(flightId, todayISO(), price);
   activeTripId = found.trip.id;
   await refresh();
   alert(`Logged ${fmtCash(price)} for "${found.flight.label}".`);
