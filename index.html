@@ -743,6 +743,12 @@
   .bp-who span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .bp-row input[type=text],.bp-row input[type=number]{width:100%;max-width:none;margin-top:0}
   @media (max-width:560px){ .bp-row{grid-template-columns:1fr} }
+  /* Nested inside a year, so indented to sit with that year's trips rather
+     than reading as another year. */
+  .tab-past{margin-left:14px}
+  .tab-past-head{display:flex;align-items:center;gap:6px;cursor:pointer;
+      padding:5px 10px;border-radius:8px;font-size:12.5px;color:var(--muted)}
+  .tab-past-head:hover{background:var(--panel2);color:var(--ink)}
   .tab-stash .tab-folder-head{color:var(--muted)}
   .tab-stash-count{margin-left:auto;font-size:11px;color:var(--muted);
       font-variant-numeric:tabular-nums}
@@ -4071,23 +4077,24 @@ function renderCalendarView(){
 }
 
 function renderTabs(){
-  const byFolder = new Map();
-  const ungrouped = [];
-  const past = [];
+  // Past trips stay inside the year they belong to — a 2026 trip is part of
+  // 2026 whether or not it's been and gone. Each year gets its own past caret
+  // rather than one list at the bottom that mixes every year together.
+  const byFolder = new Map();   // folder id -> { upcoming, past }
+  const ungrouped = { upcoming: [], past: [] };
   const alternatives = [];
   for (const t of trips){
     // Alternatives first: one you didn't take that's also in the past belongs
     // under Alternatives, not Past, or it reads as something that happened.
     if (t.is_alternative){ alternatives.push(t); continue; }
-    if (isPastTrip(t)){ past.push(t); continue; }
     // Fall back to ungrouped when the folder isn't known rather than dropping
     // the trip. folders and trips load in parallel, so a transient failure on
     // the folders request alone used to make every filed trip disappear from
     // the sidebar — which looks exactly like data loss and isn't.
-    if (t.folder_id && folders.some(f => f.id === t.folder_id)){
-      if (!byFolder.has(t.folder_id)) byFolder.set(t.folder_id, []);
-      byFolder.get(t.folder_id).push(t);
-    } else ungrouped.push(t);
+    const known = t.folder_id && folders.some(f => f.id === t.folder_id);
+    if (known && !byFolder.has(t.folder_id)) byFolder.set(t.folder_id, { upcoming: [], past: [] });
+    const bucket = known ? byFolder.get(t.folder_id) : ungrouped;
+    bucket[isPastTrip(t) ? "past" : "upcoming"].push(t);
   }
   const tabLabel = t => {
     const dateStr = t.travel_start || t.travel_end;
@@ -4098,9 +4105,27 @@ function renderTabs(){
   const tabBtn = t => `<button class="tab ${t.id===activeTripId?'active':''}"
       draggable="true" data-drag-tab="${t.id}" data-tab="${t.id}">${tabLabel(t)}</button>`;
 
+  // The past caret for one year (or for the ungrouped list). Newest first —
+  // looking back, the most recent trip is the one you usually want.
+  const pastCaret = (key, list) => {
+    if (!list.length) return "";
+    const collapsed = !expandedTripGroups.has(key);
+    const sorted = list.slice().sort((a,b) =>
+      (b.travel_start || b.travel_end || "").localeCompare(a.travel_start || a.travel_end || ""));
+    return `<div class="tab-past">
+      <div class="tab-past-head" data-trip-group="${key}" title="Click to expand/collapse">
+        <span class="tab-folder-caret${collapsed ? " collapsed" : ""}">▾</span>
+        <span>Past</span>
+        <span class="tab-stash-count">${list.length}</span>
+      </div>
+      ${collapsed ? "" : `<span class="tab-folder-tabs">${sorted.map(tabBtn).join("")}</span>`}
+    </div>`;
+  };
+
   const sortedFolders = [...folders].sort((a,b) => a.position - b.position);
   const folderHTML = sortedFolders.map(f => {
-    const tripsInFolder = (byFolder.get(f.id) || []).sort((a,b) => a.position - b.position);
+    const bucket = byFolder.get(f.id) || { upcoming: [], past: [] };
+    const upcoming = bucket.upcoming.sort((a,b) => a.position - b.position);
     const collapsed = collapsedFolders.has(f.id);
     return `<div class="tab-folder" draggable="true" data-drag-folder="${f.id}" data-folder-drop="${f.id}">
       <div class="tab-folder-head" data-folder-toggle="${f.id}" title="Drag to reorder, click to expand/collapse">
@@ -4108,11 +4133,12 @@ function renderTabs(){
         <span class="tab-folder-label" data-folder-rename="${f.id}" title="Click to rename">${esc(f.title)}</span>
         <span class="tab-folder-del" data-folder-del="${f.id}" title="Delete year">×</span>
       </div>
-      ${collapsed ? "" : `<span class="tab-folder-tabs">${tripsInFolder.map(tabBtn).join("")}</span>`}
+      ${collapsed ? "" : `<span class="tab-folder-tabs">${upcoming.map(tabBtn).join("")}</span>
+        ${pastCaret(`past:${f.id}`, bucket.past)}`}
     </div>`;
   }).join("");
 
-  const sortedUngrouped = ungrouped.sort((a,b) => a.position - b.position);
+  const sortedUngrouped = ungrouped.upcoming.sort((a,b) => a.position - b.position);
 
   // Two stashes at the bottom, each behind its own caret and collapsed by
   // default — the point of both is to be out of the way until wanted.
@@ -4135,7 +4161,7 @@ function renderTabs(){
     <div class="tabs">
       ${folderHTML}
       <div class="tab-ungrouped" data-folder-drop="">${sortedUngrouped.map(tabBtn).join("")}</div>
-      ${stash("past", "Past trips", past)}
+      ${pastCaret("past:ungrouped", ungrouped.past)}
       ${stash("alternatives", "Alternatives", alternatives, "tab-stash-alt")}
       <button class="tab tab-new" id="newTripTab" title="Add new trip">+ Add New Trip</button>
       <button class="tab tab-new-folder" id="newFolderTab" title="Add new year">+ Add New Year</button>
