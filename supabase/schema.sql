@@ -33,6 +33,9 @@ create table public.trips (
   travel_start  date,
   travel_end    date,
   notes         text,
+  -- A version of this trip you considered and didn't take. Still readable,
+  -- but excluded from every rollup — it didn't happen.
+  is_alternative boolean not null default false,
   attendees     text[] not null default '{}',
   position      double precision not null default 0,
   created_at    timestamptz not null default now(),

@@ -743,6 +743,15 @@
   .bp-who span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .bp-row input[type=text],.bp-row input[type=number]{width:100%;max-width:none;margin-top:0}
   @media (max-width:560px){ .bp-row{grid-template-columns:1fr} }
+  .tab-stash .tab-folder-head{color:var(--muted)}
+  .tab-stash-count{margin-left:auto;font-size:11px;color:var(--muted);
+      font-variant-numeric:tabular-nums}
+  .tab-stash-alt .tab-folder-label{font-style:italic}
+  .alt-badge{font-size:11px;color:var(--muted);border:1px dashed var(--line);
+      border-radius:20px;padding:2px 10px;white-space:nowrap}
+  .alt-toggle{display:block}
+  .alt-toggle input{width:auto;margin:0 8px 0 0;accent-color:var(--amber);vertical-align:middle}
+  .alt-toggle span{vertical-align:middle}
   .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
   .person-row{display:flex;align-items:center;gap:8px}
   .person-row input{flex:0 1 240px}
@@ -892,6 +901,11 @@ applySkin(currentSkin);
 
 const COLLAPSED_CAL_YEARS_KEY = "flight-tracker-collapsed-cal-years";
 let collapsedCalYears = new Set(JSON.parse(localStorage.getItem(COLLAPSED_CAL_YEARS_KEY) || "[]"));
+
+// Which of the two bottom stashes are open. Collapsed is the useful default
+// for both, so this stores what's been opened rather than what's been shut.
+const EXPANDED_GROUPS_KEY = "flight-tracker-expanded-trip-groups";
+let expandedTripGroups = new Set(JSON.parse(localStorage.getItem(EXPANDED_GROUPS_KEY) || "[]"));
 
 const COLLAPSED_FOLDERS_KEY = "flight-tracker-collapsed-folders";
 let collapsedFolders = new Set(JSON.parse(localStorage.getItem(COLLAPSED_FOLDERS_KEY) || "[]"));
@@ -1789,6 +1803,7 @@ async function loadTrips(){
   // flight says whether the airline migration has run. Keeps the field out of
   // the form and the writes until it has.
   for (const t of data) (t.trip_people || []).sort((a,b) => a.position - b.position);
+  if (data[0]) tripAlternativeAvailable = "is_alternative" in data[0];
   const sample = data.flatMap(t => t.flights || [])[0];
   if (sample){
     flightAirlineAvailable = "airline" in sample;
@@ -1854,6 +1869,11 @@ let wishlistNotesAvailable = true;
 
 // Likewise for flights.airline.
 let flightAirlineAvailable = true;
+
+// ...and trips.is_alternative. Without this, saving Trip details at all would
+// fail on an un-migrated database, since PostgREST rejects the whole write for
+// one unknown column.
+let tripAlternativeAvailable = true;
 
 // ...and for the per-leg stops columns.
 let flightStopsAvailable = true;
@@ -3352,6 +3372,7 @@ function renderTripPanel(trip){
     <div class="panel" data-panel="${trip.id}">
       <div class="panel-head">
         <h2 data-title="${trip.id}">${esc(trip.title)}</h2>
+        ${trip.is_alternative ? `<span class="alt-badge" title="Not counted in any totals">Alternative</span>` : ""}
         <button class="btn btn-ghost btn-sm" data-rename-trip="${trip.id}">Rename</button>
         <button class="btn btn-ghost btn-sm" data-edit-meta="${trip.id}">Trip details</button>
         <button class="btn btn-ghost btn-sm" data-trip-summary="${trip.id}">${
@@ -3772,6 +3793,12 @@ function renderMetaForm(trip){
         <option value="__new__">+ New category…</option>
       </select>
     </label>
+    ${!tripAlternativeAvailable ? "" : `<label class="field span2 alt-toggle">
+      <input type="checkbox" data-m-alternative ${trip.is_alternative ? "checked" : ""}>
+      <span>This is an alternative — a version we considered and didn't take</span>
+      <span class="field-hint">It stays here to look back at, moves into the Alternatives
+        list, and stops counting toward any of your totals.</span>
+    </label>`}
     <div class="field span2">Who's on this trip
       <span class="field-hint">Everyone here can be put on a booking, with their own reference
         number and share of the cost. You're assumed to be paying unless you say otherwise.</span>
@@ -3806,8 +3833,21 @@ function tripDayCount(trip){
   return days > 0 ? days : 0;
 }
 
+// Is this trip in the past? Judged on when it ends, so a trip you're on
+// today is still current.
+function isPastTrip(t){
+  const end = t.travel_end || t.travel_start;
+  if (!end) return false;           // undated trips are plans, not history
+  return end < todayISO();
+}
+
+// Everything that rolls up — the stats bar, the cancel deadlines, the
+// calendar — goes through here, so excluding alternatives in one place
+// keeps them out of all three. They didn't happen; counting them would
+// inflate every total with a trip you didn't take.
 function scopedTrips(){
   return trips.filter(t => {
+    if (t.is_alternative) return false;
     if (statsFilter === "all") return true;
     if (statsFilter === "ungrouped") return !t.folder_id;
     return t.folder_id === statsFilter;
@@ -4033,8 +4073,18 @@ function renderCalendarView(){
 function renderTabs(){
   const byFolder = new Map();
   const ungrouped = [];
+  const past = [];
+  const alternatives = [];
   for (const t of trips){
-    if (t.folder_id){
+    // Alternatives first: one you didn't take that's also in the past belongs
+    // under Alternatives, not Past, or it reads as something that happened.
+    if (t.is_alternative){ alternatives.push(t); continue; }
+    if (isPastTrip(t)){ past.push(t); continue; }
+    // Fall back to ungrouped when the folder isn't known rather than dropping
+    // the trip. folders and trips load in parallel, so a transient failure on
+    // the folders request alone used to make every filed trip disappear from
+    // the sidebar — which looks exactly like data loss and isn't.
+    if (t.folder_id && folders.some(f => f.id === t.folder_id)){
       if (!byFolder.has(t.folder_id)) byFolder.set(t.folder_id, []);
       byFolder.get(t.folder_id).push(t);
     } else ungrouped.push(t);
@@ -4064,10 +4114,29 @@ function renderTabs(){
 
   const sortedUngrouped = ungrouped.sort((a,b) => a.position - b.position);
 
+  // Two stashes at the bottom, each behind its own caret and collapsed by
+  // default — the point of both is to be out of the way until wanted.
+  const stash = (key, label, list, extraClass) => {
+    if (!list.length) return "";
+    const collapsed = !expandedTripGroups.has(key);
+    const sorted = list.slice().sort((a,b) =>
+      (b.travel_start || b.travel_end || "").localeCompare(a.travel_start || a.travel_end || ""));
+    return `<div class="tab-folder tab-stash${extraClass ? " " + extraClass : ""}">
+      <div class="tab-folder-head" data-trip-group="${key}" title="Click to expand/collapse">
+        <span class="tab-folder-caret${collapsed ? " collapsed" : ""}">▾</span>
+        <span class="tab-folder-label">${label}</span>
+        <span class="tab-stash-count">${list.length}</span>
+      </div>
+      ${collapsed ? "" : `<span class="tab-folder-tabs">${sorted.map(tabBtn).join("")}</span>`}
+    </div>`;
+  };
+
   return `
     <div class="tabs">
       ${folderHTML}
       <div class="tab-ungrouped" data-folder-drop="">${sortedUngrouped.map(tabBtn).join("")}</div>
+      ${stash("past", "Past trips", past)}
+      ${stash("alternatives", "Alternatives", alternatives, "tab-stash-alt")}
       <button class="tab tab-new" id="newTripTab" title="Add new trip">+ Add New Trip</button>
       <button class="tab tab-new-folder" id="newFolderTab" title="Add new year">+ Add New Year</button>
     </div>`;
@@ -5203,6 +5272,16 @@ function wireEvents(activeTrip){
     });
   });
 
+  document.querySelectorAll("[data-trip-group]").forEach(head => {
+    head.addEventListener("click", () => {
+      const key = head.dataset.tripGroup;
+      if (expandedTripGroups.has(key)) expandedTripGroups.delete(key);
+      else expandedTripGroups.add(key);
+      localStorage.setItem(EXPANDED_GROUPS_KEY, JSON.stringify([...expandedTripGroups]));
+      render();
+    });
+  });
+
   document.querySelectorAll("[data-folder-rename]").forEach(el => {
     el.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -5310,7 +5389,9 @@ function wireEvents(activeTrip){
       const notes = holder.querySelector(`[data-m-notes]`).value.trim();
       // People are rows of their own now, saved as you edit them rather than
       // with the rest of the form — attendees is left untouched on the trip.
-      await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, notes });
+      await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, notes,
+        ...(tripAlternativeAvailable
+          ? { is_alternative: !!holder.querySelector("[data-m-alternative]")?.checked } : {}) });
       let folderSel = holder.querySelector(`[data-m-folder]`).value;
       if (folderSel === "__new__"){
         const title = prompt("Year name (e.g. 2026):");
