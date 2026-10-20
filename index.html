@@ -442,6 +442,12 @@
   .meta-line b{color:var(--ink);font-weight:600}
   /* Stops ride with their leg, dimmer than the time they qualify. */
   .leg-stops{color:var(--muted);font-weight:400}
+  /* Where the latest check sits against the best seen. Neutral for a single
+     check — there's nothing to compare it with yet. */
+  .price-standing{font-size:11px;border:1px solid var(--line);border-radius:20px;
+      padding:2px 9px;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .price-standing.at-low{color:var(--good);border-color:var(--good)}
+  .price-standing.above-low{color:var(--bad);border-color:var(--bad)}
   .notes{font-size:12.5px;color:var(--muted);font-style:italic;margin-bottom:10px}
   .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
 
@@ -2569,6 +2575,42 @@ function checkPriceUrl(f){
 // it picks the unit the flight was bought in when that has enough checks to
 // draw, else whichever unit has been logged more. Shared by renderCard and the
 // range-preset handler so the two can't drift apart.
+// Where the latest check sits against the best you've seen. The most recent
+// check picks the unit — the same rule the log-price box uses to default its
+// own — and the comparison stays inside that unit, since a cash price and a
+// points price have no business being compared.
+function priceStanding(f){
+  const entries = f.price_logs || [];
+  if (!entries.length) return null;
+  // created_at, not date: `date` is day-granular, so several checks on one day
+  // tie and "latest" would be whichever the sort happened to leave last.
+  const latest = entries.reduce(
+    (best, e) => (!best || (e.created_at || "") > (best.created_at || "")) ? e : best, null);
+  const sameUnit = entries.filter(e => !!e.is_points === !!latest.is_points);
+  const low = sameUnit.reduce((m, e) => (Number(e.price) < Number(m.price) ? e : m), sameUnit[0]);
+  const isPoints = !!latest.is_points;
+  const fmt = v => isPoints ? fmtPoints(v) : fmtCash(v, f.currency || "USD");
+  const diff = Number(latest.price) - Number(low.price);
+  return { latest, low, isPoints, fmt, diff, checks: sameUnit.length };
+}
+
+// The badge on the card header. One check has nothing to compare against, so
+// it just says what the price is rather than implying a trend.
+function priceStandingBadge(f){
+  const st = priceStanding(f);
+  if (!st) return "";
+  if (st.checks === 1){
+    return `<span class="price-standing" title="Only one check logged so far">${st.fmt(st.latest.price)}</span>`;
+  }
+  if (st.diff <= 0.005){
+    return `<span class="price-standing at-low"
+      title="Latest check is the lowest of ${st.checks}">▼ lowest yet · ${st.fmt(st.latest.price)}</span>`;
+  }
+  return `<span class="price-standing above-low"
+    title="Lowest of ${st.checks} checks was ${esc(st.fmt(st.low.price))} on ${esc(fmtShortDate(st.low.date))}">
+    ${st.fmt(st.diff)} above low · ${st.fmt(st.latest.price)}</span>`;
+}
+
 function flightChartSeries(f){
   const entries = f.price_logs || [];
   const paidInPoints = f.paid_points != null && f.paid_cash == null;
@@ -2784,6 +2826,7 @@ function renderCard(trip, f){
           <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
           <h3>${esc(f.label)}</h3>
           ${f.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
+          ${priceStandingBadge(f)}
         </div>
         ${metaBits.length ? `<p class="meta-line">${metaBits.join(" &middot; ")}</p>` : ""}
         ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
