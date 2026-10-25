@@ -131,8 +131,30 @@ check("Eugene is unchanged", fixedOwed["Eugene"], 212.80);
 check("Chrstine is unchanged", fixedOwed["Chrstine"], 212.80);
 check("E-Kai is unchanged", fixedOwed["E-Kai"], 212.80);
 check("and now the shares reconcile exactly", fixed.over, []);
+check("but a bare zero doesn't say Bean flew on a pass",
+  fixed.companions.has("p-bean"), false);
 check("three paying passengers, split three ways",
   Math.round(fixed.rows.reduce((n, r) => n + r.owes, 0) * 100), 63840);
+
+// ---- the same trip with the companion pass recorded as such -------------
+//
+// Setting the share to zero gets the arithmetic right but still reads as a
+// share someone forgot to fill in. Marking both legs as a companion seat
+// says why, and the summary shows "companion pass" instead of $0.00.
+
+for (const b of trip.booking_people){
+  if (b.person_id === "p-bean"){ b.is_companion = true; b.cost = null; }
+}
+
+const marked = api.tripMoney(trip);
+const markedOwed = Object.fromEntries(marked.rows.map(r => [r.name, r.owes]));
+
+check("the figures are unchanged by saying why", markedOwed,
+  { "Bean": 0, "Chrstine": 212.80, "E-Kai": 212.80, "Eugene": 212.80 });
+check("the trip still costs what it costs", marked.total, 638.40);
+check("Bean is now named as a companion", marked.companions.has("p-bean"), true);
+check("nobody else is", [...marked.companions], ["p-bean"]);
+check("and it still reconciles", marked.over, []);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

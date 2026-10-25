@@ -1851,6 +1851,8 @@ async function loadTrips(){
     flightAirlineAvailable = "airline" in sample;
     flightStopsAvailable = "stops_out" in sample;
   }
+  const bpSample = data.flatMap(t => t.booking_people || [])[0];
+  if (bpSample) companionPassAvailable = "is_companion" in bpSample;
   return data;
 }
 
@@ -1971,6 +1973,8 @@ let tripAlternativeAvailable = true;
 
 // ...and for the per-leg stops columns.
 let flightStopsAvailable = true;
+// booking_people.is_companion — see the note by flightAirlineAvailable.
+let companionPassAvailable = true;
 
 async function loadWishlistBoards(){
   const withReactions =
@@ -2260,11 +2264,23 @@ async function saveBookingPeople(tripId, kind, id, rows){
   const { error: delErr } = await supabase.from("booking_people").delete().eq(col, id);
   if (delErr) { alert(delErr.message); return; }
   if (!rows.length) return;
-  const { error } = await supabase.from("booking_people").insert(
-    rows.map(r => ({ trip_id: tripId, person_id: r.personId || null,
-                     group_id: r.groupId || null, [col]: id,
-                     reference: r.reference || null,
-                     cost: r.cost ?? null, cost_percent: r.costPercent ?? null })));
+  const build = () => rows.map(r => ({
+    trip_id: tripId, person_id: r.personId || null,
+    group_id: r.groupId || null, [col]: id,
+    reference: r.reference || null,
+    cost: r.cost ?? null, cost_percent: r.costPercent ?? null,
+    ...(companionPassAvailable ? { is_companion: !!r.isCompanion } : {}),
+  }));
+  let { error } = await supabase.from("booking_people").insert(build());
+  // PGRST204 is "no such column" — the companion-pass migration hasn't run.
+  // PostgREST rejects the whole write for one unknown field, so without this
+  // an account that has never recorded a share would fail to record its
+  // first one. Detection from loaded rows covers everyone else; there is
+  // nothing to inspect when there are no rows yet.
+  if (error && error.code === "PGRST204"){
+    companionPassAvailable = false;
+    ({ error } = await supabase.from("booking_people").insert(build()));
+  }
   if (error) alert(error.message);
 }
 
@@ -2311,6 +2327,7 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           const row = byKey.get(sub.key);
           // Whichever column was filled in decides which unit shows.
           const isPct = row ? (row.cost == null && row.cost_percent != null) : false;
+          const companion = !!row?.is_companion;
           const val = row ? (isPct ? row.cost_percent : row.cost) : "";
           // A seat is priced per person, so a flight share starts at one
           // ticket rather than blank. Housing has no such natural unit.
@@ -2326,10 +2343,12 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
               <input type="number" step="0.01" data-${prefix}-bp-val="${sub.key}"
                 data-ticket="${kind === "flight" ? ticket : ""}"
                 placeholder="${kind === "flight" && ticket ? fmtCash(ticket, bookingRow.currency) : "share"}"
-                value="${val ?? ""}">
+                value="${companion ? "" : (val ?? "")}" ${companion ? "disabled" : ""}>
               <select data-${prefix}-bp-unit="${sub.key}" aria-label="Share unit">
-                <option value="amount" ${isPct ? "" : "selected"}>$</option>
+                <option value="amount" ${isPct || companion ? "" : "selected"}>$</option>
                 <option value="percent" ${isPct ? "selected" : ""}>%</option>
+                ${kind === "flight" && companionPassAvailable
+                  ? `<option value="companion" ${companion ? "selected" : ""}>pass</option>` : ""}
               </select>
             </span>
           </div>`;
@@ -2338,7 +2357,10 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
       <span class="field-hint">Tick who it covers.${kind === "flight"
         ? " A flight share starts at one ticket; change it for anyone who paid a different fare."
         : " A share can be a flat amount or a percentage of the booking."}
-        A share left blank takes an equal cut of whatever the others haven't claimed.</span>
+        A share left blank takes an equal cut of whatever the others haven't claimed.${
+        kind === "flight" && companionPassAvailable
+          ? ` Set the unit to <b>pass</b> for a companion seat — it costs its passenger
+             nothing, and the summary says so rather than showing a bare $0.00.` : ""}</span>
     </div>`;
 }
 
@@ -2350,12 +2372,16 @@ function readBookingPeople(container, prefix){
     const raw = container.querySelector(`[data-${prefix}-bp-val="${key}"]`)?.value;
     const unit = container.querySelector(`[data-${prefix}-bp-unit="${key}"]`)?.value;
     const num = raw === "" || raw == null ? null : parseFloat(raw);
+    // A companion seat is a stated share of nothing — not a blank, which
+    // would take an equal cut of whatever is left.
+    const companion = unit === "companion";
     rows.push({
       personId: key.startsWith("p:") ? key.slice(2) : null,
       groupId: key.startsWith("g:") ? key.slice(2) : null,
       reference: container.querySelector(`[data-${prefix}-bp-ref="${key}"]`)?.value.trim() || null,
-      cost: unit === "percent" ? null : num,
-      costPercent: unit === "percent" ? num : null,
+      cost: companion ? 0 : (unit === "percent" ? null : num),
+      costPercent: companion ? null : (unit === "percent" ? num : null),
+      isCompanion: companion,
     });
   });
   return rows;
@@ -3355,6 +3381,10 @@ function splitCents(total, n){
 //          groupMembers: { groupId: [personId] }, selfId }
 // participant: { personId } | { groupId }, optionally with { amount } or
 //              { percent }. Neither means "an equal cut of what's left".
+//              { companion: true } is a stated share of nothing — a seat
+//              flown on a companion pass — which is arithmetically the same
+//              as amount: 0 but reported differently, because "$0.00" and
+//              "didn't cost anything, here's why" are not the same claim.
 //
 // Returns per-person totals, a per-booking breakdown showing how each figure
 // was arrived at, and warnings for the two situations where the arithmetic
@@ -3424,7 +3454,9 @@ function settleTrip(input){
     const fixed = [];
     const evenly = [];
     for (const p of parts){
-      if (p.amount != null && p.amount !== ""){
+      if (p.companion){
+        fixed.push([p, 0]);
+      } else if (p.amount != null && p.amount !== ""){
         const c = toCents(p.amount);
         fixed.push([p, c]); claimed += c;
       } else if (p.percent != null && p.percent !== ""){
@@ -3436,7 +3468,8 @@ function settleTrip(input){
     for (const [p, c] of fixed){
       if (!charge(p, c, per)){ unassignedCents += c; orphaned.push(c); continue; }
       lines.push({ subject: label(p), cents: c,
-                   why: p.amount != null && p.amount !== "" ? "amount" : "percent" });
+                   why: p.companion ? "companion"
+                      : p.amount != null && p.amount !== "" ? "amount" : "percent" });
     }
 
     const rest = total - claimed;
@@ -3507,6 +3540,7 @@ function settlementBooking(trip, kind, row){
       // Whichever column was filled in decides the unit, matching the form.
       amount: x.cost,
       percent: x.cost == null ? x.cost_percent : null,
+      companion: !!x.is_companion,
     })),
   };
 }
@@ -3577,6 +3611,11 @@ function tripMoney(trip){
       .map(w => ({ label: w.label, by: fromCents(w.byCents) })),
     orphans: r.warnings.filter(w => w.kind === "orphan")
       .map(w => ({ label: w.label, shares: w.shares, by: fromCents(w.byCents) })),
+    // Who flew on a pass, so a zero in the table can say why it's a zero.
+    // Normalised to the same ids as `rows`, so the view just asks the set.
+    companions: new Set(r.breakdown.flatMap(b => b.lines
+      .filter(l => l.why === "companion")
+      .map(l => l.subject === SELF ? (self?.id || null) : l.subject))),
     byBooking: new Map(r.breakdown.map(b => [b.id, b])),
   };
 }
@@ -3644,6 +3683,7 @@ function renderTripSummary(trip){
     percent: "a percentage of the booking",
     even: "an equal cut of what was left over",
     payer: "the remainder, left with whoever paid",
+    companion: "flown on a companion pass, so it cost them nothing",
   };
   const costFor = (kind, row) => {
     const b = money.byBooking.get(row.id);
@@ -3654,7 +3694,7 @@ function renderTripSummary(trip){
       && b.lines[0].subject === selfId();
     const parts = allYours ? [] : b.lines.map(l =>
       `<span title="${esc(basis[l.why] || "")}">${esc(settlementSubjectName(trip, l.subject))} <b>${
-        fmt(fromCents(l.cents))}</b></span>`);
+        l.why === "companion" ? "companion pass" : fmt(fromCents(l.cents))}</b></span>`);
     return `<div class="summary-cost"><span class="summary-cost-total">${
       fmt(fromCents(b.totalCents))}</span>${parts.length ? ` — ${parts.join(" · ")}` : ""}${
       allYours ? "" : ` <span class="field-opt">paid by ${esc(personName(trip, b.payer))}</span>`}</div>`;
@@ -3728,7 +3768,8 @@ function renderTripSummary(trip){
         <table class="hist summary-money">
           <tr><th>Person</th><th>Their share</th><th>They paid</th><th>Net</th></tr>
           ${money.rows.map(r => `<tr>
-            <td>${esc(r.name)}</td>
+            <td>${esc(r.name)}${money.companions.has(r.personId)
+              ? ` <span class="field-opt">companion pass</span>` : ""}</td>
             <td>${fmt(r.owes)}</td>
             <td>${fmt(r.paid)}</td>
             <td class="${r.net > 0.005 ? "down" : r.net < -0.005 ? "up" : "flat"}">${

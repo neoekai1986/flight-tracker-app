@@ -16,7 +16,8 @@ of those functions the test will say so rather than silently passing.
 - **adapter.test.mjs** — the translation between stored rows and that
   function: households, percentages, per-seat flight pricing, points,
   watching items, and share rows left pointing at nobody.
-- **keystone.test.mjs** — the real Keystone trip, copied out of the database.
+- **keystone.test.mjs** — the real Keystone trip, copied out of the database,
+  including the companion seat.
   This is the case that was reported wrong three times; it's here so it can't
   go wrong a fourth time without something failing.
 

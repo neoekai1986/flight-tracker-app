@@ -234,6 +234,49 @@ function settleCase(input){
   check("nothing to total", r.totalCents, 0);
 }
 
+// ---- companion seats ------------------------------------------------------
+// A seat flown on a companion pass costs its passenger nothing. That is
+// arithmetically a stated share of zero, but it is reported as its own thing,
+// because "$0.00" and "didn't cost anything, and here's why" are different
+// claims — and the first one looks exactly like a share someone forgot.
+
+{
+  const r = one({ participants: [
+    { personId: "alice", companion: true },
+    { personId: "bob" },
+    { personId: "me" },
+  ]});
+  check("a companion seat costs its passenger nothing", owes(r),
+    { alice: 0, bob: 32000, me: 32000 });
+  check("and claims none of the total, so the rest still divides in two",
+    r.breakdown[0].lines.filter(l => l.why === "even").length, 2);
+  check("the line says why it's zero",
+    r.breakdown[0].lines.map(l => l.why), ["companion", "even", "even"]);
+  assertReconciles("a companion seat reconciles", r);
+}
+
+{
+  // The distinction that matters: a companion is not a blank. A blank would
+  // take a third of the booking.
+  const blank = one({ participants: [
+    { personId: "alice" }, { personId: "bob" }, { personId: "me" },
+  ]});
+  const pass = one({ participants: [
+    { personId: "alice", companion: true }, { personId: "bob" }, { personId: "me" },
+  ]});
+  check("a blank share is not the same as a pass",
+    [owes(blank).alice, owes(pass).alice], [21334, 0]);
+}
+
+{
+  // A companion seat on a booking nobody else is on leaves the whole fare
+  // with the payer rather than losing it.
+  const r = one({ participants: [{ personId: "alice", companion: true }] });
+  check("a lone companion leaves the fare with the payer", owes(r),
+    { alice: 0, me: 64000 });
+  assertReconciles("lone companion reconciles", r);
+}
+
 // ---- damaged data ---------------------------------------------------------
 // A share row has to point at a person or a household. When it points at
 // neither — which repointing the shares at the master people list can leave
