@@ -2340,7 +2340,7 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
       <span class="field-hint">Tick who it covers.${kind === "flight"
         ? " A flight share starts at one ticket; change it for anyone who paid a different fare."
         : " A share can be a flat amount or a percentage of the booking."}
-        Anything left blank stays with whoever paid.</span>
+        A share left blank takes an equal cut of whatever the others haven't claimed.</span>
     </div>`;
 }
 
@@ -3404,18 +3404,34 @@ function tripMoney(trip){
     }
     entryFor(b.row.paid_by).paid += b.total;
     const shares = bookingPeopleFor(trip, b.kind, b.row.id);
-    const stated = shares
-      .map(x => ({ ...x, amount: shareAmount(x, b.total) }))
-      .filter(x => x.amount != null);
+    const priced = shares.map(x => ({ ...x, amount: shareAmount(x, b.total) }));
+    const stated = priced.filter(x => x.amount != null);
+    // Ticked with the amount left blank. Putting someone on a booking is a
+    // statement that it's partly theirs, so they take an equal cut of
+    // whatever hasn't been claimed — previously they were skipped entirely
+    // and owed nothing, which made ticking them do nothing at all.
+    const unstated = priced.filter(x => x.amount == null);
     for (const x of stated){
       if (x.group_id) chargeGroup(x.group_id, x.amount);
       else entryFor(x.person_id).owes += x.amount;
     }
-    // Whatever nobody has claimed stays with the payer rather than vanishing,
-    // so the owed column always reconciles against what was actually spent.
     const claimed = stated.reduce((n, x) => n + x.amount, 0);
     const remainder = b.total - claimed;
-    if (remainder > 0.005) entryFor(b.row.paid_by).owes += remainder;
+    if (remainder > 0.005){
+      if (unstated.length){
+        // A household is one subject here, matching how it's offered in the
+        // form: one row, one share. Its cut then divides among its members.
+        const each = remainder / unstated.length;
+        for (const x of unstated){
+          if (x.group_id) chargeGroup(x.group_id, each);
+          else entryFor(x.person_id).owes += each;
+        }
+      } else {
+        // Nobody else is on it, so it stays with whoever paid rather than
+        // vanishing — the owed column still reconciles against what was spent.
+        entryFor(b.row.paid_by).owes += remainder;
+      }
+    }
     // Shares adding up to more than the booking cost is a typo, not a
     // position worth representing — say so rather than quietly producing
     // a ledger that can't reconcile.
@@ -3452,15 +3468,23 @@ function renderTripSummary(trip){
   const costFor = (kind, row) => {
     const total = bookingTotal(kind, row);
     if (!total) return "";
-    const shares = bookingPeopleFor(trip, kind, row.id)
-      .map(x => ({ name: shareSubjectName(trip, x), amount: shareAmount(x, total) }))
-      .filter(x => x.amount != null);
+    const all = bookingPeopleFor(trip, kind, row.id)
+      .map(x => ({ name: shareSubjectName(trip, x), amount: shareAmount(x, total) }));
+    const shares = all.filter(x => x.amount != null);
+    const evenly = all.filter(x => x.amount == null);
     const claimed = shares.reduce((n, x) => n + x.amount, 0);
     const rest = total - claimed;
     const parts = shares.map(x => `${esc(x.name)} <b>${fmt(x.amount)}</b>`);
-    // The unclaimed remainder belongs to whoever paid, so name them rather
-    // than leaving a gap between the shares and the total.
-    if (rest > 0.005) parts.push(`${esc(personName(trip, row.paid_by))} <b>${fmt(rest)}</b>`);
+    if (rest > 0.005){
+      if (evenly.length){
+        const each = rest / evenly.length;
+        for (const x of evenly) parts.push(`${esc(x.name)} <b>${fmt(each)}</b>`);
+      } else {
+        // Nobody else on it, so name the payer rather than leaving a gap
+        // between the shares and the total.
+        parts.push(`${esc(personName(trip, row.paid_by))} <b>${fmt(rest)}</b>`);
+      }
+    }
     return `<div class="summary-cost"><span class="summary-cost-total">${fmt(total)}</span>${
       parts.length ? ` — ${parts.join(" · ")}` : ""}${
       row.paid_by || shares.length ? ` <span class="field-opt">paid by ${
