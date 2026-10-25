@@ -2974,10 +2974,10 @@ function renderCard(trip, f){
       <div class="res-actions">
         ${attachmentHeader("flight", f.id, f.attachments)}
         ${checkPriceUrl(f) ? `<a class="btn btn-sm" href="${esc(checkPriceUrl(f))}" target="_blank" rel="noopener noreferrer">Check price →</a>` : ""}
+        <button class="btn btn-ghost btn-sm" data-edit-flight="${f.id}">Edit</button>
         <details class="menu card-menu">
           <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
           <div class="menu-panel">
-            <button type="button" data-edit-flight="${f.id}">Edit</button>
             <button type="button" data-toggle-flight-status="${f.id}" data-next-status="${f.status === "watching" ? "booked" : "watching"}">
               ${f.status === "watching" ? "Mark booked" : "Mark watching"}</button>
             ${moveOptions ? `<div class="menu-divider"></div>
@@ -4234,10 +4234,10 @@ function renderRentalCard(trip, r){
       <div class="res-actions">
         ${attachmentHeader("rental", r.id, r.attachments)}
         ${safeExternalUrl(r.url) ? `<a class="btn btn-sm" href="${esc(safeExternalUrl(r.url))}" target="_blank" rel="noopener noreferrer">Open listing →</a>` : ""}
+        <button class="btn btn-ghost btn-sm" data-edit-rental="${r.id}">Edit</button>
         <details class="menu card-menu">
           <summary class="btn btn-ghost btn-sm" title="More actions">⋯</summary>
           <div class="menu-panel">
-            <button type="button" data-edit-rental="${r.id}">Edit</button>
             <button type="button" data-toggle-rental-status="${r.id}" data-next-status="${r.status === "watching" ? "booked" : "watching"}">
               ${r.status === "watching" ? "Mark booked" : "Mark watching"}</button>
             ${moveOptions ? `<div class="menu-divider"></div>
