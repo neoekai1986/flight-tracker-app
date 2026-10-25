@@ -736,6 +736,8 @@
   .summary-lines{font-size:13px;color:var(--muted);line-height:1.7}
   .summary-lines b{color:var(--ink);font-weight:600}
   .summary-money{width:100%;margin-top:4px}
+  .summary-perday{font-size:13.5px;margin-top:10px;padding:10px 12px;
+      background:var(--panel2);border:1px solid var(--line);border-radius:10px}
   .summary-warn{font-size:12.5px;color:var(--bad);margin-top:8px;line-height:1.6}
   @media print{
     .sidebar,.filter-rail,.panel-head,.share-block,.view-menu{display:none!important}
@@ -764,9 +766,23 @@
   .alt-toggle{display:block}
   .alt-toggle input{width:auto;margin:0 8px 0 0;accent-color:var(--amber);vertical-align:middle}
   .alt-toggle span{vertical-align:middle}
+  .people-section{margin-bottom:30px}
+  .people-table{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+  .person-card{display:flex;align-items:flex-start;gap:12px;background:var(--panel2);
+      border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+  .person-card-main{flex:1;min-width:0;display:grid;
+      grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) minmax(0,1fr);gap:8px;align-items:center}
+  .person-card-main input,.person-card-main select{width:100%;max-width:none;margin-top:0}
+  .person-card-side{flex-shrink:0;display:flex;align-items:center;min-height:36px}
+  .person-self{font-size:11.5px;color:var(--muted);border:1px solid var(--line);
+      border-radius:20px;padding:2px 9px;white-space:nowrap}
+  @media (max-width:720px){ .person-card-main{grid-template-columns:1fr} }
+  .people-ledger{width:100%;margin-top:6px}
+  .people-ledger .ledger-group td{font-weight:600}
+  .people-ledger .ledger-member td{color:var(--muted);font-size:12.5px;padding-left:18px}
   .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
-  .person-row{display:flex;align-items:center;gap:8px}
-  .person-row input{flex:0 1 240px}
+  .person-row{display:flex;align-items:center;gap:9px;font-size:13px;padding:3px 0}
+  .person-row input[type=checkbox]{accent-color:var(--amber);margin:0;flex-shrink:0;width:auto}
   .split-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
       font-family:Inter,system-ui,sans-serif;margin-bottom:5px}
   .split-grid{display:grid;grid-template-columns:1.6fr 0.7fr 0.9fr;gap:6px}
@@ -994,6 +1010,15 @@ let activeSection = localStorage.getItem(SECTION_KEY) || "trips"; // "trips" | "
 let session = null;
 let trips = [];
 let folders = [];
+
+// The master list of people and the households they settle in. Account-level
+// and private to the owner: it spans every trip, most of which a given
+// collaborator isn't on.
+let people = [];
+let personGroups = [];
+function selfPerson(){ return people.find(p => p.is_self) || null; }
+function personById(id){ return people.find(p => p.id === id) || null; }
+function groupById(id){ return personGroups.find(g => g.id === id) || null; }
 let categories = [];
 let favoritePrograms = new Set();
 let activeTripId = null;
@@ -1824,6 +1849,57 @@ async function loadTrips(){
   return data;
 }
 
+async function loadPeople(){
+  const { data, error } = await supabase.from("people").select("*").order("position", { ascending: true });
+  if (error) { console.error(error); return []; }
+  return data;
+}
+
+async function loadPersonGroups(){
+  const { data, error } = await supabase.from("person_groups").select("*").order("position", { ascending: true });
+  if (error) { console.error(error); return []; }
+  return data;
+}
+
+async function createPerson(fields){
+  const position = people.length ? Math.max(...people.map(p => p.position)) + 1000 : 0;
+  const { data, error } = await supabase.from("people").insert({
+    owner_id: session.user.id, name: fields.name,
+    email: fields.email || null, group_id: fields.groupId || null, position,
+  }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
+}
+
+async function updatePerson(id, patch){
+  const { error } = await supabase.from("people").update(patch).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deletePerson(id){
+  // trip_people rows cascade, and booking_people cascades off those, so a
+  // removal takes everything recorded against them rather than orphaning it.
+  const { error } = await supabase.from("people").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function createPersonGroup(name){
+  const position = personGroups.length ? Math.max(...personGroups.map(g => g.position)) + 1000 : 0;
+  const { error } = await supabase.from("person_groups")
+    .insert({ owner_id: session.user.id, name, position });
+  if (error) alert(error.message);
+}
+
+async function updatePersonGroup(id, patch){
+  const { error } = await supabase.from("person_groups").update(patch).eq("id", id);
+  if (error) alert(error.message);
+}
+
+async function deletePersonGroup(id){
+  const { error } = await supabase.from("person_groups").delete().eq("id", id);
+  if (error) alert(error.message);
+}
+
 async function loadFolders(){
   const { data, error } = await supabase
     .from("trip_folders")
@@ -1863,8 +1939,9 @@ async function removeFavoriteProgram(program){
 }
 
 async function refresh(){
-  [trips, folders, categories, favoritePrograms] = await Promise.all(
-    [loadTrips(), loadFolders(), loadCategories(), loadFavoritePrograms()]);
+  [trips, folders, categories, favoritePrograms, people, personGroups] = await Promise.all(
+    [loadTrips(), loadFolders(), loadCategories(), loadFavoritePrograms(),
+     loadPeople(), loadPersonGroups()]);
   if (!trips.find(t => t.id === activeTripId)) activeTripId = trips[0]?.id || null;
   render();
 }
@@ -2118,11 +2195,15 @@ async function removeCollaborator(id){
 // These replace the free-text attendees list. A person is a row with a stable
 // id, so a cost recorded against them survives being renamed.
 
-async function createTripPerson(tripId, name){
+// Links a master person to a trip. `name` is still written because the column
+// is NOT NULL from before the master list existed; it's a snapshot for safety
+// and nothing reads it — display comes from the master record.
+async function createTripPerson(tripId, personId){
   const siblings = (trips.find(t => t.id === tripId)?.trip_people || []).map(p => p.position);
   const position = siblings.length ? Math.max(...siblings) + 1000 : 0;
   const { data, error } = await supabase.from("trip_people")
-    .insert({ trip_id: tripId, name, position }).select().single();
+    .insert({ trip_id: tripId, person_id: personId,
+              name: personById(personId)?.name || "", position }).select().single();
   if (error) { alert(error.message); return null; }
   return data;
 }
@@ -2141,8 +2222,9 @@ async function deleteTripPerson(id){
 
 function tripPeople(trip){ return (trip?.trip_people || []); }
 function personName(trip, id){
-  if (!id) return "You";
-  return tripPeople(trip).find(p => p.id === id)?.name || "Someone";
+  if (!id) return selfPerson()?.name || "You";
+  const row = tripPeople(trip).find(p => p.id === id);
+  return personById(row?.person_id)?.name || row?.name || "Someone";
 }
 
 // ---------------- Per-booking people ----------------
@@ -2170,8 +2252,8 @@ async function saveBookingPeople(tripId, kind, id, rows){
 
 // The per-person block shown inside a flight or rental form.
 function bookingPeopleFieldsHTML(trip, prefix, existing){
-  const people = tripPeople(trip);
-  if (!people.length){
+  const roster = tripPeople(trip);
+  if (!roster.length){
     return `<div class="field span2">Who's on this booking
       <span class="field-hint">No one listed on this trip yet — add people in
         <b>Trip details</b> and they'll show up here.</span>
@@ -2182,12 +2264,12 @@ function bookingPeopleFieldsHTML(trip, prefix, existing){
     <div class="form-section">Who's on this booking <span class="field-opt">(leave empty if it's just you)</span></div>
     <div class="field span2">
       <div class="booking-people">
-        ${people.map(p => {
+        ${roster.map(p => {
           const row = byPerson.get(p.id);
           return `<div class="bp-row" data-bp-row="${p.id}">
             <label class="bp-who">
               <input type="checkbox" data-${prefix}-bp-on="${p.id}" ${row ? "checked" : ""}>
-              <span>${esc(p.name)}</span>
+              <span>${esc(personById(p.person_id)?.name || p.name)}</span>
             </label>
             <input type="text" data-${prefix}-bp-ref="${p.id}" placeholder="their reference"
               value="${esc(row?.reference || "")}">
@@ -2218,12 +2300,13 @@ function readBookingPeople(container, prefix){
 
 // "Paid by" — null means you, which is the default and the common case.
 function paidByFieldHTML(trip, prefix, current){
-  const people = tripPeople(trip);
-  if (!people.length) return "";
+  const roster = tripPeople(trip);
+  if (!roster.length) return "";
   return `<label class="field field-narrow">Paid by
     <select data-${prefix}-paidby>
       <option value="">You</option>
-      ${people.map(p => `<option value="${p.id}" ${p.id===current?"selected":""}>${esc(p.name)}</option>`).join("")}
+      ${roster.map(p => `<option value="${p.id}" ${p.id===current?"selected":""}>${
+        esc(personById(p.person_id)?.name || p.name)}</option>`).join("")}
     </select>
   </label>`;
 }
@@ -3158,10 +3241,19 @@ function renderFilterRail(trip){
 // rows sits wholly on whoever paid it, which by default is you — so a trip
 // with nothing filled in still adds up.
 function tripMoney(trip){
-  const people = tripPeople(trip);
-  const ledger = new Map(people.map(p => [p.id, { name: p.name, owes: 0, paid: 0 }]));
-  const you = { name: "You", owes: 0, paid: 0 };
-  const entryFor = id => (id ? ledger.get(id) : you) || you;
+  const roster = tripPeople(trip);
+  // personId is the master-list id, carried through so the People page can
+  // add a person's share up across trips. Rows keep their trip_people id as
+  // the key, since that's what paid_by and booking_people point at.
+  const ledger = new Map(roster.map(p => [p.id,
+    { name: personById(p.person_id)?.name || p.name, personId: p.person_id, owes: 0, paid: 0 }]));
+  // An unset paid_by still means you. Attribute it to your master record so
+  // it lands in your running total rather than in a nameless bucket.
+  const self = selfPerson();
+  const selfRow = roster.find(p => p.person_id && p.person_id === self?.id);
+  const you = selfRow ? ledger.get(selfRow.id)
+    : { name: self?.name || "You", personId: self?.id || null, owes: 0, paid: 0 };
+  const entryFor = id => (id ? (ledger.get(id) || you) : you);
   const over = [];
 
   const bookings = [
@@ -3187,7 +3279,10 @@ function tripMoney(trip){
     else if (remainder < -0.005) over.push({ label: b.row.label, by: -remainder });
   }
 
-  const rows = [you, ...ledger.values()].filter(e => e.owes || e.paid);
+  // `you` may already be one of the ledger rows when you're on the roster;
+  // including it twice would double every figure you're involved in.
+  const all = ledger.has(selfRow?.id) ? [...ledger.values()] : [you, ...ledger.values()];
+  const rows = all.filter(e => e.owes || e.paid);
   return { rows: rows.map(e => ({ ...e, net: e.paid - e.owes })), over,
            total: bookings.reduce((n, b) => n + b.total, 0) };
 }
@@ -3289,6 +3384,17 @@ function renderTripSummary(trip){
           </tr>`).join("")}
           <tr><td><b>Trip total</b></td><td colspan="3"><b>${fmt(money.total)}</b></td></tr>
         </table>
+        ${(() => {
+          // Cost per person per day on the slopes. Headcount comes from the
+          // trip roster, falling back to 1 so a solo trip still divides.
+          const days = Number(trip.ski_days) || 0;
+          if (!days || !money.total) return "";
+          const heads = Math.max(tripPeople(trip).length, 1);
+          return `<p class="summary-perday"><b>${fmt(money.total / heads / days)}</b>
+            per person per day on the slopes
+            <span class="field-opt">— ${fmt(money.total)} over ${days} day${days===1?"":"s"},
+            ${heads} ${heads===1?"person":"people"}</span></p>`;
+        })()}
         ${money.over.length ? `<p class="summary-warn">Shares add up to more than the booking cost on
           ${money.over.map(o => `<b>${esc(o.label)}</b> (by ${fmt(o.by)})`).join(", ")} —
           worth a look, the figures below can't reconcile while that's true.</p>` : ""}
@@ -3297,6 +3403,259 @@ function renderTripSummary(trip){
         : `<p class="empty-hist">Nothing booked yet.</p>`}
       </section>
     </div>`;
+}
+
+// ---------------- People ----------------
+
+// What one person owes and has laid out, across every trip. Alternatives are
+// left out for the same reason they're left out of the stats: they didn't
+// happen. Reuses tripMoney() so the per-trip summary and this page can't
+// disagree about a number.
+function personLedger(){
+  const byPerson = new Map(people.map(p => [p.id, { person: p, owes: 0, paid: 0, trips: [] }]));
+  for (const trip of trips){
+    if (trip.is_alternative) continue;
+    const money = tripMoney(trip);
+    for (const row of money.rows){
+      const personId = row.personId;
+      if (!personId || !byPerson.has(personId)) continue;
+      const e = byPerson.get(personId);
+      e.owes += row.owes; e.paid += row.paid;
+      if (row.owes || row.paid) e.trips.push({ trip, owes: row.owes, paid: row.paid });
+    }
+  }
+  return [...byPerson.values()];
+}
+
+// Rolls the ledger up by household, keeping the individuals underneath. A
+// group settles as one — that's the point of grouping them — but you still
+// need to see who contributed what to the number.
+function groupedLedger(){
+  const rows = personLedger();
+  const out = [];
+  const used = new Set();
+  for (const g of personGroups){
+    const members = rows.filter(r => r.person.group_id === g.id);
+    if (!members.length) continue;
+    members.forEach(m => used.add(m.person.id));
+    out.push({
+      key: `g:${g.id}`, name: g.name, isGroup: true,
+      owes: members.reduce((n,m) => n + m.owes, 0),
+      paid: members.reduce((n,m) => n + m.paid, 0),
+      members,
+      email: members.map(m => m.person.email).filter(Boolean).join(","),
+    });
+  }
+  for (const r of rows){
+    if (used.has(r.person.id)) continue;
+    out.push({ key: `p:${r.person.id}`, name: r.person.name, isGroup: false,
+               owes: r.owes, paid: r.paid, members: [r], email: r.person.email || "" });
+  }
+  return out;
+}
+
+function renderPeoplePage(){
+  document.getElementById("subtext").textContent =
+    "Everyone who travels with you, what they owe across every trip, and who settles together.";
+  document.getElementById("loggedOutBrand").style.display = "none";
+  document.getElementById("sidebar").innerHTML = renderSidebar();
+  root.innerHTML = renderPeopleBody();
+  wireSectionNav();
+  wireAccountMenu();
+  wirePeopleBody();
+}
+
+function renderPeopleBody(){
+  const fmt = n => fmtCash(n, "USD");
+  const ledger = groupedLedger().sort((a,b) => (b.owes - b.paid) - (a.owes - a.paid));
+  const groupOptions = (current) => `
+    <option value="">— on their own —</option>
+    ${personGroups.map(g => `<option value="${g.id}" ${g.id===current?"selected":""}>${esc(g.name)}</option>`).join("")}`;
+
+  return `
+    <div class="panel">
+      <div class="panel-head"><h2>People</h2></div>
+
+      <section class="people-section">
+        <div class="section-head">Who travels with you</div>
+        <div class="people-table">
+          ${people.map(p => `
+            <div class="person-card" data-person-card="${p.id}">
+              <div class="person-card-main">
+                <input type="text" value="${esc(p.name)}" data-pm-name="${p.id}" aria-label="Name">
+                <input type="email" value="${esc(p.email || "")}" data-pm-email="${p.id}"
+                  placeholder="email — used to send them their share" aria-label="Email">
+                <select data-pm-group="${p.id}" aria-label="Household">${groupOptions(p.group_id)}</select>
+              </div>
+              <div class="person-card-side">
+                ${p.is_self ? `<span class="person-self">that's you</span>`
+                  : `<button type="button" class="btn-link" data-pm-del="${p.id}">remove</button>`}
+              </div>
+            </div>`).join("")}
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input type="text" data-pm-new-name placeholder="Name" style="flex:0 1 180px">
+          <input type="email" data-pm-new-email placeholder="Email (optional)" style="flex:0 1 240px">
+          <button type="button" class="btn btn-ghost btn-sm" data-pm-add>Add person</button>
+        </div>
+      </section>
+
+      <section class="people-section">
+        <div class="section-head">Households</div>
+        <p class="field-hint">People in a household have their shares added together and settle as one.</p>
+        <div class="people-table">
+          ${personGroups.map(g => `
+            <div class="person-card">
+              <div class="person-card-main">
+                <input type="text" value="${esc(g.name)}" data-pg-name="${g.id}" aria-label="Household name">
+                <span class="field-hint">${
+                  people.filter(p => p.group_id === g.id).map(p => esc(p.name)).join(", ") || "nobody yet"}</span>
+              </div>
+              <div class="person-card-side">
+                <button type="button" class="btn-link" data-pg-del="${g.id}">remove</button>
+              </div>
+            </div>`).join("")}
+          ${personGroups.length ? "" : `<p class="empty-hist">No households yet.</p>`}
+        </div>
+        <div class="row" style="margin-top:10px">
+          <input type="text" data-pg-new placeholder="e.g. The Nguyens" style="flex:0 1 220px">
+          <button type="button" class="btn btn-ghost btn-sm" data-pg-add>Add household</button>
+        </div>
+      </section>
+
+      <section class="people-section">
+        <div class="section-head">Running totals</div>
+        <p class="field-hint">Across every trip, alternatives excluded. A booking with no shares
+          entered sits whole on whoever paid it.</p>
+        ${ledger.length ? `
+        <table class="hist people-ledger">
+          <tr><th>Who</th><th>Their share</th><th>They paid</th><th>Net</th><th></th></tr>
+          ${ledger.map(r => {
+            const net = r.paid - r.owes;
+            return `<tr class="${r.isGroup ? "ledger-group" : ""}">
+              <td>${esc(r.name)}${r.isGroup ? ` <span class="field-opt">${r.members.length} people</span>` : ""}</td>
+              <td>${fmt(r.owes)}</td>
+              <td>${fmt(r.paid)}</td>
+              <td class="${net > 0.005 ? "down" : net < -0.005 ? "up" : "flat"}">${
+                Math.abs(net) < 0.005 ? "settled" : net > 0 ? `owed ${fmt(net)}` : `owes ${fmt(-net)}`}</td>
+              <td>${r.email && net < -0.005
+                ? `<button type="button" class="btn-link" data-pm-email-all="${r.key}">email</button>` : ""}</td>
+            </tr>
+            ${r.isGroup ? r.members.map(m => `<tr class="ledger-member">
+              <td>${esc(m.person.name)}</td><td>${fmt(m.owes)}</td><td>${fmt(m.paid)}</td><td></td><td></td>
+            </tr>`).join("") : ""}`;
+          }).join("")}
+        </table>` : `<p class="empty-hist">Nothing to settle yet.</p>`}
+      </section>
+    </div>`;
+}
+
+function wirePeopleBody(){
+  const reload = async () => { await refresh(); };
+
+  document.querySelectorAll("[data-pm-name]").forEach(el => {
+    el.addEventListener("blur", async () => {
+      const id = el.dataset.pmName, name = el.value.trim();
+      const p = personById(id);
+      if (!p || !name || name === p.name){ el.value = p?.name || name; return; }
+      await updatePerson(id, { name }); await reload();
+    });
+  });
+  document.querySelectorAll("[data-pm-email]").forEach(el => {
+    el.addEventListener("blur", async () => {
+      const id = el.dataset.pmEmail, email = el.value.trim() || null;
+      const p = personById(id);
+      if (!p || email === (p.email || null)) return;
+      await updatePerson(id, { email }); await reload();
+    });
+  });
+  document.querySelectorAll("[data-pm-group]").forEach(el => {
+    el.addEventListener("change", async () => {
+      await updatePerson(el.dataset.pmGroup, { group_id: el.value || null }); await reload();
+    });
+  });
+  document.querySelectorAll("[data-pm-del]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const p = personById(btn.dataset.pmDel);
+      if (!p) return;
+      if (!confirm(`Remove ${p.name}?\n\nThey come off every trip they're on, along with anything recorded against them.`)) return;
+      await deletePerson(p.id); await reload();
+    });
+  });
+  const addPerson = async () => {
+    const nameEl = document.querySelector("[data-pm-new-name]");
+    const emailEl = document.querySelector("[data-pm-new-email]");
+    const name = nameEl.value.trim();
+    if (!name){ nameEl.focus(); return; }
+    await createPerson({ name, email: emailEl.value.trim() || null });
+    await reload();
+    document.querySelector("[data-pm-new-name]")?.focus();
+  };
+  document.querySelector("[data-pm-add]")?.addEventListener("click", addPerson);
+  document.querySelector("[data-pm-new-name]")?.addEventListener("keydown", e => {
+    if (e.key === "Enter"){ e.preventDefault(); addPerson(); } });
+  document.querySelector("[data-pm-new-email]")?.addEventListener("keydown", e => {
+    if (e.key === "Enter"){ e.preventDefault(); addPerson(); } });
+
+  document.querySelectorAll("[data-pg-name]").forEach(el => {
+    el.addEventListener("blur", async () => {
+      const g = groupById(el.dataset.pgName), name = el.value.trim();
+      if (!g || !name || name === g.name){ el.value = g?.name || name; return; }
+      await updatePersonGroup(g.id, { name }); await reload();
+    });
+  });
+  document.querySelectorAll("[data-pg-del]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const g = groupById(btn.dataset.pgDel);
+      if (!g) return;
+      if (!confirm(`Remove the ${g.name} household?\n\nIts members stay, they just stop settling together.`)) return;
+      await deletePersonGroup(g.id); await reload();
+    });
+  });
+  const addGroup = async () => {
+    const el = document.querySelector("[data-pg-new]");
+    const name = el.value.trim();
+    if (!name){ el.focus(); return; }
+    await createPersonGroup(name); await reload();
+  };
+  document.querySelector("[data-pg-add]")?.addEventListener("click", addGroup);
+  document.querySelector("[data-pg-new]")?.addEventListener("keydown", e => {
+    if (e.key === "Enter"){ e.preventDefault(); addGroup(); } });
+
+  document.querySelectorAll("[data-pm-email-all]").forEach(btn => {
+    btn.addEventListener("click", () => emailExpense(btn.dataset.pmEmailAll));
+  });
+}
+
+// Opens your own mail client with the breakdown filled in. No server, no API
+// key, no deliverability to worry about — and it goes out from your real
+// address, which is what makes it land rather than get filtered.
+function emailExpense(key){
+  const row = groupedLedger().find(r => r.key === key);
+  if (!row) return;
+  const fmt = n => fmtCash(n, "USD");
+  const net = row.paid - row.owes;
+  const lines = [];
+  lines.push(`Here's where we are on travel costs.`, "");
+  for (const m of row.members){
+    if (row.isGroup) lines.push(`${m.person.name}`);
+    for (const t of m.trips){
+      const bits = [];
+      if (t.owes) bits.push(`share ${fmt(t.owes)}`);
+      if (t.paid) bits.push(`paid ${fmt(t.paid)}`);
+      lines.push(`  ${t.trip.title}: ${bits.join(", ")}`);
+    }
+    if (row.isGroup) lines.push("");
+  }
+  lines.push("",
+    `Total share: ${fmt(row.owes)}`,
+    `Already paid: ${fmt(row.paid)}`,
+    net < -0.005 ? `Outstanding: ${fmt(-net)}` : `Settled up.`);
+  const subject = `Travel costs — ${row.name}`;
+  // encodeURIComponent, not a template literal: a name with an & in it would
+  // otherwise truncate the body at that point.
+  window.location.href = `mailto:${encodeURIComponent(row.email || "")}`
+    + `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join("\n"))}`;
 }
 
 function renderTripPanel(trip){
@@ -3414,7 +3773,7 @@ function renderTripPanel(trip){
   if (trip.notes) metaParts.push(`<div><b>Notes:</b> ${esc(trip.notes)}</div>`);
   if (tripPeople(trip).length){
     metaParts.push(`<div><b>Who's going:</b> <span class="tags">${
-      tripPeople(trip).map(p=>`<span class="tag">${esc(p.name)}</span>`).join("")}</span></div>`);
+      tripPeople(trip).map(p=>`<span class="tag">${esc(personById(p.person_id)?.name || p.name)}</span>`).join("")}</span></div>`);
   }
 
   return `
@@ -3842,6 +4201,12 @@ function renderMetaForm(trip){
         <option value="__new__">+ New category…</option>
       </select>
     </label>
+    ${trip.category_id ? `<label class="field span2 alt-toggle">
+      <input type="checkbox" data-m-catski ${categories.find(c => c.id === trip.category_id)?.is_ski ? "checked" : ""}>
+      <span>Trips in this category involve skiing</span>
+      <span class="field-hint">Turns on the days-on-the-slopes box and the per-day cost,
+        for every trip in this category.</span>
+    </label>` : ""}
     ${!tripAlternativeAvailable ? "" : `<label class="field span2 alt-toggle">
       <input type="checkbox" data-m-alternative ${trip.is_alternative ? "checked" : ""}>
       <span>This is an alternative — a version we considered and didn't take</span>
@@ -3849,20 +4214,26 @@ function renderMetaForm(trip){
         list, and stops counting toward any of your totals.</span>
     </label>`}
     <div class="field span2">Who's on this trip
-      <span class="field-hint">Everyone here can be put on a booking, with their own reference
-        number and share of the cost. You're assumed to be paying unless you say otherwise.</span>
+      <span class="field-hint">Tick anyone from your people list. Manage the list itself —
+        names, emails, households — on the <b>People &amp; costs</b> page.</span>
       <div class="people-list" data-m-people>
-        ${tripPeople(trip).map(p => `
-          <div class="person-row" data-person-row="${p.id}">
-            <input type="text" value="${esc(p.name)}" data-person-name="${p.id}" aria-label="Name">
-            <button type="button" class="btn-link" data-person-del="${p.id}" title="Remove from trip">×</button>
-          </div>`).join("")}
-      </div>
-      <div class="row" style="margin-top:8px">
-        <input type="text" data-person-new placeholder="Add someone…" style="flex:0 1 220px">
-        <button type="button" class="btn btn-ghost btn-sm" data-person-add>Add</button>
+        ${people.length ? people.map(p => {
+          const on = tripPeople(trip).find(tp => tp.person_id === p.id);
+          return `<label class="person-row">
+            <input type="checkbox" data-trip-person="${p.id}" ${on ? "checked" : ""}>
+            <span>${esc(p.name)}${p.is_self ? " (you)" : ""}</span>
+            ${p.email ? `<span class="field-opt">${esc(p.email)}</span>` : ""}
+          </label>`;
+        }).join("") : `<p class="empty-hist">No one in your people list yet — add them on
+          the People &amp; costs page.</p>`}
       </div>
     </div>
+    ${categories.find(c => c.id === trip.category_id)?.is_ski ? `
+    <label class="field field-narrow">Days on the slopes
+      <input type="number" min="0" step="1" data-m-skidays value="${trip.ski_days ?? ""}"
+        placeholder="e.g. 4">
+      <span class="field-hint">Used to work out the cost per person per ski day.</span>
+    </label>` : ""}
     <label class="field span2">Notes
       <textarea data-m-notes>${esc(trip.notes || "")}</textarea>
     </label>
@@ -4218,6 +4589,7 @@ function render(){
     renderWishlistPage();
     return;
   }
+  if (activeSection === "people"){ renderPeoplePage(); return; }
   renderTripsSection();
 }
 
@@ -4280,7 +4652,8 @@ function renderSidebar(showImport){
     <div class="sidebar-account">${renderAccountMenu()}</div>
     <nav class="sidebar-nav">
       <button class="sidebar-nav-item ${isTrips ? "active" : ""}" data-section="trips">✈️ Trip Planner</button>
-      <button class="sidebar-nav-item ${!isTrips ? "active" : ""}" data-section="wishlist">🌍 Wish List Planning</button>
+      <button class="sidebar-nav-item ${activeSection === "wishlist" ? "active" : ""}" data-section="wishlist">🌍 Wish List Planning</button>
+      <button class="sidebar-nav-item ${activeSection === "people" ? "active" : ""}" data-section="people">👥 People &amp; costs</button>
     </nav>
     ${isTrips ? `
     <div class="sidebar-trips">
@@ -5469,7 +5842,9 @@ function wireEvents(activeTrip){
       const notes = holder.querySelector(`[data-m-notes]`).value.trim();
       // People are rows of their own now, saved as you edit them rather than
       // with the rest of the form — attendees is left untouched on the trip.
+      const skiEl = holder.querySelector("[data-m-skidays]");
       await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, notes,
+        ...(skiEl ? { ski_days: skiEl.value === "" ? null : parseInt(skiEl.value, 10) } : {}),
         ...(tripAlternativeAvailable
           ? { is_alternative: !!holder.querySelector("[data-m-alternative]")?.checked } : {}) });
       let folderSel = holder.querySelector(`[data-m-folder]`).value;
@@ -5498,42 +5873,32 @@ function wireEvents(activeTrip){
     });
     document.querySelector(`[data-meta-cancel="${activeTrip.id}"]`)?.addEventListener("click", render);
 
-    // People save as you edit them, not with the rest of the form — a person
-    // has to exist before anything can be recorded against them, and the form
-    // stays open afterwards so you can add the whole group in one go.
-    const addPerson = async () => {
-      const input = holder.querySelector("[data-person-new]");
-      const name = input.value.trim();
-      if (!name) { input.focus(); return; }
-      await createTripPerson(activeTrip.id, name);
+    // Ticking someone adds them to the trip; unticking removes them and
+    // anything recorded against them on this trip's bookings. The master
+    // record is untouched either way — they stay in your people list.
+    holder.querySelectorAll("[data-trip-person]").forEach(box => {
+      box.addEventListener("change", async () => {
+        const personId = box.dataset.tripPerson;
+        const existing = tripPeople(activeTrip).find(tp => tp.person_id === personId);
+        if (box.checked && !existing){
+          await createTripPerson(activeTrip.id, personId);
+        } else if (!box.checked && existing){
+          const nm = personById(personId)?.name || "them";
+          if (!confirm(`Take ${nm} off this trip?\n\nAnything recorded against them on this trip's bookings goes too.`)){
+            box.checked = true; return;
+          }
+          await deleteTripPerson(existing.id);
+        } else return;
+        await refresh();
+        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      });
+    });
+
+    holder.querySelector("[data-m-catski]")?.addEventListener("change", async (e) => {
+      await supabase.from("trip_categories")
+        .update({ is_ski: e.target.checked }).eq("id", activeTrip.category_id);
       await refresh();
       document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
-      document.querySelector("[data-person-new]")?.focus();
-    };
-    holder.querySelector("[data-person-add]")?.addEventListener("click", addPerson);
-    holder.querySelector("[data-person-new]")?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter"){ e.preventDefault(); addPerson(); }
-    });
-    holder.querySelectorAll("[data-person-name]").forEach(input => {
-      // on blur rather than per keystroke: one write when you stop typing.
-      input.addEventListener("blur", async () => {
-        const name = input.value.trim();
-        const person = tripPeople(activeTrip).find(p => p.id === input.dataset.personName);
-        if (!person || !name || name === person.name){ input.value = person?.name || name; return; }
-        await renameTripPerson(person.id, name);
-        await refresh();
-        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
-      });
-    });
-    holder.querySelectorAll("[data-person-del]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const person = tripPeople(activeTrip).find(p => p.id === btn.dataset.personDel);
-        if (!person) return;
-        if (!confirm(`Remove ${person.name} from this trip?\n\nAnything recorded against them on a booking goes too.`)) return;
-        await deleteTripPerson(person.id);
-        await refresh();
-        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
-      });
     });
   });
 
