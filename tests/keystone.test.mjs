@@ -132,7 +132,7 @@ check("Chrstine is unchanged", fixedOwed["Chrstine"], 212.80);
 check("E-Kai is unchanged", fixedOwed["E-Kai"], 212.80);
 check("and now the shares reconcile exactly", fixed.over, []);
 check("but a bare zero doesn't say Bean flew on a pass",
-  fixed.companions.has("p-bean"), false);
+  fixed.freeFor.has("p-bean"), false);
 check("three paying passengers, split three ways",
   Math.round(fixed.rows.reduce((n, r) => n + r.owes, 0) * 100), 63840);
 
@@ -152,8 +152,10 @@ const markedOwed = Object.fromEntries(marked.rows.map(r => [r.name, r.owes]));
 check("the figures are unchanged by saying why", markedOwed,
   { "Bean": 0, "Chrstine": 212.80, "E-Kai": 212.80, "Eugene": 212.80 });
 check("the trip still costs what it costs", marked.total, 638.40);
-check("Bean is now named as a companion", marked.companions.has("p-bean"), true);
-check("nobody else is", [...marked.companions], ["p-bean"]);
+check("Bean is now named as a companion", marked.freeFor.has("p-bean"), true);
+check("nobody else is", [...marked.freeFor.keys()], ["p-bean"]);
+check("and it says which kind of free seat",
+  [...marked.freeFor.get("p-bean")], ["companion pass"]);
 check("and it still reconciles", marked.over, []);
 
 console.log(`\n${passed} passed, ${failed} failed`);

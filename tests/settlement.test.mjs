@@ -277,6 +277,97 @@ function settleCase(input){
   assertReconciles("lone companion reconciles", r);
 }
 
+// ---- lodging: rooms and the couch ----------------------------------------
+// A lodging cost is a price for a set of bedrooms, not a price per head.
+// Two people sharing a room pay for one room between them; someone on the
+// couch is on the booking but isn't occupying one, so pays nothing.
+
+{
+  const r = one({ participants: [
+    { personId: "alice", room: "Main" },
+    { personId: "bob",   room: "Main" },
+    { personId: "me",    room: "Bunk" },
+  ]});
+  check("two bedrooms, so the cost halves before it divides", owes(r),
+    { alice: 16000, bob: 16000, me: 32000 });
+  assertReconciles("two rooms reconcile", r);
+}
+
+{
+  const r = one({ participants: [
+    { personId: "alice", room: "Main" },
+    { personId: "bob",   room: "Main" },
+    { personId: "me",    room: "Bunk" },
+    { personId: "kit",   couch: true },
+  ]});
+  check("the couch pays nothing and doesn't dilute the bedrooms", owes(r),
+    { alice: 16000, bob: 16000, me: 32000, kit: 0 });
+  check("and the line says why", r.breakdown[0].lines.find(l => l.subject === "kit").why,
+    "couch");
+  assertReconciles("a couch sleeper reconciles", r);
+}
+
+{
+  // Three in one room and one in another is still two rooms.
+  const r = one({ participants: [
+    { personId: "a", room: "Main" }, { personId: "b", room: "Main" },
+    { personId: "c", room: "Main" }, { personId: "me", room: "Bunk" },
+  ]});
+  check("a crowded room doesn't cost more than an empty one", owes(r),
+    { a: 10667, b: 10667, c: 10666, me: 32000 });
+  assertReconciles("an odd room split loses no penny", r);
+}
+
+{
+  // Nobody in a room is the per-person split, unchanged — one occupant each.
+  const byRoom = one({ participants: [
+    { personId: "alice", room: "Main" }, { personId: "bob", room: "Bunk" },
+    { personId: "me", room: "Loft" },
+  ]});
+  const byHead = one({ participants: [
+    { personId: "alice" }, { personId: "bob" }, { personId: "me" },
+  ]});
+  check("one person per room is the same as no rooms at all",
+    owes(byRoom), owes(byHead));
+}
+
+{
+  // A stated amount still comes off the top; the rooms divide what's left.
+  const r = one({ participants: [
+    { personId: "alice", amount: 100 },
+    { personId: "bob", room: "Main" },
+    { personId: "kit", room: "Main" },
+    { personId: "me",  room: "Bunk" },
+  ]});
+  check("a fixed share is taken before the rooms divide the rest", owes(r),
+    { alice: 10000, bob: 13500, kit: 13500, me: 27000 });
+  assertReconciles("a fixed share plus rooms reconciles", r);
+}
+
+{
+  // Everyone on the couch leaves the bill with whoever paid rather than
+  // dividing it between nobody.
+  const r = one({ participants: [
+    { personId: "alice", couch: true }, { personId: "kit", couch: true },
+  ]});
+  check("a houseful of couch sleepers leaves the bill with the payer", owes(r),
+    { alice: 0, kit: 0, me: 64000 });
+  assertReconciles("all-couch reconciles", r);
+}
+
+{
+  // A household can take a room as one subject.
+  const r = one({ participants: [
+    { groupId: "fam", room: "Main" },
+    { personId: "me", room: "Bunk" },
+  ]});
+  // Two rooms, so $320 each. The household is one occupant of its room, so
+  // it takes the whole $320 and halves it between its two members.
+  check("a household in a room splits that room between its members", owes(r),
+    { mika: 16000, jordan: 16000, me: 32000 });
+  assertReconciles("a household in a room reconciles", r);
+}
+
 // ---- damaged data ---------------------------------------------------------
 // A share row has to point at a person or a household. When it points at
 // neither — which repointing the shares at the master people list can leave

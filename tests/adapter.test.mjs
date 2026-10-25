@@ -207,6 +207,66 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
     api.rentalOurPortion(trip.rentals[0]), 250);
 }
 
+// ---- lodging rooms, as stored -------------------------------------------
+
+{
+  // A cabin with two bedrooms and a couch, the way the rows come back.
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-eug", room: "Main" },
+      { rental_id: "r1", person_id: "p-chr", room: "Main" },
+      { rental_id: "r1", person_id: "p-me",  room: "Bunk" },
+      { rental_id: "r1", person_id: "p-jay", is_couch: true },
+    ],
+  });
+  const m = api.tripMoney(trip);
+  check("two bedrooms split the cabin, the couch pays nothing", owed(m),
+    { Me: 450, Eugene: 225, Christine: 225, Jay: 0 });
+  check("the couch is named as such",
+    [...(m.freeFor.get("p-jay") || [])], ["on the couch"]);
+  check("and nobody else is flagged", [...m.freeFor.keys()], ["p-jay"]);
+  check("your own share follows the rooms", api.rentalOurPortion(trip.rentals[0]), 450);
+}
+
+{
+  // Sharing a room must not cost double. Same cabin, same four people, but
+  // everyone in their own room.
+  const rooms = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-eug", room: "Main" },
+      { rental_id: "r1", person_id: "p-chr", room: "Main" },
+      { rental_id: "r1", person_id: "p-me",  room: "Bunk" },
+    ],
+  });
+  const heads = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-eug" },
+      { rental_id: "r1", person_id: "p-chr" },
+      { rental_id: "r1", person_id: "p-me" },
+    ],
+  });
+  check("by room, the couple pay for one room between them",
+    owed(rooms.api.tripMoney(rooms.trip))["Eugene"], 225);
+  check("by head, they'd each pay a third",
+    owed(heads.api.tripMoney(heads.trip))["Eugene"], 300);
+}
+
+{
+  // Rooms on a booking with no shares at all behave as before.
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+  });
+  check("no shares, no rooms — the whole bill is yours", owed(api.tripMoney(trip)),
+    { Me: 900, Eugene: 0, Christine: 0, Jay: 0 });
+}
+
 // ---- damaged data ---------------------------------------------------------
 
 {

@@ -784,6 +784,9 @@
   .person-self{font-size:11.5px;color:var(--muted);border:1px solid var(--line);
       border-radius:20px;padding:2px 9px;white-space:nowrap}
   @media (max-width:720px){ .person-card-main{grid-template-columns:1fr} }
+  .bp-room{min-width:0;flex:0 1 110px}
+  .summary-room{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--muted);margin-right:4px}
   .people-ledger{width:100%;margin-top:6px}
   .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
   .person-row{display:flex;align-items:center;gap:9px;font-size:13px;padding:3px 0}
@@ -1852,7 +1855,10 @@ async function loadTrips(){
     flightStopsAvailable = "stops_out" in sample;
   }
   const bpSample = data.flatMap(t => t.booking_people || [])[0];
-  if (bpSample) companionPassAvailable = "is_companion" in bpSample;
+  if (bpSample){
+    companionPassAvailable = "is_companion" in bpSample;
+    lodgingRoomsAvailable = "room" in bpSample;
+  }
   return data;
 }
 
@@ -1975,6 +1981,8 @@ let tripAlternativeAvailable = true;
 let flightStopsAvailable = true;
 // booking_people.is_companion — see the note by flightAirlineAvailable.
 let companionPassAvailable = true;
+// booking_people.room / is_couch — likewise.
+let lodgingRoomsAvailable = true;
 
 async function loadWishlistBoards(){
   const withReactions =
@@ -2270,6 +2278,7 @@ async function saveBookingPeople(tripId, kind, id, rows){
     reference: r.reference || null,
     cost: r.cost ?? null, cost_percent: r.costPercent ?? null,
     ...(companionPassAvailable ? { is_companion: !!r.isCompanion } : {}),
+    ...(lodgingRoomsAvailable ? { room: r.room || null, is_couch: !!r.isCouch } : {}),
   }));
   let { error } = await supabase.from("booking_people").insert(build());
   // PGRST204 is "no such column" — the companion-pass migration hasn't run.
@@ -2279,6 +2288,7 @@ async function saveBookingPeople(tripId, kind, id, rows){
   // nothing to inspect when there are no rows yet.
   if (error && error.code === "PGRST204"){
     companionPassAvailable = false;
+    lodgingRoomsAvailable = false;
     ({ error } = await supabase.from("booking_people").insert(build()));
   }
   if (error) alert(error.message);
@@ -2319,15 +2329,25 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
   }
   const byKey = new Map((existing || []).map(b =>
     [b.group_id ? `g:${b.group_id}` : `p:${b.person_id}`, b]));
+  // Rooms already named on this booking, offered as suggestions — the second
+  // person into a room should pick the name, not retype it, since two
+  // spellings would read as two rooms and halve the cost twice.
+  const namedRooms = [...new Set((existing || []).map(b => b.room).filter(Boolean))];
   return `
     <div class="form-section">Who's on this booking <span class="field-opt">(leave empty if it's all yours)</span></div>
     <div class="field span2">
+      ${kind !== "flight" && lodgingRoomsAvailable ? `<datalist id="bp-rooms-${prefix}">
+        ${namedRooms.map(r => `<option value="${esc(r)}"></option>`).join("")}
+      </datalist>` : ""}
       <div class="booking-people">
         ${subjects.map(sub => {
           const row = byKey.get(sub.key);
           // Whichever column was filled in decides which unit shows.
           const isPct = row ? (row.cost == null && row.cost_percent != null) : false;
           const companion = !!row?.is_companion;
+          const couch = !!row?.is_couch;
+          const freeSeat = companion || couch;
+          const rooms = kind !== "flight" && lodgingRoomsAvailable;
           const val = row ? (isPct ? row.cost_percent : row.cost) : "";
           // A seat is priced per person, so a flight share starts at one
           // ticket rather than blank. Housing has no such natural unit.
@@ -2339,16 +2359,21 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
             </label>
             <input type="text" data-${prefix}-bp-ref="${sub.key}" placeholder="their reference"
               value="${esc(row?.reference || "")}">
+            ${rooms ? `<input type="text" class="bp-room" data-${prefix}-bp-room="${sub.key}"
+              list="bp-rooms-${prefix}" placeholder="room" aria-label="Room"
+              value="${esc(row?.room || "")}" ${couch ? "disabled" : ""}>` : ""}
             <span class="bp-share">
               <input type="number" step="0.01" data-${prefix}-bp-val="${sub.key}"
                 data-ticket="${kind === "flight" ? ticket : ""}"
                 placeholder="${kind === "flight" && ticket ? fmtCash(ticket, bookingRow.currency) : "share"}"
-                value="${companion ? "" : (val ?? "")}" ${companion ? "disabled" : ""}>
+                value="${freeSeat ? "" : (val ?? "")}" ${freeSeat ? "disabled" : ""}>
               <select data-${prefix}-bp-unit="${sub.key}" aria-label="Share unit">
-                <option value="amount" ${isPct || companion ? "" : "selected"}>$</option>
+                <option value="amount" ${isPct || freeSeat ? "" : "selected"}>$</option>
                 <option value="percent" ${isPct ? "selected" : ""}>%</option>
                 ${kind === "flight" && companionPassAvailable
                   ? `<option value="companion" ${companion ? "selected" : ""}>pass</option>` : ""}
+                ${rooms
+                  ? `<option value="couch" ${couch ? "selected" : ""}>couch</option>` : ""}
               </select>
             </span>
           </div>`;
@@ -2360,7 +2385,11 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
         A share left blank takes an equal cut of whatever the others haven't claimed.${
         kind === "flight" && companionPassAvailable
           ? ` Set the unit to <b>pass</b> for a companion seat — it costs its passenger
-             nothing, and the summary says so rather than showing a bare $0.00.` : ""}</span>
+             nothing, and the summary says so rather than showing a bare $0.00.` : ""}${
+        kind !== "flight" && lodgingRoomsAvailable
+          ? ` Name a <b>room</b> and the cost divides between rooms rather than between
+             people, so sharing one doesn't cost double. Anyone not taking a bedroom
+             goes down as <b>couch</b> — listed, and charged nothing.` : ""}</span>
     </div>`;
 }
 
@@ -2372,16 +2401,21 @@ function readBookingPeople(container, prefix){
     const raw = container.querySelector(`[data-${prefix}-bp-val="${key}"]`)?.value;
     const unit = container.querySelector(`[data-${prefix}-bp-unit="${key}"]`)?.value;
     const num = raw === "" || raw == null ? null : parseFloat(raw);
-    // A companion seat is a stated share of nothing — not a blank, which
-    // would take an equal cut of whatever is left.
+    // A companion seat or a couch is a stated share of nothing — not a blank,
+    // which would take an equal cut of whatever is left.
     const companion = unit === "companion";
+    const couch = unit === "couch";
+    const free = companion || couch;
     rows.push({
       personId: key.startsWith("p:") ? key.slice(2) : null,
       groupId: key.startsWith("g:") ? key.slice(2) : null,
       reference: container.querySelector(`[data-${prefix}-bp-ref="${key}"]`)?.value.trim() || null,
-      cost: companion ? 0 : (unit === "percent" ? null : num),
-      costPercent: companion ? null : (unit === "percent" ? num : null),
+      cost: free ? 0 : (unit === "percent" ? null : num),
+      costPercent: free ? null : (unit === "percent" ? num : null),
       isCompanion: companion,
+      isCouch: couch,
+      room: couch ? null
+           : (container.querySelector(`[data-${prefix}-bp-room="${key}"]`)?.value.trim() || null),
     });
   });
   return rows;
@@ -3385,6 +3419,10 @@ function splitCents(total, n){
 //              flown on a companion pass — which is arithmetically the same
 //              as amount: 0 but reported differently, because "$0.00" and
 //              "didn't cost anything, here's why" are not the same claim.
+//              { couch: true } is the lodging equivalent: on the booking,
+//              not in a bedroom, so not paying for one.
+//              { room: "Main bedroom" } makes a blank share divide by room
+//              rather than by head — see the note where that happens.
 //
 // Returns per-person totals, a per-booking breakdown showing how each figure
 // was arrived at, and warnings for the two situations where the arithmetic
@@ -3454,7 +3492,7 @@ function settleTrip(input){
     const fixed = [];
     const evenly = [];
     for (const p of parts){
-      if (p.companion){
+      if (p.companion || p.couch){
         fixed.push([p, 0]);
       } else if (p.amount != null && p.amount !== ""){
         const c = toCents(p.amount);
@@ -3467,8 +3505,8 @@ function settleTrip(input){
     const orphaned = [];
     for (const [p, c] of fixed){
       if (!charge(p, c, per)){ unassignedCents += c; orphaned.push(c); continue; }
-      lines.push({ subject: label(p), cents: c,
-                   why: p.companion ? "companion"
+      lines.push({ subject: label(p), cents: c, room: p.room || null,
+                   why: p.couch ? "couch" : p.companion ? "companion"
                       : p.amount != null && p.amount !== "" ? "amount" : "percent" });
     }
 
@@ -3478,16 +3516,36 @@ function settleTrip(input){
       // inventing a correction, and say so — it's a typo, not a position.
       warnings.push({ kind: "over", booking: b.id, label: b.label, byCents: -rest });
     } else if (rest > 0){
-      if (evenly.length){
-        splitCents(rest, evenly.length).forEach((c, i) => {
-          if (!charge(evenly[i], c, per)){ unassignedCents += c; orphaned.push(c); return; }
-          lines.push({ subject: label(evenly[i]), cents: c, why: "even" });
+      // What's left divides by room, not by head. A lodging cost is really a
+      // price for a set of bedrooms, so two people sharing one shouldn't pay
+      // twice what one person in the next room pays.
+      //
+      // Someone with no room named counts as a room of their own. That is
+      // what makes this the same arithmetic as a plain per-person split when
+      // no rooms are in use — one occupant each, one share each — rather
+      // than a second code path that has to be kept in step with the first.
+      const rooms = [];
+      const byRoom = new Map();
+      for (const p of evenly){
+        const key = p.room ? `room:${p.room}` : `solo:${label(p)}`;
+        if (!byRoom.has(key)){ byRoom.set(key, []); rooms.push(key); }
+        byRoom.get(key).push(p);
+      }
+      if (rooms.length){
+        splitCents(rest, rooms.length).forEach((roomCents, i) => {
+          const sharing = byRoom.get(rooms[i]);
+          splitCents(roomCents, sharing.length).forEach((c, j) => {
+            const p = sharing[j];
+            if (!charge(p, c, per)){ unassignedCents += c; orphaned.push(c); return; }
+            lines.push({ subject: label(p), cents: c, room: p.room || null,
+                         why: p.room ? "room" : "even" });
+          });
         });
       } else if (payer){
         // Nobody else is on it, so it stays with whoever paid. Without this
         // the money would simply vanish from the ledger.
         charge({ personId: payer }, rest, per);
-        lines.push({ subject: payer, cents: rest, why: "payer" });
+        lines.push({ subject: payer, cents: rest, room: null, why: "payer" });
       }
     }
     if (orphaned.length){
@@ -3541,6 +3599,8 @@ function settlementBooking(trip, kind, row){
       amount: x.cost,
       percent: x.cost == null ? x.cost_percent : null,
       companion: !!x.is_companion,
+      couch: !!x.is_couch,
+      room: x.room || null,
     })),
   };
 }
@@ -3611,11 +3671,17 @@ function tripMoney(trip){
       .map(w => ({ label: w.label, by: fromCents(w.byCents) })),
     orphans: r.warnings.filter(w => w.kind === "orphan")
       .map(w => ({ label: w.label, shares: w.shares, by: fromCents(w.byCents) })),
-    // Who flew on a pass, so a zero in the table can say why it's a zero.
-    // Normalised to the same ids as `rows`, so the view just asks the set.
-    companions: new Set(r.breakdown.flatMap(b => b.lines
-      .filter(l => l.why === "companion")
-      .map(l => l.subject === SELF ? (self?.id || null) : l.subject))),
+    // Why someone's figure is zero — a companion seat, a night on the couch.
+    // Keyed the same way as `rows`, so the view just asks.
+    freeFor: r.breakdown.reduce((m, b) => {
+      for (const l of b.lines){
+        if (l.why !== "companion" && l.why !== "couch") continue;
+        const id = l.subject === SELF ? (self?.id || null) : l.subject;
+        if (!m.has(id)) m.set(id, new Set());
+        m.get(id).add(l.why === "companion" ? "companion pass" : "on the couch");
+      }
+      return m;
+    }, new Map()),
     byBooking: new Map(r.breakdown.map(b => [b.id, b])),
   };
 }
@@ -3643,6 +3709,43 @@ function settleOne(trip, kind, row){
 // Your share of one booking.
 function myShareOf(trip, kind, row){
   return fromCents(settleOne(trip, kind, row)?.perPerson[selfId()] || 0);
+}
+
+// How each figure on a booking was arrived at, for the tooltip on its name.
+const SHARE_BASIS = {
+  amount: "entered as a flat amount",
+  percent: "a percentage of the booking",
+  even: "an equal cut of what was left over",
+  room: "their room's share, divided between the people in it",
+  couch: "not taking a bedroom, so not paying for one",
+  companion: "flown on a companion pass, so it cost them nothing",
+  payer: "the remainder, left with whoever paid",
+};
+
+// The per-person figures on one booking, as display parts. Rooms are grouped
+// under their name when any are in use, because "Main bedroom: Eugene,
+// Christine" is the shape of the answer — a room is the thing being paid
+// for, and the people are how it divides.
+function shareParts(trip, b){
+  const one = l => `<span title="${esc(SHARE_BASIS[l.why] || "")}">${
+    esc(settlementSubjectName(trip, l.subject))} <b>${
+    l.why === "couch" ? "no charge"
+    : l.why === "companion" ? "companion pass"
+    : fmtCash(fromCents(l.cents), "USD")}</b></span>`;
+
+  if (!b.lines.some(l => l.room || l.why === "couch")) return b.lines.map(one);
+
+  const order = [];
+  const byRoom = new Map();
+  for (const l of b.lines){
+    const key = l.room || (l.why === "couch" ? "Couch" : "");
+    if (!byRoom.has(key)){ byRoom.set(key, []); order.push(key); }
+    byRoom.get(key).push(l);
+  }
+  return order.map(key => {
+    const who = byRoom.get(key).map(one).join(", ");
+    return key ? `<span class="summary-room">${esc(key)}</span> ${who}` : who;
+  });
 }
 
 // The name against one line of a breakdown, whether it's a person or a
@@ -3678,13 +3781,6 @@ function renderTripSummary(trip){
   // views disagreeing is the bug this whole rewrite exists to kill, and the
   // only way to be sure they can't is for one of them not to do any
   // arithmetic. Hovering a name says how its figure was arrived at.
-  const basis = {
-    amount: "entered as a flat amount",
-    percent: "a percentage of the booking",
-    even: "an equal cut of what was left over",
-    payer: "the remainder, left with whoever paid",
-    companion: "flown on a companion pass, so it cost them nothing",
-  };
   const costFor = (kind, row) => {
     const b = money.byBooking.get(row.id);
     if (!b || !b.totalCents) return "";
@@ -3692,9 +3788,7 @@ function renderTripSummary(trip){
     // so don't restate it as a one-line split paid by you.
     const allYours = b.lines.length === 1 && b.lines[0].why === "payer"
       && b.lines[0].subject === selfId();
-    const parts = allYours ? [] : b.lines.map(l =>
-      `<span title="${esc(basis[l.why] || "")}">${esc(settlementSubjectName(trip, l.subject))} <b>${
-        l.why === "companion" ? "companion pass" : fmt(fromCents(l.cents))}</b></span>`);
+    const parts = allYours ? [] : shareParts(trip, b);
     return `<div class="summary-cost"><span class="summary-cost-total">${
       fmt(fromCents(b.totalCents))}</span>${parts.length ? ` — ${parts.join(" · ")}` : ""}${
       allYours ? "" : ` <span class="field-opt">paid by ${esc(personName(trip, b.payer))}</span>`}</div>`;
@@ -3768,8 +3862,9 @@ function renderTripSummary(trip){
         <table class="hist summary-money">
           <tr><th>Person</th><th>Their share</th><th>They paid</th><th>Net</th></tr>
           ${money.rows.map(r => `<tr>
-            <td>${esc(r.name)}${money.companions.has(r.personId)
-              ? ` <span class="field-opt">companion pass</span>` : ""}</td>
+            <td>${esc(r.name)}${money.freeFor.has(r.personId)
+              ? ` <span class="field-opt">${esc([...money.freeFor.get(r.personId)].join(", "))}</span>`
+              : ""}</td>
             <td>${fmt(r.owes)}</td>
             <td>${fmt(r.paid)}</td>
             <td class="${r.net > 0.005 ? "down" : r.net < -0.005 ? "up" : "flat"}">${
