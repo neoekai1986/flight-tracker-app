@@ -2232,7 +2232,7 @@ function tripPeople(trip){ return (trip?.trip_people || []); }
 // list, so looking these up through the trip roster stopped resolving and
 // everything came back as "Someone".
 function personName(trip, id){
-  if (!id) return selfPerson()?.name || "You";
+  if (!id || id === "self") return selfPerson()?.name || "You";
   return personById(id)?.name
     || tripPeople(trip).find(p => p.id === id)?.name   // pre-repoint rows
     || "Someone";
@@ -2316,7 +2316,7 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           const val = row ? (isPct ? row.cost_percent : row.cost) : "";
           // A seat is priced per person, so a flight share starts at one
           // ticket rather than blank. Housing has no such natural unit.
-          const ticket = kind === "flight" ? flightTicketCost(row ? bookingRow : bookingRow) : 0;
+          const ticket = kind === "flight" ? flightTicketCost(bookingRow) : 0;
           return `<div class="bp-row" data-bp-row="${sub.key}">
             <label class="bp-who">
               <input type="checkbox" data-${prefix}-bp-on="${sub.key}" ${row ? "checked" : ""}>
@@ -3317,132 +3317,303 @@ function renderFilterRail(trip){
 // What one person owes, and what they laid out. A booking with no per-person
 // rows sits wholly on whoever paid it, which by default is you — so a trip
 // with nothing filled in still adds up.
-// What a booking actually cost, in money. An award flight is a real cost to
-// whoever redeemed the points, so it converts at the rate recorded on it —
-// without one it contributes nothing, which is how points bookings used to
-// disappear from the ledger entirely.
-function bookingTotal(kind, row){
-  if (kind === "flight"){
-    const n = row.passengers || 1;
-    const cash = (row.paid_cash || 0) * n;
-    const pts = (row.paid_points || 0) * n;
-    const rate = Number(row.points_cents);
-    return cash + (pts && rate ? pts * rate / 100 : 0);
-  }
-  return row.paid_cash || 0;
+// ---------------- Settlement ----------------
+//
+// One pure function decides who owes what. It takes plain data and returns
+// plain data: no DOM, no database, no globals — which is what lets
+// tests/settlement.test.mjs exercise it directly. Run it with
+// `node tests/settlement.test.mjs` after touching anything here.
+//
+// Money is integer cents all the way through. Dollars as floats were why
+// totals drifted: a three-way split of $640 is 213.333…, and three of those
+// rounded for display sum to $639.99. Cents make "the shares add up to the
+// total" an exact statement rather than an approximate one.
+
+const toCents = v => Math.round((Number(v) || 0) * 100);
+const fromCents = c => c / 100;
+
+// What a booking cost. Flights are priced per seat; points are worth nothing
+// until a rate says otherwise, which is a fact worth surfacing rather than
+// hiding (see the "unpriced" warning below).
+function bookingCents(b){
+  const n = b.kind === "flight" ? (b.passengers || 1) : 1;
+  const cash = toCents(b.paidCash) * n;
+  const rate = Number(b.pointsCents) || 0;
+  const pts = (Number(b.paidPoints) || 0) * n;
+  return cash + (rate ? Math.round(pts * rate) : 0);
 }
 
-// What one seat on this flight costs. paid_cash and paid_points are already
-// per passenger, so this is them plus whatever the points convert to — the
-// figure a single traveller on the booking owes.
-function flightTicketCost(f){
-  const cash = Number(f.paid_cash) || 0;
-  const pts = Number(f.paid_points) || 0;
-  const rate = Number(f.points_cents) || 0;
-  return cash + (pts && rate ? pts * rate / 100 : 0);
+// Divide cents n ways so the parts sum to exactly the whole. The leftover
+// pennies go to the earliest subjects rather than being rounded away.
+function splitCents(total, n){
+  if (n <= 0) return [];
+  const base = Math.floor(total / n);
+  let rest = total - base * n;
+  return Array.from({ length: n }, () => base + (rest-- > 0 ? 1 : 0));
 }
 
-// A share is a flat amount or a slice of the booking, never both — whichever
-// was filled in is the one that means anything.
-function shareAmount(row, total){
-  if (row.cost != null) return Number(row.cost) || 0;
-  if (row.cost_percent != null) return (Number(row.cost_percent) || 0) / 100 * total;
-  return null;
-}
+// input: { bookings: [{ id, label, kind, paidCash, paidPoints, pointsCents,
+//                       passengers, paidBy, participants: [...] }],
+//          groupMembers: { groupId: [personId] }, selfId }
+// participant: { personId } | { groupId }, optionally with { amount } or
+//              { percent }. Neither means "an equal cut of what's left".
+//
+// Returns per-person totals, a per-booking breakdown showing how each figure
+// was arrived at, and warnings for the two situations where the arithmetic
+// can't mean what it appears to.
+function settleTrip(input){
+  const groupMembers = input.groupMembers || {};
+  const people = {};
+  const warnings = [];
+  const breakdown = [];
+  let totalCents = 0;
+  // Money that belongs to the trip but to no person. Always zero with sound
+  // data; reported rather than hidden when it isn't, because the alternative
+  // is a set of totals that quietly don't sum to the trip cost.
+  let unassignedCents = 0;
 
-function tripMoney(trip){
-  // Keyed on master-people ids throughout: payers and shares point at the
-  // master list now, so the roster is only "who's on this trip" and isn't
-  // needed to attribute money.
-  const ledger = new Map();
-  const self = selfPerson();
-  // Seed with everyone on the trip, so somebody you've added but not yet
-  // given a share to still appears — at zero, which is the thing you need to
-  // see. Filtering to non-zero rows hid exactly the people you'd want to
-  // check up on.
-  const seedRoster = () => {
-    for (const tp of tripPeople(trip)){
-      const p = personById(tp.person_id);
-      if (p && !ledger.has(p.id)) ledger.set(p.id, { personId: p.id, name: p.name, owes: 0, paid: 0 });
+  const person = id => (people[id] = people[id] || { owesCents: 0, paidCents: 0 });
+  // A household owes as one and settles as one, but each member needs a
+  // number of their own for their running total, so its share divides here.
+  // `into` collects the same figures per booking, which is what lets a card
+  // show your share of one thing and the trip table show your share overall
+  // without the two being computed separately and disagreeing.
+  // Returns false when there's nobody to charge — a share row pointing at
+  // neither a person nor a household, or a household with no members. That
+  // happens with damaged data, and the money must not simply disappear:
+  // the caller records it as unassigned and the summary says so. Counting
+  // such a share against the total while charging it to no one is precisely
+  // how a ledger ends up not adding up.
+  const charge = (subject, cents, into) => {
+    const add = (id, c) => {
+      person(id).owesCents += c;
+      if (into) into[id] = (into[id] || 0) + c;
+    };
+    if (subject.groupId){
+      const members = groupMembers[subject.groupId] || [];
+      if (!members.length) return false;
+      splitCents(cents, members.length).forEach((c, i) => add(members[i], c));
+      return true;
     }
-    if (self && !ledger.has(self.id)) ledger.set(self.id, { personId: self.id, name: self.name, owes: 0, paid: 0 });
+    if (subject.personId){ add(subject.personId, cents); return true; }
+    return false;
   };
-  const entryFor = (personId) => {
-    const id = personId || self?.id || "__you__";
-    if (!ledger.has(id)){
-      ledger.set(id, { personId: id === "__you__" ? null : id,
-        name: personById(id)?.name || self?.name || "You", owes: 0, paid: 0 });
-    }
-    return ledger.get(id);
-  };
-  // A household share is owed by the household. Split it evenly across its
-  // members for the ledger so each person's running total is meaningful; the
-  // People page adds them back up under the household name.
-  const chargeGroup = (groupId, amount) => {
-    const members = people.filter(p => p.group_id === groupId);
-    if (!members.length) return;
-    const each = amount / members.length;
-    for (const m of members) entryFor(m.id).owes += each;
-  };
-  const over = [];
-  // Points with no conversion rate have no money value, so the booking counts
-  // as nothing and quietly shrinks every total it should be part of. Collect
-  // them so the summary can say so instead of just being wrong.
-  const unpriced = [];
-  seedRoster();
+  const label = subject => subject.groupId ? `group:${subject.groupId}` : subject.personId;
 
-  const bookings = [
-    ...(trip.flights || []).filter(f => f.status !== "watching")
-      .map(f => ({ kind: "flight", row: f, total: bookingTotal("flight", f) })),
-    ...(trip.rentals || []).filter(r => r.status !== "watching")
-      .map(r => ({ kind: "rental", row: r, total: bookingTotal("rental", r) })),
-  ];
+  for (const b of (input.bookings || [])){
+    const total = bookingCents(b);
+    totalCents += total;
+    const payer = b.paidBy || input.selfId;
+    if (payer) person(payer).paidCents += total;
 
-  for (const b of bookings){
-    if (!b.total && b.kind === "flight" && b.row.paid_points && !b.row.points_cents){
-      unpriced.push(b.row.label);
+    if (!total && (Number(b.paidPoints) || 0) > 0 && !(Number(b.pointsCents) || 0)){
+      warnings.push({ kind: "unpriced", booking: b.id, label: b.label });
     }
-    entryFor(b.row.paid_by).paid += b.total;
-    const shares = bookingPeopleFor(trip, b.kind, b.row.id);
-    const priced = shares.map(x => ({ ...x, amount: shareAmount(x, b.total) }));
-    const stated = priced.filter(x => x.amount != null);
-    // Ticked with the amount left blank. Putting someone on a booking is a
-    // statement that it's partly theirs, so they take an equal cut of
-    // whatever hasn't been claimed — previously they were skipped entirely
-    // and owed nothing, which made ticking them do nothing at all.
-    const unstated = priced.filter(x => x.amount == null);
-    for (const x of stated){
-      if (x.group_id) chargeGroup(x.group_id, x.amount);
-      else entryFor(x.person_id).owes += x.amount;
+
+    const parts = b.participants || [];
+    // Register everyone on the booking up front. Otherwise a booking that
+    // works out to nothing — an award seat with no rate set — leaves its
+    // participants absent entirely rather than visibly owing nothing.
+    for (const p of parts){
+      if (p.groupId) (groupMembers[p.groupId] || []).forEach(m => person(m));
+      else if (p.personId) person(p.personId);
     }
-    const claimed = stated.reduce((n, x) => n + x.amount, 0);
-    const remainder = b.total - claimed;
-    if (remainder > 0.005){
-      if (unstated.length){
-        // A household is one subject here, matching how it's offered in the
-        // form: one row, one share. Its cut then divides among its members.
-        const each = remainder / unstated.length;
-        for (const x of unstated){
-          if (x.group_id) chargeGroup(x.group_id, each);
-          else entryFor(x.person_id).owes += each;
-        }
-      } else {
-        // Nobody else is on it, so it stays with whoever paid rather than
-        // vanishing — the owed column still reconciles against what was spent.
-        entryFor(b.row.paid_by).owes += remainder;
+    const lines = [];
+    const per = {};
+    // Explicit figures first — they're statements of fact, not shares of a
+    // remainder, so they don't depend on who else is on the booking.
+    let claimed = 0;
+    const fixed = [];
+    const evenly = [];
+    for (const p of parts){
+      if (p.amount != null && p.amount !== ""){
+        const c = toCents(p.amount);
+        fixed.push([p, c]); claimed += c;
+      } else if (p.percent != null && p.percent !== ""){
+        const c = Math.round(total * (Number(p.percent) || 0) / 100);
+        fixed.push([p, c]); claimed += c;
+      } else evenly.push(p);
+    }
+    const orphaned = [];
+    for (const [p, c] of fixed){
+      if (!charge(p, c, per)){ unassignedCents += c; orphaned.push(c); continue; }
+      lines.push({ subject: label(p), cents: c,
+                   why: p.amount != null && p.amount !== "" ? "amount" : "percent" });
+    }
+
+    const rest = total - claimed;
+    if (rest < 0){
+      // The parts exceed the whole. Honour what was entered rather than
+      // inventing a correction, and say so — it's a typo, not a position.
+      warnings.push({ kind: "over", booking: b.id, label: b.label, byCents: -rest });
+    } else if (rest > 0){
+      if (evenly.length){
+        splitCents(rest, evenly.length).forEach((c, i) => {
+          if (!charge(evenly[i], c, per)){ unassignedCents += c; orphaned.push(c); return; }
+          lines.push({ subject: label(evenly[i]), cents: c, why: "even" });
+        });
+      } else if (payer){
+        // Nobody else is on it, so it stays with whoever paid. Without this
+        // the money would simply vanish from the ledger.
+        charge({ personId: payer }, rest, per);
+        lines.push({ subject: payer, cents: rest, why: "payer" });
       }
     }
-    // Shares adding up to more than the booking cost is a typo, not a
-    // position worth representing — say so rather than quietly producing
-    // a ledger that can't reconcile.
-    else if (remainder < -0.005) over.push({ label: b.row.label, by: -remainder });
+    if (orphaned.length){
+      warnings.push({ kind: "orphan", booking: b.id, label: b.label,
+                      shares: orphaned.length,
+                      byCents: orphaned.reduce((n, c) => n + c, 0) });
+    }
+    breakdown.push({ id: b.id, label: b.label, totalCents: total, payer, lines, perPerson: per });
   }
 
-  // Everyone stays in. A zero row says "nothing assigned to them yet", which
-  // is information; dropping it just made them vanish.
-  const rows = [...ledger.values()];
-  return { rows: rows.map(e => ({ ...e, net: e.paid - e.owes })), over, unpriced,
-           total: bookings.reduce((n, b) => n + b.total, 0) };
+  for (const p of Object.values(people)) p.netCents = p.paidCents - p.owesCents;
+  return { people, totalCents, unassignedCents, breakdown, warnings };
+}
+
+// ---------------- Settlement, as the app sees it ----------------
+//
+// settleTrip() above knows nothing about the database. Everything below
+// translates: stored rows in, dollars out. Keeping the translation separate
+// from the arithmetic is what makes the arithmetic testable, and it means
+// there is exactly one place where a number is decided and one place where
+// it is formatted.
+//
+// Nothing here recomputes a share. If you need a figure, take it from the
+// settlement result. Three earlier attempts at this went wrong because the
+// cards, the summary table and the stats each worked a share out for
+// themselves and drifted apart.
+
+// Stands in for "me" when no person is flagged as self. Without it an
+// unclaimed remainder would have nowhere to land and the totals would come
+// up short rather than visibly sitting with the payer.
+const SELF = "self";
+const selfId = () => selfPerson()?.id || SELF;
+
+// One stored booking as settlement input. Rentals have no points rate — the
+// column is on flights only — so an award-booked rental reads as unpriced,
+// which is reported rather than quietly counted as nothing.
+function settlementBooking(trip, kind, row){
+  return {
+    id: row.id,
+    label: row.label,
+    kind,
+    paidCash: row.paid_cash,
+    paidPoints: row.paid_points,
+    pointsCents: kind === "flight" ? row.points_cents : null,
+    passengers: kind === "flight" ? (row.passengers || 1) : 1,
+    paidBy: row.paid_by || selfId(),
+    participants: bookingPeopleFor(trip, kind, row.id).map(x => ({
+      personId: x.group_id ? null : x.person_id,
+      groupId: x.group_id || null,
+      // Whichever column was filled in decides the unit, matching the form.
+      amount: x.cost,
+      percent: x.cost == null ? x.cost_percent : null,
+    })),
+  };
+}
+
+// Only booked items. A watching item is a price being tracked, not a
+// commitment, and folding it in would invent debts that nobody owes.
+function settlementBookings(trip){
+  const out = [];
+  for (const f of (trip.flights || []))
+    if (f.status !== "watching") out.push(settlementBooking(trip, "flight", f));
+  for (const r of (trip.rentals || []))
+    if (r.status !== "watching") out.push(settlementBooking(trip, "rental", r));
+  return out;
+}
+
+// Households as member lists, narrowed to whoever is actually on this trip —
+// a relative who stayed home shouldn't take a share of the cabin. If none of
+// a household is on the roster the whole household stands, because charging
+// a group with no members would drop the money entirely.
+function settlementGroups(trip){
+  const roster = new Set(tripPeople(trip).map(tp => tp.person_id));
+  const out = {};
+  for (const g of personGroups){
+    const all = people.filter(p => p.group_id === g.id).map(p => p.id);
+    const here = all.filter(id => roster.has(id));
+    if (all.length) out[g.id] = here.length ? here : all;
+  }
+  return out;
+}
+
+function settlementFor(trip){
+  return settleTrip({
+    bookings: settlementBookings(trip),
+    groupMembers: settlementGroups(trip),
+    selfId: selfId(),
+  });
+}
+
+// The settlement in the shape the views want: dollars, named people, and the
+// per-booking breakdown keyed by booking id.
+function tripMoney(trip){
+  const r = settlementFor(trip);
+  // Everyone on the trip gets a row, even at zero. "Nothing assigned to them
+  // yet" is information, and it's the first thing you look for when a figure
+  // seems wrong — filtering those rows out just made people vanish.
+  const ids = new Set(Object.keys(r.people));
+  for (const tp of tripPeople(trip)) if (tp.person_id) ids.add(tp.person_id);
+  const self = selfPerson();
+  if (self) ids.add(self.id);
+  const rows = [...ids]
+    .map(id => {
+      const v = r.people[id] || { owesCents: 0, paidCents: 0, netCents: 0 };
+      return {
+        personId: id === SELF ? (self?.id || null) : id,
+        name: personName(trip, id),
+        owes: fromCents(v.owesCents),
+        paid: fromCents(v.paidCents),
+        net: fromCents(v.netCents),
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    rows,
+    total: fromCents(r.totalCents),
+    unassigned: fromCents(r.unassignedCents),
+    unpriced: r.warnings.filter(w => w.kind === "unpriced").map(w => w.label),
+    over: r.warnings.filter(w => w.kind === "over")
+      .map(w => ({ label: w.label, by: fromCents(w.byCents) })),
+    orphans: r.warnings.filter(w => w.kind === "orphan")
+      .map(w => ({ label: w.label, shares: w.shares, by: fromCents(w.byCents) })),
+    byBooking: new Map(r.breakdown.map(b => [b.id, b])),
+  };
+}
+
+// What a single seat costs, for the per-person default on a flight form.
+function flightTicketCost(f){
+  return fromCents(bookingCents({
+    kind: "flight", paidCash: f.paid_cash, paidPoints: f.paid_points,
+    pointsCents: f.points_cents, passengers: 1,
+  }));
+}
+
+// One booking settled on its own, as a breakdown entry. The cards and the
+// planner need figures for watching items too, and those are deliberately
+// absent from the trip-wide settlement.
+function settleOne(trip, kind, row){
+  const r = settleTrip({
+    bookings: [settlementBooking(trip, kind, row)],
+    groupMembers: settlementGroups(trip),
+    selfId: selfId(),
+  });
+  return r.breakdown[0] || null;
+}
+
+// Your share of one booking.
+function myShareOf(trip, kind, row){
+  return fromCents(settleOne(trip, kind, row)?.perPerson[selfId()] || 0);
+}
+
+// The name against one line of a breakdown, whether it's a person or a
+// household. Group lines carry the group's id, since a household is charged
+// as one subject even though the figure divides between its members.
+function settlementSubjectName(trip, sub){
+  return sub.startsWith("group:") ? (groupById(sub.slice(6))?.name || "Household")
+                                  : personName(trip, sub);
 }
 
 function renderTripSummary(trip){
@@ -3465,30 +3636,30 @@ function renderTripSummary(trip){
   // The trip-wide table at the bottom answers "what do I owe overall"; this
   // answers "what is this one thing costing each of us", which is the
   // question you have while looking at the booking itself.
+  //
+  // Read straight off the settlement breakdown, figure for figure. These two
+  // views disagreeing is the bug this whole rewrite exists to kill, and the
+  // only way to be sure they can't is for one of them not to do any
+  // arithmetic. Hovering a name says how its figure was arrived at.
+  const basis = {
+    amount: "entered as a flat amount",
+    percent: "a percentage of the booking",
+    even: "an equal cut of what was left over",
+    payer: "the remainder, left with whoever paid",
+  };
   const costFor = (kind, row) => {
-    const total = bookingTotal(kind, row);
-    if (!total) return "";
-    const all = bookingPeopleFor(trip, kind, row.id)
-      .map(x => ({ name: shareSubjectName(trip, x), amount: shareAmount(x, total) }));
-    const shares = all.filter(x => x.amount != null);
-    const evenly = all.filter(x => x.amount == null);
-    const claimed = shares.reduce((n, x) => n + x.amount, 0);
-    const rest = total - claimed;
-    const parts = shares.map(x => `${esc(x.name)} <b>${fmt(x.amount)}</b>`);
-    if (rest > 0.005){
-      if (evenly.length){
-        const each = rest / evenly.length;
-        for (const x of evenly) parts.push(`${esc(x.name)} <b>${fmt(each)}</b>`);
-      } else {
-        // Nobody else on it, so name the payer rather than leaving a gap
-        // between the shares and the total.
-        parts.push(`${esc(personName(trip, row.paid_by))} <b>${fmt(rest)}</b>`);
-      }
-    }
-    return `<div class="summary-cost"><span class="summary-cost-total">${fmt(total)}</span>${
-      parts.length ? ` — ${parts.join(" · ")}` : ""}${
-      row.paid_by || shares.length ? ` <span class="field-opt">paid by ${
-        esc(personName(trip, row.paid_by))}</span>` : ""}</div>`;
+    const b = money.byBooking.get(row.id);
+    if (!b || !b.totalCents) return "";
+    // Wholly yours and nobody else on it: the total already says everything,
+    // so don't restate it as a one-line split paid by you.
+    const allYours = b.lines.length === 1 && b.lines[0].why === "payer"
+      && b.lines[0].subject === selfId();
+    const parts = allYours ? [] : b.lines.map(l =>
+      `<span title="${esc(basis[l.why] || "")}">${esc(settlementSubjectName(trip, l.subject))} <b>${
+        fmt(fromCents(l.cents))}</b></span>`);
+    return `<div class="summary-cost"><span class="summary-cost-total">${
+      fmt(fromCents(b.totalCents))}</span>${parts.length ? ` — ${parts.join(" · ")}` : ""}${
+      allYours ? "" : ` <span class="field-opt">paid by ${esc(personName(trip, b.payer))}</span>`}</div>`;
   };
 
   const leg = (when, time, stops) =>
@@ -3586,6 +3757,13 @@ function renderTripSummary(trip){
           Open ${money.unpriced.length === 1 ? "it" : "them"} and fill in what a point is worth,
           or the totals below are short by whatever ${
           money.unpriced.length === 1 ? "that ticket" : "those tickets"} really cost.</p>` : ""}
+        ${money.orphans.length ? `<p class="summary-warn">Not charged to anyone:
+          ${money.orphans.map(o => `<b>${esc(o.label)}</b> (${fmt(o.by)})`).join(", ")} —
+          ${money.orphans.length === 1 ? "a share on it isn't" : "shares on these aren't"}
+          linked to a person or a household, so ${fmt(money.unassigned)} of this trip
+          belongs to nobody and the rows below are short by that much. Open
+          ${money.orphans.length === 1 ? "it" : "them"} and re-tick who's on
+          ${money.orphans.length === 1 ? "it" : "them"}.</p>` : ""}
         ${money.over.length ? `<p class="summary-warn">Shares add up to more than the booking cost on
           ${money.over.map(o => `<b>${esc(o.label)}</b> (by ${fmt(o.by)})`).join(", ")} —
           worth a look, the figures below can't reconcile while that's true.</p>` : ""}
@@ -4205,28 +4383,32 @@ function rentalCancelBadge(r){
   return `<span class="status ${cls}">${txt}</span>${r.reminded_at ? ` <span class="status">reminder sent</span>` : ""}`;
 }
 
-// paid_cash minus whatever the named split entries covered — what we
-// actually spent, net of reimbursement/other people's contributions.
-// Your portion of a rental: the total less everyone else's share. Reads
-// booking_people now — the old splits column held the same idea in a second
-// place, and only one of them fed the summary, so the two disagreed.
+// Your portion of a rental — what you actually spent on it, net of what
+// everyone else is down for. Settled rather than subtracted: "total less
+// what others claimed" looks equivalent but isn't, because it silently
+// assigns the whole unclaimed remainder to you even when the booking says
+// it splits evenly. That gap is why the cards and the summary disagreed.
 function rentalOurPortion(r){
   if (r.paid_cash == null) return null;
   const trip = trips.find(t => t.id === r.trip_id);
-  const self = selfPerson();
-  const others = bookingPeopleFor(trip, "rental", r.id)
-    .filter(x => x.group_id || x.person_id !== self?.id);
-  const claimed = others.reduce((n, x) => n + (shareAmount(x, r.paid_cash) || 0), 0);
-  return r.paid_cash - claimed;
+  if (!trip) return r.paid_cash;
+  return myShareOf(trip, "rental", r);
 }
 
+// The split as shown on a rental card. Settled, so the card and the summary
+// can't quote different figures for the same booking. Shows the even-split
+// shares too, which the old hand-rolled version left out — those are exactly
+// the ones people were surprised by.
 function rentalSplitText(r){
   const trip = trips.find(t => t.id === r.trip_id);
-  const rows = bookingPeopleFor(trip, "rental", r.id)
-    .map(x => ({ name: shareSubjectName(trip, x), amount: shareAmount(x, r.paid_cash) }))
-    .filter(x => x.amount != null);
-  if (!rows.length) return "";
-  return rows.map(x => `${esc(x.name)} ${fmtCash(x.amount, r.currency)}`).join(" &middot; ");
+  if (!trip) return "";
+  const b = settleOne(trip, "rental", r);
+  if (!b || !b.totalCents) return "";
+  // The payer's leftover isn't a split, it's what nobody else claimed.
+  const lines = b.lines.filter(l => l.why !== "payer");
+  if (!lines.length) return "";
+  return lines.map(l => `${esc(settlementSubjectName(trip, l.subject))} ${
+    fmtCash(fromCents(l.cents), r.currency)}`).join(" &middot; ");
 }
 
 
@@ -4236,7 +4418,12 @@ function renderRentalCard(trip, r){
   const icon = r.kind === "car" ? ICON_CAR : ICON_HOTEL;
   const moveOptions = trips.filter(t => t.id !== trip.id)
     .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
-  const hasSplits = (r.splits || []).some(s => s.name);
+  // Show "your share" whenever it isn't simply the whole bill. This used to
+  // test the retired splits column, which is empty on every row since the
+  // shares moved to booking_people — so the figure had quietly stopped
+  // appearing on cards that had a split.
+  const myShare = rentalOurPortion(r);
+  const shared = myShare != null && Math.abs(myShare - (r.paid_cash || 0)) > 0.005;
   // Paid / your-share move into the right-aligned price block, same as flights.
   const metaBits = [];
   if (r.rental_start || r.rental_end){
@@ -4254,12 +4441,11 @@ function renderRentalCard(trip, r){
         </div>
         <p class="meta-line">${metaBits.join(" &middot; ")} ${rentalCancelBadge(r)}</p>
         ${r.notes ? `<p class="notes">${esc(r.notes)}</p>` : ""}
-        ${rentalSplitText(r) ? `<p class="meta-line">Split: ${rentalSplitText(r)}</p>` : ""}
+        ${(t => t ? `<p class="meta-line">Split: ${t}</p>` : "")(rentalSplitText(r))}
       </div>
       <div class="res-price">
         <span class="res-price-main">${paidText(r)}</span>
-        ${hasSplits && r.paid_cash != null
-          ? `<span class="res-price-sub">your share ${fmtCash(rentalOurPortion(r), r.currency)}</span>` : ""}
+        ${shared ? `<span class="res-price-sub">your share ${fmtCash(myShare, r.currency)}</span>` : ""}
       </div>
       <div class="res-actions">
         ${attachmentHeader("rental", r.id, r.attachments)}
