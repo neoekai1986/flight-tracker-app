@@ -2428,7 +2428,7 @@ async function createRental(tripId, fields){
     rental_start: fields.rentalStart || null, rental_end: fields.rentalEnd || null,
     cancel_by: fields.cancelBy || null, confirmation_code: fields.confirmationCode || null,
     address: fields.address || null, paid_by: fields.paidBy || null,
-    splits: fields.splits || [], notes: fields.notes || null, position
+    notes: fields.notes || null, position
   }).select().single();
   if (error) { alert(error.message); return null; }
   return data;
@@ -3385,6 +3385,10 @@ function tripMoney(trip){
     for (const m of members) entryFor(m.id).owes += each;
   };
   const over = [];
+  // Points with no conversion rate have no money value, so the booking counts
+  // as nothing and quietly shrinks every total it should be part of. Collect
+  // them so the summary can say so instead of just being wrong.
+  const unpriced = [];
   seedRoster();
 
   const bookings = [
@@ -3395,6 +3399,9 @@ function tripMoney(trip){
   ];
 
   for (const b of bookings){
+    if (!b.total && b.kind === "flight" && b.row.paid_points && !b.row.points_cents){
+      unpriced.push(b.row.label);
+    }
     entryFor(b.row.paid_by).paid += b.total;
     const shares = bookingPeopleFor(trip, b.kind, b.row.id);
     const stated = shares
@@ -3418,7 +3425,7 @@ function tripMoney(trip){
   // Everyone stays in. A zero row says "nothing assigned to them yet", which
   // is information; dropping it just made them vanish.
   const rows = [...ledger.values()];
-  return { rows: rows.map(e => ({ ...e, net: e.paid - e.owes })), over,
+  return { rows: rows.map(e => ({ ...e, net: e.paid - e.owes })), over, unpriced,
            total: bookings.reduce((n, b) => n + b.total, 0) };
 }
 
@@ -3548,6 +3555,13 @@ function renderTripSummary(trip){
             <span class="field-opt">— ${fmt(money.total)} over ${days} day${days===1?"":"s"},
             ${heads} ${heads===1?"person":"people"}</span></p>`;
         })()}
+        ${money.unpriced.length ? `<p class="summary-warn">Counted as nothing:
+          ${money.unpriced.map(l => `<b>${esc(l)}</b>`).join(", ")} ${
+          money.unpriced.length === 1 ? "was" : "were"} paid with points and ${
+          money.unpriced.length === 1 ? "has" : "have"} no value set.
+          Open ${money.unpriced.length === 1 ? "it" : "them"} and fill in what a point is worth,
+          or the totals below are short by whatever ${
+          money.unpriced.length === 1 ? "that ticket" : "those tickets"} really cost.</p>` : ""}
         ${money.over.length ? `<p class="summary-warn">Shares add up to more than the booking cost on
           ${money.over.map(o => `<b>${esc(o.label)}</b> (by ${fmt(o.by)})`).join(", ")} —
           worth a look, the figures below can't reconcile while that's true.</p>` : ""}
@@ -4167,86 +4181,32 @@ function rentalCancelBadge(r){
   return `<span class="status ${cls}">${txt}</span>${r.reminded_at ? ` <span class="status">reminder sent</span>` : ""}`;
 }
 
-const SPLIT_SLOTS = 5;
-
-// A split entry gives either a percent of paid_cash or a flat amount —
-// whichever the user filled in. These derive the other value for display.
-function splitDollar(entry, total){
-  if (entry.amount != null) return entry.amount;
-  if (entry.percent != null && total != null) return total * entry.percent / 100;
-  return null;
-}
-function splitPercent(entry, total){
-  if (entry.percent != null) return entry.percent;
-  if (entry.amount != null && total) return entry.amount / total * 100;
-  return null;
-}
-
 // paid_cash minus whatever the named split entries covered — what we
 // actually spent, net of reimbursement/other people's contributions.
+// Your portion of a rental: the total less everyone else's share. Reads
+// booking_people now — the old splits column held the same idea in a second
+// place, and only one of them fed the summary, so the two disagreed.
 function rentalOurPortion(r){
   if (r.paid_cash == null) return null;
-  const othersTotal = (r.splits || [])
-    .filter(s => s.name)
-    .reduce((sum, s) => sum + (splitDollar(s, r.paid_cash) || 0), 0);
-  return r.paid_cash - othersTotal;
+  const trip = trips.find(t => t.id === r.trip_id);
+  const self = selfPerson();
+  const others = bookingPeopleFor(trip, "rental", r.id)
+    .filter(x => x.group_id || x.person_id !== self?.id);
+  const claimed = others.reduce((n, x) => n + (shareAmount(x, r.paid_cash) || 0), 0);
+  return r.paid_cash - claimed;
 }
 
 function rentalSplitText(r){
-  const splits = (r.splits || []).filter(s => s.name);
-  if (!splits.length) return "";
-  const total = r.paid_cash;
-  return splits.map(s => {
-    const dollar = splitDollar(s, total);
-    const pct = splitPercent(s, total);
-    let val = "";
-    if (dollar != null && pct != null) val = ` ${fmtCash(dollar, r.currency)} (${Math.round(pct)}%)`;
-    else if (dollar != null) val = ` ${fmtCash(dollar, r.currency)}`;
-    else if (pct != null) val = ` ${Math.round(pct)}%`;
-    return `${esc(s.name)}${val}`;
-  }).join(" &middot; ");
+  const trip = trips.find(t => t.id === r.trip_id);
+  const rows = bookingPeopleFor(trip, "rental", r.id)
+    .map(x => ({ name: shareSubjectName(trip, x), amount: shareAmount(x, r.paid_cash) }))
+    .filter(x => x.amount != null);
+  if (!rows.length) return "";
+  return rows.map(x => `${esc(x.name)} ${fmtCash(x.amount, r.currency)}`).join(" &middot; ");
 }
 
-// Gathers the 5 name/percent/amount rows from an open form into a splits array.
-function gatherSplits(container, prefix){
-  const splits = [];
-  for (let i = 0; i < SPLIT_SLOTS; i++){
-    const name = container.querySelector(`[data-${prefix}-split-name="${i}"]`).value.trim();
-    if (!name) continue;
-    const pctRaw = container.querySelector(`[data-${prefix}-split-pct="${i}"]`).value;
-    const amtRaw = container.querySelector(`[data-${prefix}-split-amt="${i}"]`).value;
-    splits.push({
-      name,
-      percent: pctRaw === "" ? null : parseFloat(pctRaw),
-      amount: amtRaw === "" ? null : parseFloat(amtRaw),
-    });
-  }
-  return splits;
-}
 
-function splitRowsHTML(prefix){
-  let rows = "";
-  for (let i = 0; i < SPLIT_SLOTS; i++){
-    rows += `
-      <input type="text" placeholder="Name" data-${prefix}-split-name="${i}">
-      <input type="number" step="0.1" placeholder="%" data-${prefix}-split-pct="${i}">
-      <input type="number" step="0.01" placeholder="$" data-${prefix}-split-amt="${i}">`;
-  }
-  return `
-    <div class="span2">
-      <div class="split-label">Others who shared the cost (up to ${SPLIT_SLOTS} — % or $ each)</div>
-      <div class="split-grid">${rows}</div>
-    </div>`;
-}
 
-function fillSplitRows(form, prefix, splits){
-  for (let i = 0; i < SPLIT_SLOTS; i++){
-    const s = (splits || [])[i] || {};
-    form.querySelector(`[data-${prefix}-split-name="${i}"]`).value = s.name || "";
-    form.querySelector(`[data-${prefix}-split-pct="${i}"]`).value = s.percent ?? "";
-    form.querySelector(`[data-${prefix}-split-amt="${i}"]`).value = s.amount ?? "";
-  }
-}
 
 function renderRentalCard(trip, r){
   const icon = r.kind === "car" ? ICON_CAR : ICON_HOTEL;
@@ -4359,7 +4319,6 @@ function rentalFormHTML(prefix, idAttr, defaults, trip, existingPeople){
     </label>
     ${paidByFieldHTML(trip, p, defaults && defaults.paidBy)}
     ${bookingPeopleFieldsHTML(trip, p, existingPeople, "rental")}
-    ${splitRowsHTML(p)}
     <div class="span2 row" style="margin:0">
       <button class="btn btn-sm" data-${p}-save>Save</button>
       <button class="btn-link" data-${p}-cancel>cancel</button>
@@ -6145,7 +6104,6 @@ function wireEvents(activeTrip){
         paidPoints: pp === "" ? null : parseFloat(pp),
         pointsProgram: holder.querySelector("[data-nr-pointsprogram]").value.trim() || null,
         status: holder.querySelector("[data-nr-status]").value,
-        splits: gatherSplits(holder, "nr"),
         notes: holder.querySelector("[data-nr-notes]").value.trim(),
       });
       if (createdRental){
@@ -6185,7 +6143,6 @@ function wireEvents(activeTrip){
       });
       form.querySelector("[data-er-notes]").value = rental.notes || "";
       form.querySelector("[data-er-status]").value = rental.status || "booked";
-      fillSplitRows(form, "er", rental.splits);
       form.querySelector("[data-er-cancel]").addEventListener("click", render);
       form.querySelector("[data-er-save]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-er-paidcash]").value;
@@ -6205,7 +6162,6 @@ function wireEvents(activeTrip){
           paid_points: pp === "" ? null : parseFloat(pp),
           points_program: form.querySelector("[data-er-pointsprogram]").value.trim() || null,
           status: form.querySelector("[data-er-status]").value,
-          splits: gatherSplits(form, "er"),
           notes: form.querySelector("[data-er-notes]").value.trim() || null,
         };
         // A changed deadline should get a fresh reminder email.
