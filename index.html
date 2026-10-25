@@ -785,8 +785,6 @@
       border-radius:20px;padding:2px 9px;white-space:nowrap}
   @media (max-width:720px){ .person-card-main{grid-template-columns:1fr} }
   .people-ledger{width:100%;margin-top:6px}
-  .people-ledger .ledger-group td{font-weight:600}
-  .people-ledger .ledger-member td{color:var(--muted);font-size:12.5px;padding-left:18px}
   .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
   .person-row{display:flex;align-items:center;gap:9px;font-size:13px;padding:3px 0}
   .person-row input[type=checkbox]{accent-color:var(--amber);margin:0;flex-shrink:0;width:auto}
@@ -3796,33 +3794,6 @@ function personLedger(){
   return [...byPerson.values()];
 }
 
-// Rolls the ledger up by household, keeping the individuals underneath. A
-// group settles as one — that's the point of grouping them — but you still
-// need to see who contributed what to the number.
-function groupedLedger(){
-  const rows = personLedger();
-  const out = [];
-  const used = new Set();
-  for (const g of personGroups){
-    const members = rows.filter(r => r.person.group_id === g.id);
-    if (!members.length) continue;
-    members.forEach(m => used.add(m.person.id));
-    out.push({
-      key: `g:${g.id}`, name: g.name, isGroup: true,
-      owes: members.reduce((n,m) => n + m.owes, 0),
-      paid: members.reduce((n,m) => n + m.paid, 0),
-      members,
-      email: members.map(m => m.person.email).filter(Boolean).join(","),
-    });
-  }
-  for (const r of rows){
-    if (used.has(r.person.id)) continue;
-    out.push({ key: `p:${r.person.id}`, name: r.person.name, isGroup: false,
-               owes: r.owes, paid: r.paid, members: [r], email: r.person.email || "" });
-  }
-  return out;
-}
-
 function renderPeoplePage(){
   document.getElementById("subtext").textContent =
     "Everyone who travels with you, what they owe across every trip, and who settles together.";
@@ -3836,7 +3807,10 @@ function renderPeoplePage(){
 
 function renderPeopleBody(){
   const fmt = n => fmtCash(n, "USD");
-  const ledger = groupedLedger().sort((a,b) => (b.owes - b.paid) - (a.owes - a.paid));
+  // One row per person. Households decide how a booking is charged, not how
+  // the running totals read — rolling them up here buried the individual
+  // figures, which are the ones you actually go looking for.
+  const ledger = personLedger().sort((a,b) => (b.owes - b.paid) - (a.owes - a.paid));
   const groupOptions = (current) => `
     <option value="">— on their own —</option>
     ${personGroups.map(g => `<option value="${g.id}" ${g.id===current?"selected":""}>${esc(g.name)}</option>`).join("")}`;
@@ -3901,18 +3875,17 @@ function renderPeopleBody(){
           <tr><th>Who</th><th>Their share</th><th>They paid</th><th>Net</th><th></th></tr>
           ${ledger.map(r => {
             const net = r.paid - r.owes;
-            return `<tr class="${r.isGroup ? "ledger-group" : ""}">
-              <td>${esc(r.name)}${r.isGroup ? ` <span class="field-opt">${r.members.length} people</span>` : ""}</td>
+            const household = r.person.group_id ? groupById(r.person.group_id)?.name : "";
+            return `<tr>
+              <td>${esc(r.person.name)}${household
+                ? ` <span class="field-opt">${esc(household)}</span>` : ""}</td>
               <td>${fmt(r.owes)}</td>
               <td>${fmt(r.paid)}</td>
               <td class="${net > 0.005 ? "down" : net < -0.005 ? "up" : "flat"}">${
                 Math.abs(net) < 0.005 ? "settled" : net > 0 ? `owed ${fmt(net)}` : `owes ${fmt(-net)}`}</td>
-              <td>${r.email && net < -0.005
-                ? `<button type="button" class="btn-link" data-pm-email-all="${r.key}">email</button>` : ""}</td>
-            </tr>
-            ${r.isGroup ? r.members.map(m => `<tr class="ledger-member">
-              <td>${esc(m.person.name)}</td><td>${fmt(m.owes)}</td><td>${fmt(m.paid)}</td><td></td><td></td>
-            </tr>`).join("") : ""}`;
+              <td>${r.person.email && net < -0.005
+                ? `<button type="button" class="btn-link" data-pm-email-person="${r.person.id}">email</button>` : ""}</td>
+            </tr>`;
           }).join("")}
         </table>` : `<p class="empty-hist">Nothing to settle yet.</p>`}
       </section>
@@ -3991,39 +3964,35 @@ function wirePeopleBody(){
   document.querySelector("[data-pg-new]")?.addEventListener("keydown", e => {
     if (e.key === "Enter"){ e.preventDefault(); addGroup(); } });
 
-  document.querySelectorAll("[data-pm-email-all]").forEach(btn => {
-    btn.addEventListener("click", () => emailExpense(btn.dataset.pmEmailAll));
+  document.querySelectorAll("[data-pm-email-person]").forEach(btn => {
+    btn.addEventListener("click", () => emailExpense(btn.dataset.pmEmailPerson));
   });
 }
 
 // Opens your own mail client with the breakdown filled in. No server, no API
 // key, no deliverability to worry about — and it goes out from your real
 // address, which is what makes it land rather than get filtered.
-function emailExpense(key){
-  const row = groupedLedger().find(r => r.key === key);
+function emailExpense(personId){
+  const row = personLedger().find(r => r.person.id === personId);
   if (!row) return;
   const fmt = n => fmtCash(n, "USD");
   const net = row.paid - row.owes;
   const lines = [];
   lines.push(`Here's where we are on travel costs.`, "");
-  for (const m of row.members){
-    if (row.isGroup) lines.push(`${m.person.name}`);
-    for (const t of m.trips){
-      const bits = [];
-      if (t.owes) bits.push(`share ${fmt(t.owes)}`);
-      if (t.paid) bits.push(`paid ${fmt(t.paid)}`);
-      lines.push(`  ${t.trip.title}: ${bits.join(", ")}`);
-    }
-    if (row.isGroup) lines.push("");
+  for (const t of row.trips){
+    const bits = [];
+    if (t.owes) bits.push(`share ${fmt(t.owes)}`);
+    if (t.paid) bits.push(`paid ${fmt(t.paid)}`);
+    lines.push(`  ${t.trip.title}: ${bits.join(", ")}`);
   }
   lines.push("",
     `Total share: ${fmt(row.owes)}`,
     `Already paid: ${fmt(row.paid)}`,
     net < -0.005 ? `Outstanding: ${fmt(-net)}` : `Settled up.`);
-  const subject = `Travel costs — ${row.name}`;
+  const subject = `Travel costs — ${row.person.name}`;
   // encodeURIComponent, not a template literal: a name with an & in it would
   // otherwise truncate the body at that point.
-  window.location.href = `mailto:${encodeURIComponent(row.email || "")}`
+  window.location.href = `mailto:${encodeURIComponent(row.person.email || "")}`
     + `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join("\n"))}`;
 }
 
