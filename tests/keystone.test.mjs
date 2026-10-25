@@ -58,7 +58,8 @@ const trip = {
     { flight_id: "f-out", person_id: "p-chr" },
     { flight_id: "f-out", person_id: "p-ekai" },
     { flight_id: "f-out", person_id: "p-eug" },
-    // Return: a full ticket against all four.
+    // Return: a full ticket against all four — including Bean, who flies on a
+    // companion pass and should be down for nothing. That is the error.
     { flight_id: "f-back", person_id: "p-bean", cost: 89.6 },
     { flight_id: "f-back", person_id: "p-chr",  cost: 89.6 },
     { flight_id: "f-back", person_id: "p-ekai", cost: 89.6 },
@@ -111,6 +112,27 @@ check("the over-allocation is reported", m.over.map(o => [o.label, o.by]),
   [["12/8/26 DEN to BWI - Points", 89.60]]);
 check("nothing is unassigned", m.unassigned, 0);
 check("no unpriced warning — both legs have a rate", m.unpriced, []);
+
+// ---- the same trip with Bean's companion seat recorded correctly ---------
+//
+// Bean flies free on a Southwest companion pass, so the three points tickets
+// are the whole cost and Bean's share of both legs is nothing. Setting the
+// return leg to 0 is the one edit needed; these assert what that produces,
+// so the fix can be checked rather than hoped for.
+
+trip.booking_people.find(b => b.flight_id === "f-back" && b.person_id === "p-bean").cost = 0;
+
+const fixed = api.tripMoney(trip);
+const fixedOwed = Object.fromEntries(fixed.rows.map(r => [r.name, r.owes]));
+
+check("the flights still cost what they cost", fixed.total, 638.40);
+check("a companion seat costs its passenger nothing", fixedOwed["Bean"], 0);
+check("Eugene is unchanged", fixedOwed["Eugene"], 212.80);
+check("Chrstine is unchanged", fixedOwed["Chrstine"], 212.80);
+check("E-Kai is unchanged", fixedOwed["E-Kai"], 212.80);
+check("and now the shares reconcile exactly", fixed.over, []);
+check("three paying passengers, split three ways",
+  Math.round(fixed.rows.reduce((n, r) => n + r.owes, 0) * 100), 63840);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
