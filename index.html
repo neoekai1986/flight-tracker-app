@@ -749,6 +749,13 @@
   .booking-people{display:flex;flex-direction:column;gap:6px;margin-top:6px}
   .bp-row{display:grid;grid-template-columns:minmax(130px,1fr) minmax(0,1.1fr) 152px;
       gap:8px;align-items:center}
+  /* Lodging rows carry a room as well, and four controls don't fit across the
+     form at its usual width. auto-fit takes as many columns as there is room
+     for and wraps the rest, rather than a fixed count that overflows the card
+     on a narrow panel and gets clipped. The reference goes last, being the
+     one filled in least often. */
+  .bp-row-rooms{grid-template-columns:repeat(auto-fit,minmax(128px,1fr))}
+  .bp-row-rooms .bp-ref{order:3}
   .bp-share{display:flex;gap:6px;align-items:center}
   .bp-share input{flex:1;min-width:0}
   .bp-share select{width:60px;flex-shrink:0;margin-top:0}
@@ -757,7 +764,12 @@
   .bp-who input{accent-color:var(--amber);flex-shrink:0;margin:0}
   .bp-who span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .bp-row input[type=text],.bp-row input[type=number]{width:100%;max-width:none;margin-top:0}
-  @media (max-width:560px){ .bp-row{grid-template-columns:1fr} }
+  /* The share box sits beside its unit selector, so it takes what's left of
+     the column rather than the whole of it — the rule above is more specific
+     than .bp-share's flex sizing and would otherwise push the selector out
+     past the edge of the card. */
+  .bp-row .bp-share input{width:auto;flex:1 1 0;min-width:0}
+  @media (max-width:560px){ .bp-row,.bp-row-rooms{grid-template-columns:1fr} }
   /* Nested inside a year, so indented to sit with that year's trips rather
      than reading as another year. */
   .tab-past{margin-left:14px}
@@ -784,7 +796,6 @@
   .person-self{font-size:11.5px;color:var(--muted);border:1px solid var(--line);
       border-radius:20px;padding:2px 9px;white-space:nowrap}
   @media (max-width:720px){ .person-card-main{grid-template-columns:1fr} }
-  .bp-room{min-width:0;flex:0 1 110px}
   .summary-room{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
     color:var(--muted);margin-right:4px}
   .people-ledger{width:100%;margin-top:6px}
@@ -2352,14 +2363,14 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           // A seat is priced per person, so a flight share starts at one
           // ticket rather than blank. Housing has no such natural unit.
           const ticket = kind === "flight" ? flightTicketCost(bookingRow) : 0;
-          return `<div class="bp-row" data-bp-row="${sub.key}">
+          return `<div class="bp-row${rooms ? " bp-row-rooms" : ""}" data-bp-row="${sub.key}">
             <label class="bp-who">
               <input type="checkbox" data-${prefix}-bp-on="${sub.key}" ${row ? "checked" : ""}>
               <span>${esc(sub.name)}${sub.sub ? `<span class="bp-sub">${esc(sub.sub)}</span>` : ""}</span>
             </label>
-            <input type="text" data-${prefix}-bp-ref="${sub.key}" placeholder="their reference"
-              value="${esc(row?.reference || "")}">
-            ${rooms ? `<input type="text" class="bp-room" data-${prefix}-bp-room="${sub.key}"
+            <input type="text" class="bp-ref" data-${prefix}-bp-ref="${sub.key}"
+              placeholder="their reference" value="${esc(row?.reference || "")}">
+            ${rooms ? `<input type="text" data-${prefix}-bp-room="${sub.key}"
               list="bp-rooms-${prefix}" placeholder="room" aria-label="Room"
               value="${esc(row?.room || "")}" ${couch ? "disabled" : ""}>` : ""}
             <span class="bp-share">
