@@ -736,6 +736,9 @@
   .summary-lines{font-size:13px;color:var(--muted);line-height:1.7}
   .summary-lines b{color:var(--ink);font-weight:600}
   .summary-money{width:100%;margin-top:4px}
+  .summary-cost{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line);
+      font-size:12.5px;overflow-wrap:anywhere}
+  .summary-cost-total{font-weight:700;color:var(--ink);font-size:13.5px}
   .summary-perday{font-size:13.5px;margin-top:10px;padding:10px 12px;
       background:var(--panel2);border:1px solid var(--line);border-radius:10px}
   .summary-warn{font-size:12.5px;color:var(--bad);margin-top:8px;line-height:1.6}
@@ -2225,10 +2228,21 @@ async function deleteTripPerson(id){
 }
 
 function tripPeople(trip){ return (trip?.trip_people || []); }
+// Takes a master-people id. Payers and shares were repointed at the master
+// list, so looking these up through the trip roster stopped resolving and
+// everything came back as "Someone".
 function personName(trip, id){
   if (!id) return selfPerson()?.name || "You";
-  const row = tripPeople(trip).find(p => p.id === id);
-  return personById(row?.person_id)?.name || row?.name || "Someone";
+  return personById(id)?.name
+    || tripPeople(trip).find(p => p.id === id)?.name   // pre-repoint rows
+    || "Someone";
+}
+
+// The name against one share row, whether it belongs to a person or a
+// household.
+function shareSubjectName(trip, row){
+  return row.group_id ? (groupById(row.group_id)?.name || "Household")
+                      : personName(trip, row.person_id);
 }
 
 // ---------------- Per-booking people ----------------
@@ -3342,6 +3356,17 @@ function tripMoney(trip){
   // needed to attribute money.
   const ledger = new Map();
   const self = selfPerson();
+  // Seed with everyone on the trip, so somebody you've added but not yet
+  // given a share to still appears — at zero, which is the thing you need to
+  // see. Filtering to non-zero rows hid exactly the people you'd want to
+  // check up on.
+  const seedRoster = () => {
+    for (const tp of tripPeople(trip)){
+      const p = personById(tp.person_id);
+      if (p && !ledger.has(p.id)) ledger.set(p.id, { personId: p.id, name: p.name, owes: 0, paid: 0 });
+    }
+    if (self && !ledger.has(self.id)) ledger.set(self.id, { personId: self.id, name: self.name, owes: 0, paid: 0 });
+  };
   const entryFor = (personId) => {
     const id = personId || self?.id || "__you__";
     if (!ledger.has(id)){
@@ -3360,6 +3385,7 @@ function tripMoney(trip){
     for (const m of members) entryFor(m.id).owes += each;
   };
   const over = [];
+  seedRoster();
 
   const bookings = [
     ...(trip.flights || []).filter(f => f.status !== "watching")
@@ -3389,7 +3415,9 @@ function tripMoney(trip){
     else if (remainder < -0.005) over.push({ label: b.row.label, by: -remainder });
   }
 
-  const rows = [...ledger.values()].filter(e => e.owes || e.paid);
+  // Everyone stays in. A zero row says "nothing assigned to them yet", which
+  // is information; dropping it just made them vanish.
+  const rows = [...ledger.values()];
   return { rows: rows.map(e => ({ ...e, net: e.paid - e.owes })), over,
            total: bookings.reduce((n, b) => n + b.total, 0) };
 }
@@ -3407,11 +3435,29 @@ function renderTripSummary(trip){
   const refsFor = (kind, row) => {
     const rows = bookingPeopleFor(trip, kind, row.id).filter(x => x.reference);
     if (!rows.length) return row.confirmation_code ? `Ref <b>${esc(row.confirmation_code)}</b>` : "";
-    return rows.map(x => `${esc(personName(trip, x.person_id))} <b>${esc(x.reference)}</b>`).join(" · ");
+    return rows.map(x => `${esc(shareSubjectName(trip, x))} <b>${esc(x.reference)}</b>`).join(" · ");
   };
-  const whoFor = (kind, row) => {
-    const rows = bookingPeopleFor(trip, kind, row.id);
-    return rows.length ? rows.map(x => esc(personName(trip, x.person_id))).join(", ") : "";
+
+  // What the booking cost, and what each person or household owes for it.
+  // The trip-wide table at the bottom answers "what do I owe overall"; this
+  // answers "what is this one thing costing each of us", which is the
+  // question you have while looking at the booking itself.
+  const costFor = (kind, row) => {
+    const total = bookingTotal(kind, row);
+    if (!total) return "";
+    const shares = bookingPeopleFor(trip, kind, row.id)
+      .map(x => ({ name: shareSubjectName(trip, x), amount: shareAmount(x, total) }))
+      .filter(x => x.amount != null);
+    const claimed = shares.reduce((n, x) => n + x.amount, 0);
+    const rest = total - claimed;
+    const parts = shares.map(x => `${esc(x.name)} <b>${fmt(x.amount)}</b>`);
+    // The unclaimed remainder belongs to whoever paid, so name them rather
+    // than leaving a gap between the shares and the total.
+    if (rest > 0.005) parts.push(`${esc(personName(trip, row.paid_by))} <b>${fmt(rest)}</b>`);
+    return `<div class="summary-cost"><span class="summary-cost-total">${fmt(total)}</span>${
+      parts.length ? ` — ${parts.join(" · ")}` : ""}${
+      row.paid_by || shares.length ? ` <span class="field-opt">paid by ${
+        esc(personName(trip, row.paid_by))}</span>` : ""}</div>`;
   };
 
   const leg = (when, time, stops) =>
@@ -3442,8 +3488,8 @@ function renderTripSummary(trip){
               <div>Out ${leg(f.depart_date, f.depart_time, f.stops_out)}</div>
               ${f.leg === "roundtrip" && f.return_date
                 ? `<div>Back ${leg(f.return_date, f.return_time, f.stops_back)}</div>` : ""}
-              ${whoFor("flight", f) ? `<div>Who: ${whoFor("flight", f)}</div>` : ""}
               ${refsFor("flight", f) ? `<div>${refsFor("flight", f)}</div>` : ""}
+              ${costFor("flight", f)}
             </div>
           </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
       </section>
@@ -3456,8 +3502,8 @@ function renderTripSummary(trip){
             <div class="summary-lines">
               <div>${esc(fmtShortDate(r.rental_start) || "?")} → ${esc(fmtShortDate(r.rental_end) || "?")}</div>
               ${r.address ? `<div>${esc(r.address)}</div>` : ""}
-              ${whoFor("rental", r) ? `<div>Who: ${whoFor("rental", r)}</div>` : ""}
               ${refsFor("rental", r) ? `<div>${refsFor("rental", r)}</div>` : ""}
+              ${costFor("rental", r)}
             </div>
           </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
       </section>
@@ -3470,8 +3516,8 @@ function renderTripSummary(trip){
             <div class="summary-lines">
               <div>${esc(fmtShortDate(r.rental_start) || "?")} → ${esc(fmtShortDate(r.rental_end) || "?")}</div>
               ${r.address ? `<div>${esc(r.address)}</div>` : ""}
-              ${whoFor("rental", r) ? `<div>Who: ${whoFor("rental", r)}</div>` : ""}
               ${refsFor("rental", r) ? `<div>${refsFor("rental", r)}</div>` : ""}
+              ${costFor("rental", r)}
             </div>
           </div>`).join("") : `<p class="empty-hist">Nothing booked yet.</p>`}
       </section>
