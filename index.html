@@ -736,6 +736,8 @@
   .summary-lines{font-size:13px;color:var(--muted);line-height:1.7}
   .summary-lines b{color:var(--ink);font-weight:600}
   .summary-money{width:100%;margin-top:4px}
+  .summary-perday{font-size:13.5px;margin-top:10px;padding:10px 12px;
+      background:var(--panel2);border:1px solid var(--line);border-radius:10px}
   .summary-warn{font-size:12.5px;color:var(--bad);margin-top:8px;line-height:1.6}
   @media print{
     .sidebar,.filter-rail,.panel-head,.share-block,.view-menu{display:none!important}
@@ -779,8 +781,8 @@
   .people-ledger .ledger-group td{font-weight:600}
   .people-ledger .ledger-member td{color:var(--muted);font-size:12.5px;padding-left:18px}
   .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
-  .person-row{display:flex;align-items:center;gap:8px}
-  .person-row input{flex:0 1 240px}
+  .person-row{display:flex;align-items:center;gap:9px;font-size:13px;padding:3px 0}
+  .person-row input[type=checkbox]{accent-color:var(--amber);margin:0;flex-shrink:0;width:auto}
   .split-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
       font-family:Inter,system-ui,sans-serif;margin-bottom:5px}
   .split-grid{display:grid;grid-template-columns:1.6fr 0.7fr 0.9fr;gap:6px}
@@ -2193,11 +2195,15 @@ async function removeCollaborator(id){
 // These replace the free-text attendees list. A person is a row with a stable
 // id, so a cost recorded against them survives being renamed.
 
-async function createTripPerson(tripId, name){
+// Links a master person to a trip. `name` is still written because the column
+// is NOT NULL from before the master list existed; it's a snapshot for safety
+// and nothing reads it — display comes from the master record.
+async function createTripPerson(tripId, personId){
   const siblings = (trips.find(t => t.id === tripId)?.trip_people || []).map(p => p.position);
   const position = siblings.length ? Math.max(...siblings) + 1000 : 0;
   const { data, error } = await supabase.from("trip_people")
-    .insert({ trip_id: tripId, name, position }).select().single();
+    .insert({ trip_id: tripId, person_id: personId,
+              name: personById(personId)?.name || "", position }).select().single();
   if (error) { alert(error.message); return null; }
   return data;
 }
@@ -2216,8 +2222,9 @@ async function deleteTripPerson(id){
 
 function tripPeople(trip){ return (trip?.trip_people || []); }
 function personName(trip, id){
-  if (!id) return "You";
-  return tripPeople(trip).find(p => p.id === id)?.name || "Someone";
+  if (!id) return selfPerson()?.name || "You";
+  const row = tripPeople(trip).find(p => p.id === id);
+  return personById(row?.person_id)?.name || row?.name || "Someone";
 }
 
 // ---------------- Per-booking people ----------------
@@ -2245,8 +2252,8 @@ async function saveBookingPeople(tripId, kind, id, rows){
 
 // The per-person block shown inside a flight or rental form.
 function bookingPeopleFieldsHTML(trip, prefix, existing){
-  const people = tripPeople(trip);
-  if (!people.length){
+  const roster = tripPeople(trip);
+  if (!roster.length){
     return `<div class="field span2">Who's on this booking
       <span class="field-hint">No one listed on this trip yet — add people in
         <b>Trip details</b> and they'll show up here.</span>
@@ -2257,12 +2264,12 @@ function bookingPeopleFieldsHTML(trip, prefix, existing){
     <div class="form-section">Who's on this booking <span class="field-opt">(leave empty if it's just you)</span></div>
     <div class="field span2">
       <div class="booking-people">
-        ${people.map(p => {
+        ${roster.map(p => {
           const row = byPerson.get(p.id);
           return `<div class="bp-row" data-bp-row="${p.id}">
             <label class="bp-who">
               <input type="checkbox" data-${prefix}-bp-on="${p.id}" ${row ? "checked" : ""}>
-              <span>${esc(p.name)}</span>
+              <span>${esc(personById(p.person_id)?.name || p.name)}</span>
             </label>
             <input type="text" data-${prefix}-bp-ref="${p.id}" placeholder="their reference"
               value="${esc(row?.reference || "")}">
@@ -2293,12 +2300,13 @@ function readBookingPeople(container, prefix){
 
 // "Paid by" — null means you, which is the default and the common case.
 function paidByFieldHTML(trip, prefix, current){
-  const people = tripPeople(trip);
-  if (!people.length) return "";
+  const roster = tripPeople(trip);
+  if (!roster.length) return "";
   return `<label class="field field-narrow">Paid by
     <select data-${prefix}-paidby>
       <option value="">You</option>
-      ${people.map(p => `<option value="${p.id}" ${p.id===current?"selected":""}>${esc(p.name)}</option>`).join("")}
+      ${roster.map(p => `<option value="${p.id}" ${p.id===current?"selected":""}>${
+        esc(personById(p.person_id)?.name || p.name)}</option>`).join("")}
     </select>
   </label>`;
 }
@@ -3376,6 +3384,17 @@ function renderTripSummary(trip){
           </tr>`).join("")}
           <tr><td><b>Trip total</b></td><td colspan="3"><b>${fmt(money.total)}</b></td></tr>
         </table>
+        ${(() => {
+          // Cost per person per day on the slopes. Headcount comes from the
+          // trip roster, falling back to 1 so a solo trip still divides.
+          const days = Number(trip.ski_days) || 0;
+          if (!days || !money.total) return "";
+          const heads = Math.max(tripPeople(trip).length, 1);
+          return `<p class="summary-perday"><b>${fmt(money.total / heads / days)}</b>
+            per person per day on the slopes
+            <span class="field-opt">— ${fmt(money.total)} over ${days} day${days===1?"":"s"},
+            ${heads} ${heads===1?"person":"people"}</span></p>`;
+        })()}
         ${money.over.length ? `<p class="summary-warn">Shares add up to more than the booking cost on
           ${money.over.map(o => `<b>${esc(o.label)}</b> (by ${fmt(o.by)})`).join(", ")} —
           worth a look, the figures below can't reconcile while that's true.</p>` : ""}
@@ -3754,7 +3773,7 @@ function renderTripPanel(trip){
   if (trip.notes) metaParts.push(`<div><b>Notes:</b> ${esc(trip.notes)}</div>`);
   if (tripPeople(trip).length){
     metaParts.push(`<div><b>Who's going:</b> <span class="tags">${
-      tripPeople(trip).map(p=>`<span class="tag">${esc(p.name)}</span>`).join("")}</span></div>`);
+      tripPeople(trip).map(p=>`<span class="tag">${esc(personById(p.person_id)?.name || p.name)}</span>`).join("")}</span></div>`);
   }
 
   return `
@@ -4182,6 +4201,12 @@ function renderMetaForm(trip){
         <option value="__new__">+ New category…</option>
       </select>
     </label>
+    ${trip.category_id ? `<label class="field span2 alt-toggle">
+      <input type="checkbox" data-m-catski ${categories.find(c => c.id === trip.category_id)?.is_ski ? "checked" : ""}>
+      <span>Trips in this category involve skiing</span>
+      <span class="field-hint">Turns on the days-on-the-slopes box and the per-day cost,
+        for every trip in this category.</span>
+    </label>` : ""}
     ${!tripAlternativeAvailable ? "" : `<label class="field span2 alt-toggle">
       <input type="checkbox" data-m-alternative ${trip.is_alternative ? "checked" : ""}>
       <span>This is an alternative — a version we considered and didn't take</span>
@@ -4189,20 +4214,26 @@ function renderMetaForm(trip){
         list, and stops counting toward any of your totals.</span>
     </label>`}
     <div class="field span2">Who's on this trip
-      <span class="field-hint">Everyone here can be put on a booking, with their own reference
-        number and share of the cost. You're assumed to be paying unless you say otherwise.</span>
+      <span class="field-hint">Tick anyone from your people list. Manage the list itself —
+        names, emails, households — on the <b>People &amp; costs</b> page.</span>
       <div class="people-list" data-m-people>
-        ${tripPeople(trip).map(p => `
-          <div class="person-row" data-person-row="${p.id}">
-            <input type="text" value="${esc(p.name)}" data-person-name="${p.id}" aria-label="Name">
-            <button type="button" class="btn-link" data-person-del="${p.id}" title="Remove from trip">×</button>
-          </div>`).join("")}
-      </div>
-      <div class="row" style="margin-top:8px">
-        <input type="text" data-person-new placeholder="Add someone…" style="flex:0 1 220px">
-        <button type="button" class="btn btn-ghost btn-sm" data-person-add>Add</button>
+        ${people.length ? people.map(p => {
+          const on = tripPeople(trip).find(tp => tp.person_id === p.id);
+          return `<label class="person-row">
+            <input type="checkbox" data-trip-person="${p.id}" ${on ? "checked" : ""}>
+            <span>${esc(p.name)}${p.is_self ? " (you)" : ""}</span>
+            ${p.email ? `<span class="field-opt">${esc(p.email)}</span>` : ""}
+          </label>`;
+        }).join("") : `<p class="empty-hist">No one in your people list yet — add them on
+          the People &amp; costs page.</p>`}
       </div>
     </div>
+    ${categories.find(c => c.id === trip.category_id)?.is_ski ? `
+    <label class="field field-narrow">Days on the slopes
+      <input type="number" min="0" step="1" data-m-skidays value="${trip.ski_days ?? ""}"
+        placeholder="e.g. 4">
+      <span class="field-hint">Used to work out the cost per person per ski day.</span>
+    </label>` : ""}
     <label class="field span2">Notes
       <textarea data-m-notes>${esc(trip.notes || "")}</textarea>
     </label>
@@ -5811,7 +5842,9 @@ function wireEvents(activeTrip){
       const notes = holder.querySelector(`[data-m-notes]`).value.trim();
       // People are rows of their own now, saved as you edit them rather than
       // with the rest of the form — attendees is left untouched on the trip.
+      const skiEl = holder.querySelector("[data-m-skidays]");
       await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, notes,
+        ...(skiEl ? { ski_days: skiEl.value === "" ? null : parseInt(skiEl.value, 10) } : {}),
         ...(tripAlternativeAvailable
           ? { is_alternative: !!holder.querySelector("[data-m-alternative]")?.checked } : {}) });
       let folderSel = holder.querySelector(`[data-m-folder]`).value;
@@ -5840,42 +5873,32 @@ function wireEvents(activeTrip){
     });
     document.querySelector(`[data-meta-cancel="${activeTrip.id}"]`)?.addEventListener("click", render);
 
-    // People save as you edit them, not with the rest of the form — a person
-    // has to exist before anything can be recorded against them, and the form
-    // stays open afterwards so you can add the whole group in one go.
-    const addPerson = async () => {
-      const input = holder.querySelector("[data-person-new]");
-      const name = input.value.trim();
-      if (!name) { input.focus(); return; }
-      await createTripPerson(activeTrip.id, name);
+    // Ticking someone adds them to the trip; unticking removes them and
+    // anything recorded against them on this trip's bookings. The master
+    // record is untouched either way — they stay in your people list.
+    holder.querySelectorAll("[data-trip-person]").forEach(box => {
+      box.addEventListener("change", async () => {
+        const personId = box.dataset.tripPerson;
+        const existing = tripPeople(activeTrip).find(tp => tp.person_id === personId);
+        if (box.checked && !existing){
+          await createTripPerson(activeTrip.id, personId);
+        } else if (!box.checked && existing){
+          const nm = personById(personId)?.name || "them";
+          if (!confirm(`Take ${nm} off this trip?\n\nAnything recorded against them on this trip's bookings goes too.`)){
+            box.checked = true; return;
+          }
+          await deleteTripPerson(existing.id);
+        } else return;
+        await refresh();
+        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      });
+    });
+
+    holder.querySelector("[data-m-catski]")?.addEventListener("change", async (e) => {
+      await supabase.from("trip_categories")
+        .update({ is_ski: e.target.checked }).eq("id", activeTrip.category_id);
       await refresh();
       document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
-      document.querySelector("[data-person-new]")?.focus();
-    };
-    holder.querySelector("[data-person-add]")?.addEventListener("click", addPerson);
-    holder.querySelector("[data-person-new]")?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter"){ e.preventDefault(); addPerson(); }
-    });
-    holder.querySelectorAll("[data-person-name]").forEach(input => {
-      // on blur rather than per keystroke: one write when you stop typing.
-      input.addEventListener("blur", async () => {
-        const name = input.value.trim();
-        const person = tripPeople(activeTrip).find(p => p.id === input.dataset.personName);
-        if (!person || !name || name === person.name){ input.value = person?.name || name; return; }
-        await renameTripPerson(person.id, name);
-        await refresh();
-        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
-      });
-    });
-    holder.querySelectorAll("[data-person-del]").forEach(btn => {
-      btn.addEventListener("click", async () => {
-        const person = tripPeople(activeTrip).find(p => p.id === btn.dataset.personDel);
-        if (!person) return;
-        if (!confirm(`Remove ${person.name} from this trip?\n\nAnything recorded against them on a booking goes too.`)) return;
-        await deleteTripPerson(person.id);
-        await refresh();
-        document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
-      });
     });
   });
 
