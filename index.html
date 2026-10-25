@@ -744,8 +744,12 @@
     .summary-sheet{border:none;padding:0;max-width:none}
   }
   .booking-people{display:flex;flex-direction:column;gap:6px;margin-top:6px}
-  .bp-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,1.2fr) 110px;
+  .bp-row{display:grid;grid-template-columns:minmax(130px,1fr) minmax(0,1.1fr) 152px;
       gap:8px;align-items:center}
+  .bp-share{display:flex;gap:6px;align-items:center}
+  .bp-share input{flex:1;min-width:0}
+  .bp-share select{width:60px;flex-shrink:0;margin-top:0}
+  .bp-sub{display:block;font-size:11px;color:var(--muted)}
   .bp-who{display:flex;align-items:center;gap:7px;font-size:13px;min-width:0}
   .bp-who input{accent-color:var(--amber);flex-shrink:0;margin:0}
   .bp-who span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -2245,41 +2249,76 @@ async function saveBookingPeople(tripId, kind, id, rows){
   if (delErr) { alert(delErr.message); return; }
   if (!rows.length) return;
   const { error } = await supabase.from("booking_people").insert(
-    rows.map(r => ({ trip_id: tripId, person_id: r.personId, [col]: id,
-                     reference: r.reference || null, cost: r.cost })));
+    rows.map(r => ({ trip_id: tripId, person_id: r.personId || null,
+                     group_id: r.groupId || null, [col]: id,
+                     reference: r.reference || null,
+                     cost: r.cost ?? null, cost_percent: r.costPercent ?? null })));
   if (error) alert(error.message);
 }
 
-// The per-person block shown inside a flight or rental form.
-function bookingPeopleFieldsHTML(trip, prefix, existing){
-  const roster = tripPeople(trip);
-  if (!roster.length){
+// Who a booking can be charged to. Flights are per traveller — a seat belongs
+// to one person. Housing is booked for a household, so those are offered as
+// single subjects alongside the individuals who aren't in one.
+function bookingSubjects(trip, kind){
+  const roster = tripPeople(trip)
+    .map(tp => personById(tp.person_id)).filter(Boolean);
+  if (kind === "flight") return roster.map(p => ({ key: `p:${p.id}`, personId: p.id, name: p.name }));
+  const out = [];
+  const seen = new Set();
+  for (const g of personGroups){
+    const members = roster.filter(p => p.group_id === g.id);
+    if (!members.length) continue;
+    members.forEach(m => seen.add(m.id));
+    out.push({ key: `g:${g.id}`, groupId: g.id,
+               name: g.name, sub: members.map(m => m.name).join(", ") });
+  }
+  for (const p of roster){
+    if (seen.has(p.id)) continue;
+    out.push({ key: `p:${p.id}`, personId: p.id, name: p.name });
+  }
+  return out;
+}
+
+// The per-booking share block.
+function bookingPeopleFieldsHTML(trip, prefix, existing, kind){
+  const subjects = bookingSubjects(trip, kind);
+  if (!subjects.length){
     return `<div class="field span2">Who's on this booking
-      <span class="field-hint">No one listed on this trip yet — add people in
+      <span class="field-hint">No one on this trip yet — tick people in
         <b>Trip details</b> and they'll show up here.</span>
     </div>`;
   }
-  const byPerson = new Map((existing || []).map(b => [b.person_id, b]));
+  const byKey = new Map((existing || []).map(b =>
+    [b.group_id ? `g:${b.group_id}` : `p:${b.person_id}`, b]));
   return `
-    <div class="form-section">Who's on this booking <span class="field-opt">(leave empty if it's just you)</span></div>
+    <div class="form-section">Who's on this booking <span class="field-opt">(leave empty if it's all yours)</span></div>
     <div class="field span2">
       <div class="booking-people">
-        ${roster.map(p => {
-          const row = byPerson.get(p.id);
-          return `<div class="bp-row" data-bp-row="${p.id}">
+        ${subjects.map(sub => {
+          const row = byKey.get(sub.key);
+          // Whichever column was filled in decides which unit shows.
+          const isPct = row ? (row.cost == null && row.cost_percent != null) : false;
+          const val = row ? (isPct ? row.cost_percent : row.cost) : "";
+          return `<div class="bp-row" data-bp-row="${sub.key}">
             <label class="bp-who">
-              <input type="checkbox" data-${prefix}-bp-on="${p.id}" ${row ? "checked" : ""}>
-              <span>${esc(personById(p.person_id)?.name || p.name)}</span>
+              <input type="checkbox" data-${prefix}-bp-on="${sub.key}" ${row ? "checked" : ""}>
+              <span>${esc(sub.name)}${sub.sub ? `<span class="bp-sub">${esc(sub.sub)}</span>` : ""}</span>
             </label>
-            <input type="text" data-${prefix}-bp-ref="${p.id}" placeholder="their reference"
+            <input type="text" data-${prefix}-bp-ref="${sub.key}" placeholder="their reference"
               value="${esc(row?.reference || "")}">
-            <input type="number" step="0.01" data-${prefix}-bp-cost="${p.id}" placeholder="their share"
-              value="${row?.cost ?? ""}">
+            <span class="bp-share">
+              <input type="number" step="0.01" data-${prefix}-bp-val="${sub.key}"
+                placeholder="share" value="${val ?? ""}">
+              <select data-${prefix}-bp-unit="${sub.key}" aria-label="Share unit">
+                <option value="amount" ${isPct ? "" : "selected"}>$</option>
+                <option value="percent" ${isPct ? "selected" : ""}>%</option>
+              </select>
+            </span>
           </div>`;
         }).join("")}
       </div>
-      <span class="field-hint">Tick who this covers. A reference or share is only needed where
-        theirs differs — anything left blank stays on you.</span>
+      <span class="field-hint">Tick who it covers. A share can be a flat amount or a percentage
+        of the booking — fill in whichever you have. Anything left blank stays with whoever paid.</span>
     </div>`;
 }
 
@@ -2287,26 +2326,31 @@ function readBookingPeople(container, prefix){
   const rows = [];
   container.querySelectorAll(`[data-${prefix}-bp-on]`).forEach(box => {
     if (!box.checked) return;
-    const id = box.dataset[`${prefix}BpOn`];
-    const costRaw = container.querySelector(`[data-${prefix}-bp-cost="${id}"]`)?.value;
+    const key = box.getAttribute(`data-${prefix}-bp-on`);
+    const raw = container.querySelector(`[data-${prefix}-bp-val="${key}"]`)?.value;
+    const unit = container.querySelector(`[data-${prefix}-bp-unit="${key}"]`)?.value;
+    const num = raw === "" || raw == null ? null : parseFloat(raw);
     rows.push({
-      personId: id,
-      reference: container.querySelector(`[data-${prefix}-bp-ref="${id}"]`)?.value.trim() || null,
-      cost: costRaw === "" || costRaw == null ? null : parseFloat(costRaw),
+      personId: key.startsWith("p:") ? key.slice(2) : null,
+      groupId: key.startsWith("g:") ? key.slice(2) : null,
+      reference: container.querySelector(`[data-${prefix}-bp-ref="${key}"]`)?.value.trim() || null,
+      cost: unit === "percent" ? null : num,
+      costPercent: unit === "percent" ? num : null,
     });
   });
   return rows;
 }
 
-// "Paid by" — null means you, which is the default and the common case.
+// Who paid. Defaults to you explicitly rather than leaving it blank and
+// meaning you — the whole master list is offered, so you're selectable
+// without first putting yourself on the trip's roster.
 function paidByFieldHTML(trip, prefix, current){
-  const roster = tripPeople(trip);
-  if (!roster.length) return "";
+  if (!people.length) return "";
+  const selected = current || selfPerson()?.id || "";
   return `<label class="field field-narrow">Paid by
     <select data-${prefix}-paidby>
-      <option value="">You</option>
-      ${roster.map(p => `<option value="${p.id}" ${p.id===current?"selected":""}>${
-        esc(personById(p.person_id)?.name || p.name)}</option>`).join("")}
+      ${people.map(p => `<option value="${p.id}" ${p.id===selected?"selected":""}>${
+        esc(p.name)}${p.is_self ? " (you)" : ""}</option>`).join("")}
     </select>
   </label>`;
 }
@@ -2329,6 +2373,7 @@ async function createFlight(tripId, fields){
     alert_below: fields.alertBelow, notes: fields.notes, position
   };
   row.paid_by = fields.paidBy || null;
+  row.points_cents = fields.pointsCents ?? null;
   if (flightAirlineAvailable) row.airline = fields.airline || null;
   if (flightStopsAvailable){
     row.stops_out = fields.stopsOut || null;
@@ -3027,6 +3072,11 @@ function renderEditForm(f, trip){
     <label class="field field-narrow">Points per passenger <span class="field-opt">— optional</span>
       <input type="number" step="1" data-f-paidpoints placeholder="0">
     </label>
+    <label class="field field-narrow">Each point is worth <span class="field-opt">— cents</span>
+      <input type="number" step="0.01" data-f-pointscents placeholder="e.g. 1.4">
+      <span class="field-hint">Lets an award ticket be charged on in money. Without it a
+        points booking counts as nothing.</span>
+    </label>
     <label class="field span2">Points program <span class="field-opt">— only if you paid with points</span>
       ${pointsProgramFieldHTML("f", "airline")}
     </label>
@@ -3048,7 +3098,7 @@ function renderEditForm(f, trip){
       <textarea data-f-notes placeholder="Seat preferences, who's on this booking, anything worth remembering"></textarea>
     </label>
     ${paidByFieldHTML(trip, "f", f.paid_by)}
-    ${bookingPeopleFieldsHTML(trip, "f", bookingPeopleFor(trip, "flight", f.id))}
+    ${bookingPeopleFieldsHTML(trip, "f", bookingPeopleFor(trip, "flight", f.id), "flight")}
     <div class="span2 row form-actions">
       <button class="btn btn-sm" data-save-flight="${f.id}">Save</button>
       <button class="btn-link" data-cancel-flight="${f.id}">cancel</button>
@@ -3124,6 +3174,11 @@ function addFlightFormHTML(tripId, trip){
     <label class="field field-narrow">Points per passenger <span class="field-opt">— optional</span>
       <input type="number" step="1" data-nf-paidpoints placeholder="0">
     </label>
+    <label class="field field-narrow">Each point is worth <span class="field-opt">— cents</span>
+      <input type="number" step="0.01" data-nf-pointscents placeholder="e.g. 1.4">
+      <span class="field-hint">Lets an award ticket be charged on in money. Without it a
+        points booking counts as nothing.</span>
+    </label>
     <label class="field span2">Points program <span class="field-opt">— only if you paid with points</span>
       ${pointsProgramFieldHTML("nf", "airline")}
     </label>
@@ -3145,7 +3200,7 @@ function addFlightFormHTML(tripId, trip){
       <textarea data-nf-notes placeholder="Seat preferences, who's on this booking, anything worth remembering"></textarea>
     </label>
     ${paidByFieldHTML(trip, "nf", null)}
-    ${bookingPeopleFieldsHTML(trip, "nf", [])}
+    ${bookingPeopleFieldsHTML(trip, "nf", [], "flight")}
     <div class="span2 row form-actions">
       <button class="btn btn-sm" data-nf-save="${tripId}">Add flight</button>
       <button class="btn-link" data-nf-cancel="${tripId}">cancel</button>
@@ -3240,37 +3295,74 @@ function renderFilterRail(trip){
 // What one person owes, and what they laid out. A booking with no per-person
 // rows sits wholly on whoever paid it, which by default is you — so a trip
 // with nothing filled in still adds up.
+// What a booking actually cost, in money. An award flight is a real cost to
+// whoever redeemed the points, so it converts at the rate recorded on it —
+// without one it contributes nothing, which is how points bookings used to
+// disappear from the ledger entirely.
+function bookingTotal(kind, row){
+  if (kind === "flight"){
+    const n = row.passengers || 1;
+    const cash = (row.paid_cash || 0) * n;
+    const pts = (row.paid_points || 0) * n;
+    const rate = Number(row.points_cents);
+    return cash + (pts && rate ? pts * rate / 100 : 0);
+  }
+  return row.paid_cash || 0;
+}
+
+// A share is a flat amount or a slice of the booking, never both — whichever
+// was filled in is the one that means anything.
+function shareAmount(row, total){
+  if (row.cost != null) return Number(row.cost) || 0;
+  if (row.cost_percent != null) return (Number(row.cost_percent) || 0) / 100 * total;
+  return null;
+}
+
 function tripMoney(trip){
-  const roster = tripPeople(trip);
-  // personId is the master-list id, carried through so the People page can
-  // add a person's share up across trips. Rows keep their trip_people id as
-  // the key, since that's what paid_by and booking_people point at.
-  const ledger = new Map(roster.map(p => [p.id,
-    { name: personById(p.person_id)?.name || p.name, personId: p.person_id, owes: 0, paid: 0 }]));
-  // An unset paid_by still means you. Attribute it to your master record so
-  // it lands in your running total rather than in a nameless bucket.
+  // Keyed on master-people ids throughout: payers and shares point at the
+  // master list now, so the roster is only "who's on this trip" and isn't
+  // needed to attribute money.
+  const ledger = new Map();
   const self = selfPerson();
-  const selfRow = roster.find(p => p.person_id && p.person_id === self?.id);
-  const you = selfRow ? ledger.get(selfRow.id)
-    : { name: self?.name || "You", personId: self?.id || null, owes: 0, paid: 0 };
-  const entryFor = id => (id ? (ledger.get(id) || you) : you);
+  const entryFor = (personId) => {
+    const id = personId || self?.id || "__you__";
+    if (!ledger.has(id)){
+      ledger.set(id, { personId: id === "__you__" ? null : id,
+        name: personById(id)?.name || self?.name || "You", owes: 0, paid: 0 });
+    }
+    return ledger.get(id);
+  };
+  // A household share is owed by the household. Split it evenly across its
+  // members for the ledger so each person's running total is meaningful; the
+  // People page adds them back up under the household name.
+  const chargeGroup = (groupId, amount) => {
+    const members = people.filter(p => p.group_id === groupId);
+    if (!members.length) return;
+    const each = amount / members.length;
+    for (const m of members) entryFor(m.id).owes += each;
+  };
   const over = [];
 
   const bookings = [
     ...(trip.flights || []).filter(f => f.status !== "watching")
-      .map(f => ({ kind: "flight", row: f, total: (f.paid_cash || 0) * (f.passengers || 1) })),
+      .map(f => ({ kind: "flight", row: f, total: bookingTotal("flight", f) })),
     ...(trip.rentals || []).filter(r => r.status !== "watching")
-      .map(r => ({ kind: "rental", row: r, total: r.paid_cash || 0 })),
+      .map(r => ({ kind: "rental", row: r, total: bookingTotal("rental", r) })),
   ];
 
   for (const b of bookings){
     entryFor(b.row.paid_by).paid += b.total;
     const shares = bookingPeopleFor(trip, b.kind, b.row.id);
-    const stated = shares.filter(x => x.cost != null);
-    for (const x of stated) entryFor(x.person_id).owes += Number(x.cost) || 0;
+    const stated = shares
+      .map(x => ({ ...x, amount: shareAmount(x, b.total) }))
+      .filter(x => x.amount != null);
+    for (const x of stated){
+      if (x.group_id) chargeGroup(x.group_id, x.amount);
+      else entryFor(x.person_id).owes += x.amount;
+    }
     // Whatever nobody has claimed stays with the payer rather than vanishing,
     // so the owed column always reconciles against what was actually spent.
-    const claimed = stated.reduce((n, x) => n + (Number(x.cost) || 0), 0);
+    const claimed = stated.reduce((n, x) => n + x.amount, 0);
     const remainder = b.total - claimed;
     if (remainder > 0.005) entryFor(b.row.paid_by).owes += remainder;
     // Shares adding up to more than the booking cost is a typo, not a
@@ -3279,10 +3371,7 @@ function tripMoney(trip){
     else if (remainder < -0.005) over.push({ label: b.row.label, by: -remainder });
   }
 
-  // `you` may already be one of the ledger rows when you're on the roster;
-  // including it twice would double every figure you're involved in.
-  const all = ledger.has(selfRow?.id) ? [...ledger.values()] : [you, ...ledger.values()];
-  const rows = all.filter(e => e.owes || e.paid);
+  const rows = [...ledger.values()].filter(e => e.owes || e.paid);
   return { rows: rows.map(e => ({ ...e, net: e.paid - e.owes })), over,
            total: bookings.reduce((n, b) => n + b.total, 0) };
 }
@@ -4165,7 +4254,7 @@ function rentalFormHTML(prefix, idAttr, defaults, trip, existingPeople){
       <textarea data-${p}-notes placeholder="optional"></textarea>
     </label>
     ${paidByFieldHTML(trip, p, defaults && defaults.paidBy)}
-    ${bookingPeopleFieldsHTML(trip, p, existingPeople)}
+    ${bookingPeopleFieldsHTML(trip, p, existingPeople, "rental")}
     ${splitRowsHTML(p)}
     <div class="span2 row" style="margin:0">
       <button class="btn btn-sm" data-${p}-save>Save</button>
@@ -6056,6 +6145,7 @@ function wireEvents(activeTrip){
       form.querySelector("[data-f-return-time]").value = (flight.return_time || "").slice(0,5);
       form.querySelector("[data-f-passengers]").value = flight.passengers || 1;
       if (flightAirlineAvailable) form.querySelector("[data-f-airline]").value = flight.airline || "";
+      form.querySelector("[data-f-pointscents]").value = flight.points_cents ?? "";
       if (flightStopsAvailable){
         form.querySelector("[data-f-stops-out]").value = flight.stops_out || "";
         form.querySelector("[data-f-stops-back]").value = flight.stops_back || "";
@@ -6129,6 +6219,8 @@ function wireEvents(activeTrip){
           confirmation_code: form.querySelector("[data-f-confirmation]").value.trim() || null,
           alert_below: ab === "" ? null : parseFloat(ab),
           paid_by: form.querySelector("[data-f-paidby]")?.value || null,
+          points_cents: (v => v === "" || v == null ? null : parseFloat(v))(
+            form.querySelector("[data-f-pointscents]")?.value),
           notes: form.querySelector("[data-f-notes]").value.trim(),
         });
         await saveBookingPeople(activeTrip.id, "flight", fid, readBookingPeople(form, "f"));
@@ -6274,6 +6366,8 @@ function wireAddFlightForm(tripId){
       pointsProgram: holder.querySelector("[data-nf-pointsprogram]").value.trim() || null,
       passengers,
       airline: holder.querySelector("[data-nf-airline]")?.value.trim() || null,
+      pointsCents: (v => v === "" || v == null ? null : parseFloat(v))(
+        holder.querySelector("[data-nf-pointscents]")?.value),
       stopsOut: holder.querySelector("[data-nf-stops-out]")?.value || null,
       stopsBack: holder.querySelector("[data-nf-stops-back]")?.value || null,
       flightNumber: holder.querySelector("[data-nf-flightnumber]").value.trim() || null,
