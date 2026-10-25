@@ -2280,8 +2280,9 @@ function bookingSubjects(trip, kind){
 }
 
 // The per-booking share block.
-function bookingPeopleFieldsHTML(trip, prefix, existing, kind){
+function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
   const subjects = bookingSubjects(trip, kind);
+  bookingRow = bookingRow || {};
   if (!subjects.length){
     return `<div class="field span2">Who's on this booking
       <span class="field-hint">No one on this trip yet — tick people in
@@ -2299,6 +2300,9 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind){
           // Whichever column was filled in decides which unit shows.
           const isPct = row ? (row.cost == null && row.cost_percent != null) : false;
           const val = row ? (isPct ? row.cost_percent : row.cost) : "";
+          // A seat is priced per person, so a flight share starts at one
+          // ticket rather than blank. Housing has no such natural unit.
+          const ticket = kind === "flight" ? flightTicketCost(row ? bookingRow : bookingRow) : 0;
           return `<div class="bp-row" data-bp-row="${sub.key}">
             <label class="bp-who">
               <input type="checkbox" data-${prefix}-bp-on="${sub.key}" ${row ? "checked" : ""}>
@@ -2308,7 +2312,9 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind){
               value="${esc(row?.reference || "")}">
             <span class="bp-share">
               <input type="number" step="0.01" data-${prefix}-bp-val="${sub.key}"
-                placeholder="share" value="${val ?? ""}">
+                data-ticket="${kind === "flight" ? ticket : ""}"
+                placeholder="${kind === "flight" && ticket ? fmtCash(ticket, bookingRow.currency) : "share"}"
+                value="${val ?? ""}">
               <select data-${prefix}-bp-unit="${sub.key}" aria-label="Share unit">
                 <option value="amount" ${isPct ? "" : "selected"}>$</option>
                 <option value="percent" ${isPct ? "selected" : ""}>%</option>
@@ -2317,8 +2323,10 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind){
           </div>`;
         }).join("")}
       </div>
-      <span class="field-hint">Tick who it covers. A share can be a flat amount or a percentage
-        of the booking — fill in whichever you have. Anything left blank stays with whoever paid.</span>
+      <span class="field-hint">Tick who it covers.${kind === "flight"
+        ? " A flight share starts at one ticket; change it for anyone who paid a different fare."
+        : " A share can be a flat amount or a percentage of the booking."}
+        Anything left blank stays with whoever paid.</span>
     </div>`;
 }
 
@@ -3098,7 +3106,7 @@ function renderEditForm(f, trip){
       <textarea data-f-notes placeholder="Seat preferences, who's on this booking, anything worth remembering"></textarea>
     </label>
     ${paidByFieldHTML(trip, "f", f.paid_by)}
-    ${bookingPeopleFieldsHTML(trip, "f", bookingPeopleFor(trip, "flight", f.id), "flight")}
+    ${bookingPeopleFieldsHTML(trip, "f", bookingPeopleFor(trip, "flight", f.id), "flight", f)}
     <div class="span2 row form-actions">
       <button class="btn btn-sm" data-save-flight="${f.id}">Save</button>
       <button class="btn-link" data-cancel-flight="${f.id}">cancel</button>
@@ -3200,7 +3208,7 @@ function addFlightFormHTML(tripId, trip){
       <textarea data-nf-notes placeholder="Seat preferences, who's on this booking, anything worth remembering"></textarea>
     </label>
     ${paidByFieldHTML(trip, "nf", null)}
-    ${bookingPeopleFieldsHTML(trip, "nf", [], "flight")}
+    ${bookingPeopleFieldsHTML(trip, "nf", [], "flight", {})}
     <div class="span2 row form-actions">
       <button class="btn btn-sm" data-nf-save="${tripId}">Add flight</button>
       <button class="btn-link" data-nf-cancel="${tripId}">cancel</button>
@@ -3308,6 +3316,16 @@ function bookingTotal(kind, row){
     return cash + (pts && rate ? pts * rate / 100 : 0);
   }
   return row.paid_cash || 0;
+}
+
+// What one seat on this flight costs. paid_cash and paid_points are already
+// per passenger, so this is them plus whatever the points convert to — the
+// figure a single traveller on the booking owes.
+function flightTicketCost(f){
+  const cash = Number(f.paid_cash) || 0;
+  const pts = Number(f.paid_points) || 0;
+  const rate = Number(f.points_cents) || 0;
+  return cash + (pts && rate ? pts * rate / 100 : 0);
 }
 
 // A share is a flat amount or a slice of the booking, never both — whichever
@@ -3990,6 +4008,46 @@ function wireAutoTitle(container, sel){
   // Paste a search result and take the times, airline and price out of it.
   // Fills rather than overwrites where you've already typed something, and
   // reports what it found so a bad parse is visible instead of silent.
+  // Flight shares default to one ticket, read from the form as it stands
+  // rather than from the saved row — the price is usually typed after the
+  // people are ticked, and a stale default would be worse than none.
+  const pointsCentsEl = sel.pointsCents ? container.querySelector(sel.pointsCents) : null;
+  const ticketNow = () => {
+    const cash = parseFloat(cashEl?.value) || 0;
+    const pts = parseFloat(pointsEl?.value) || 0;
+    const rate = parseFloat(pointsCentsEl?.value) || 0;
+    return cash + (pts && rate ? pts * rate / 100 : 0);
+  };
+  const refreshTicketDefaults = () => {
+    container.querySelectorAll("[data-ticket]").forEach(el => {
+      const t = ticketNow();
+      el.dataset.ticket = t || "";
+      el.placeholder = t ? fmtCash(t, "USD") : "share";
+      // Only move a value this same default put there, never one you typed.
+      if (el.dataset.autofilled === "1"){
+        if (t) el.value = t.toFixed(2); else el.value = "";
+      }
+    });
+  };
+  [cashEl, pointsEl, pointsCentsEl].forEach(el => el?.addEventListener("input", refreshTicketDefaults));
+  container.querySelectorAll("[data-ticket]").forEach(el => {
+    el.addEventListener("input", () => { el.dataset.autofilled = ""; });
+  });
+  container.querySelectorAll(`[data-${sel.bpPrefix || "x"}-bp-on]`).forEach(box => {
+    box.addEventListener("change", () => {
+      const key = box.getAttribute(`data-${sel.bpPrefix}-bp-on`);
+      const val = container.querySelector(`[data-${sel.bpPrefix}-bp-val="${key}"]`);
+      const unit = container.querySelector(`[data-${sel.bpPrefix}-bp-unit="${key}"]`);
+      if (!val) return;
+      if (box.checked && val.value === ""){
+        const t = ticketNow();
+        if (t){ val.value = t.toFixed(2); val.dataset.autofilled = "1"; if (unit) unit.value = "amount"; }
+      } else if (!box.checked && val.dataset.autofilled === "1"){
+        val.value = ""; val.dataset.autofilled = "";
+      }
+    });
+  });
+
   const resultEl = sel.result ? container.querySelector(sel.result) : null;
   const readoutEl = sel.resultRead ? container.querySelector(sel.resultRead) : null;
   if (resultEl){
@@ -6177,7 +6235,8 @@ function wireEvents(activeTrip){
         passengers: "[data-f-passengers]", returnTime: "[data-f-return-time]",
         airline: "[data-f-airline]",
         result: "[data-f-result]", resultRead: "[data-f-result-read]",
-        stopsOut: "[data-f-stops-out]", stopsBack: "[data-f-stops-back]" });
+        stopsOut: "[data-f-stops-out]", stopsBack: "[data-f-stops-back]",
+        pointsCents: "[data-f-pointscents]", bpPrefix: "f" });
 
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
@@ -6337,7 +6396,8 @@ function wireAddFlightForm(tripId){
     passengers: "[data-nf-passengers]", returnTime: "[data-nf-return-time]",
     airline: "[data-nf-airline]",
     result: "[data-nf-result]", resultRead: "[data-nf-result-read]",
-    stopsOut: "[data-nf-stops-out]", stopsBack: "[data-nf-stops-back]" });
+    stopsOut: "[data-nf-stops-out]", stopsBack: "[data-nf-stops-back]",
+    pointsCents: "[data-nf-pointscents]", bpPrefix: "nf" });
   saveBtn.addEventListener("click", async () => {
     const url = holder.querySelector("[data-nf-url]").value.trim();
     const origin = holder.querySelector("[data-nf-origin]").value.trim().toUpperCase() || null;
