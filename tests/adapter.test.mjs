@@ -26,16 +26,20 @@ function extract(name){
 }
 
 function extractConst(name){
-  const m = src.match(new RegExp(`^const ${name} = .*$`, "m"));
-  if (!m) throw new Error(`${name} not found in index.html`);
-  return m[0] + "\n";
+  const start = src.indexOf(`const ${name} = `);
+  if (start < 0) throw new Error(`${name} not found in index.html`);
+  const firstLine = src.slice(start, src.indexOf("\n", start));
+  // An object literal runs to a "};" at column zero; everything else is a
+  // one-liner.
+  if (!firstLine.trimEnd().endsWith("{")) return firstLine + "\n";
+  return src.slice(start, src.indexOf("\n};", start) + 3) + "\n";
 }
 
 const names = ["bookingCents", "splitCents", "settleTrip", "selfPerson", "personById",
   "groupById", "tripPeople", "personName", "bookingPeopleFor", "settlementBooking",
   "settlementBookings", "settlementGroups", "settlementFor", "tripMoney",
   "flightTicketCost", "settleOne", "myShareOf", "settlementSubjectName",
-  "rentalOurPortion", "rentalSplitText"];
+  "rentalOurPortion", "rentalSplitText", "shareParts"];
 
 // The app's globals, supplied by the test rather than by a page load. esc and
 // fmtCash are display helpers and are stubbed to keep assertions readable.
@@ -45,7 +49,7 @@ const app = new Function("state", `
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const fmtCash = (n) => "$" + Number(n).toFixed(2);
   ${extractConst("toCents")}${extractConst("fromCents")}
-  ${extractConst("SELF")}${extractConst("selfId")}
+  ${extractConst("SELF")}${extractConst("selfId")}${extractConst("SHARE_BASIS")}
   ${names.map(extract).join("")}
   return { tripMoney, rentalOurPortion, rentalSplitText, myShareOf,
            settlementGroups, settlementBooking, flightTicketCost, settlementFor };
@@ -134,7 +138,7 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
   check("a household share divides between its members", owed(m),
     { Me: 450, Eugene: 225, Christine: 225, Jay: 0 });
   check("the card names the household, not its members",
-    api.rentalSplitText(trip.rentals[0]),
+    api.rentalSplitText(trip.rentals[0]).replace(/<[^>]+>/g, ""),
     "Eugene &amp; Christine $450.00 &middot; Me $450.00");
 }
 
@@ -265,6 +269,27 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
   });
   check("no shares, no rooms — the whole bill is yours", owed(api.tripMoney(trip)),
     { Me: 900, Eugene: 0, Christine: 0, Jay: 0 });
+}
+
+{
+  // One person covering a room, as the rows come back.
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-eug", room: "Main", covers_room: true },
+      { rental_id: "r1", person_id: "p-chr", room: "Main" },
+      { rental_id: "r1", person_id: "p-me",  room: "Bunk" },
+    ],
+  });
+  const m = api.tripMoney(trip);
+  check("Eugene covers the room Christine is in", owed(m),
+    { Me: 450, Eugene: 450, Christine: 0, Jay: 0 });
+  check("and Christine's zero says why",
+    [...(m.freeFor.get("p-chr") || [])], ["sharing a room"]);
+  const card = api.rentalSplitText(trip.rentals[0]);
+  check("the card groups by room like the summary does",
+    card.replace(/<[^>]+>/g, ""), "Main Eugene $450.00, Christine sharing &middot; Bunk Me $450.00");
 }
 
 // ---- damaged data ---------------------------------------------------------

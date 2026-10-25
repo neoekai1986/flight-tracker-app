@@ -345,6 +345,49 @@ function settleCase(input){
 }
 
 {
+  const r = one({ participants: [
+    { personId: "alice", room: "Main", coversRoom: true },
+    { personId: "bob",   room: "Main" },
+    { personId: "me",    room: "Bunk" },
+  ]});
+  check("one person can cover a whole room", owes(r),
+    { alice: 32000, bob: 0, me: 32000 });
+  check("the others are still listed as being in it",
+    r.breakdown[0].lines.find(l => l.subject === "bob"),
+    { subject: "bob", cents: 0, room: "Main", why: "sharing" });
+  assertReconciles("a covered room reconciles", r);
+}
+
+{
+  // Two people covering the same room split that room between them, and the
+  // third is still just in it.
+  const r = one({ participants: [
+    { personId: "alice", room: "Main", coversRoom: true },
+    { personId: "bob",   room: "Main", coversRoom: true },
+    { personId: "kit",   room: "Main" },
+    { personId: "me",    room: "Bunk" },
+  ]});
+  check("two coverers split the room they're covering", owes(r),
+    { alice: 16000, bob: 16000, kit: 0, me: 32000 });
+  assertReconciles("two coverers reconcile", r);
+}
+
+{
+  // Covering a room you're alone in changes nothing — you were paying for it
+  // either way.
+  const alone = one({ participants: [
+    { personId: "alice", room: "Main", coversRoom: true },
+    { personId: "me", room: "Bunk" },
+  ]});
+  const plain = one({ participants: [
+    { personId: "alice", room: "Main" },
+    { personId: "me", room: "Bunk" },
+  ]});
+  check("covering a room you have to yourself is a no-op",
+    owes(alone), owes(plain));
+}
+
+{
   // Everyone on the couch leaves the bill with whoever paid rather than
   // dividing it between nobody.
   const r = one({ participants: [

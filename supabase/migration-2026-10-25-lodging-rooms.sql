@@ -16,3 +16,10 @@ alter table public.booking_people
 -- they are not the same fact and the summary says different things about them.
 alter table public.booking_people
   add column if not exists is_couch boolean not null default false;
+
+-- One person can cover a whole room rather than its occupants splitting it —
+-- a parent paying for the kids' room. The others are still recorded as being
+-- in it, because who slept where is the point of naming rooms; they just
+-- aren't charged for it.
+alter table public.booking_people
+  add column if not exists covers_room boolean not null default false;
