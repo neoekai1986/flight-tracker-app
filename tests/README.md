@@ -1,7 +1,9 @@
 # Tests
 
-No framework, no install. Plain Node, run from the repo root:
+No framework, no install. Plain Node, run from the directory holding
+`index.html` — not from its parent:
 
+    cd ~/Downloads/flight-tracker-app
     node tests/settlement.test.mjs && node tests/adapter.test.mjs
 
 Both read `index.html` and pull the functions they test straight out of it by
