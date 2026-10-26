@@ -37,7 +37,7 @@ function extractConst(name){
 
 const names = ["bookingCents", "splitCents", "settleTrip", "selfPerson", "personById",
   "groupById", "tripPeople", "personName", "bookingPeopleFor", "settlementBooking",
-  "settlementBookings", "settlementGroups", "settlementFor", "tripMoney",
+  "settlementBookings", "settlementGroups", "settlementFor", "tripMoney", "tripPayments",
   "flightTicketCost", "settleOne", "myShareOf", "settlementSubjectName",
   "rentalOurPortion", "rentalSplitText", "shareParts", "parsePercent", "reasonText"];
 
@@ -368,6 +368,49 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
   check("the pieces add up to the figure in the table",
     Math.round(say("p-eug").reduce((n, d) => n + d[1], 0) * 100),
     Math.round(owed(m)["Eugene"] * 100));
+}
+
+// ---- payments, as stored --------------------------------------------------
+
+{
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-eug" },
+      { rental_id: "r1", person_id: "p-chr" },
+      { rental_id: "r1", person_id: "p-me" },
+    ],
+    trip_payments: [
+      { id: "pay1", trip_id: "t1", from_person: "p-eug", to_person: null,
+        amount: 300, paid_on: "2026-12-10", note: "venmo" },
+    ],
+  });
+  const m = api.tripMoney(trip);
+  const net = Object.fromEntries(m.rows.map(r => [r.name, r.net]));
+  check("what Eugene owed is unchanged by having paid it",
+    Object.fromEntries(m.rows.map(r => [r.name, r.owes])),
+    { Me: 300, Eugene: 300, Christine: 300, Jay: 0 });
+  check("Eugene is square, Christine still isn't",
+    [net["Eugene"], net["Christine"]], [0, -300]);
+  check("and you're owed only what's still outstanding", net["Me"], 300);
+  check("the payment is listed for the summary",
+    m.payments.map(p => [p.from_person, Number(p.amount), p.paid_on]),
+    [["p-eug", 300, "2026-12-10"]]);
+}
+
+{
+  // Several payments on one trip, listed oldest first.
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+    trip_payments: [
+      { id: "b", trip_id: "t1", from_person: "p-chr", amount: 100, paid_on: "2026-12-20" },
+      { id: "a", trip_id: "t1", from_person: "p-eug", amount: 100, paid_on: "2026-12-01" },
+    ],
+  });
+  check("payments read in the order they happened",
+    api.tripMoney(trip).payments.map(p => p.id), ["a", "b"]);
 }
 
 // ---- damaged data ---------------------------------------------------------

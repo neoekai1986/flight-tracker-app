@@ -29,7 +29,8 @@ function extractConst(name){
 
 const names = ["bookingCents", "splitCents", "settleTrip", "selfPerson", "personById",
   "groupById", "tripPeople", "personName", "bookingPeopleFor", "settlementBooking",
-  "settlementBookings", "settlementGroups", "settlementFor", "tripMoney"];
+  "settlementBookings", "settlementGroups", "settlementFor", "tripMoney",
+  "tripPayments"];
 
 const people = [
   { id: "p-ekai", name: "E-Kai", is_self: true },

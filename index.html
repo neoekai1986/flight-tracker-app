@@ -805,6 +805,17 @@
   @media (max-width:720px){ .person-card-main{grid-template-columns:1fr} }
   .summary-room{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
     color:var(--muted);margin-right:4px}
+  .paid-block{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
+  .paid-head{font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--muted);margin-bottom:7px}
+  .paid-head .field-opt{letter-spacing:0;text-transform:none}
+  .paid-list{list-style:none;margin:0 0 9px;padding:0;display:flex;
+    flex-direction:column;gap:4px;font-size:12.5px}
+  .paid-list li{display:flex;gap:8px;align-items:baseline;justify-content:space-between}
+  .paid-form{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .paid-form select,.paid-form input{margin-top:0;max-width:none;width:auto;flex:1 1 118px;
+    min-width:0}
+  .paid-form button{flex:0 0 auto}
   .owes-name{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;
     display:inline-flex;align-items:center;gap:5px;text-align:left}
   .owes-name:hover{color:var(--amber)}
@@ -1893,11 +1904,21 @@ function renderAuth(){
 // ---------------- Data layer ----------------
 
 async function loadTrips(){
-  const { data, error } = await supabase
+  // trip_payments is a whole table rather than a column, so a project without
+  // the migration fails the entire query rather than dropping one field. The
+  // first attempt asks for it and the retry doesn't, which is the only way to
+  // tell the two cases apart.
+  const base = "*, flights(*, price_logs(*), attachments(*)), rentals(*, attachments(*)), " +
+               "trip_collaborators(*), trip_people(*), booking_people(*)";
+  let { data, error } = await supabase
     .from("trips")
-    .select("*, flights(*, price_logs(*), attachments(*)), rentals(*, attachments(*)), " +
-            "trip_collaborators(*), trip_people(*), booking_people(*)")
+    .select(paymentsAvailable ? `${base}, trip_payments(*)` : base)
     .order("created_at", { ascending: true });
+  if (error && paymentsAvailable){
+    paymentsAvailable = false;
+    ({ data, error } = await supabase.from("trips").select(base)
+      .order("created_at", { ascending: true }));
+  }
   if (error) { console.error(error); return []; }
   for (const t of data){
     (t.flights || []).sort((a,b) => a.position - b.position);
@@ -2049,6 +2070,8 @@ let lodgingRoomsAvailable = true;
 let coveredSharesAvailable = true;
 // booking_people.cost_percent_text — likewise.
 let shareTextAvailable = true;
+// The trip_payments table — see the note in loadTrips().
+let paymentsAvailable = true;
 
 async function loadWishlistBoards(){
   const withReactions =
@@ -2363,6 +2386,20 @@ async function saveBookingPeople(tripId, kind, id, rows){
     shareTextAvailable = false;
     ({ error } = await supabase.from("booking_people").insert(build()));
   }
+  if (error) alert(error.message);
+}
+
+async function addPayment(tripId, fields){
+  const { error } = await supabase.from("trip_payments").insert({
+    trip_id: tripId, from_person: fields.from, to_person: fields.to || null,
+    amount: fields.amount, paid_on: fields.paidOn, note: fields.note || null,
+  });
+  if (error){ alert(error.message); return false; }
+  return true;
+}
+
+async function deletePayment(id){
+  const { error } = await supabase.from("trip_payments").delete().eq("id", id);
   if (error) alert(error.message);
 }
 
@@ -3539,6 +3576,9 @@ function splitCents(total, n){
 //              it costs, it just isn't theirs to pay. coveredBy defaults to
 //              whoever paid the booking.
 //
+// payments: [{ from, to, cents }] — money actually handed over. These move
+//           what each person has laid out, never what they owe.
+//
 // Returns per-person totals, a per-booking breakdown showing how each figure
 // was arrived at, and warnings for the two situations where the arithmetic
 // can't mean what it appears to.
@@ -3713,6 +3753,18 @@ function settleTrip(input){
                      perPerson: per.cents, perReason: per.reason });
   }
 
+  // Someone handing money over doesn't change what they owed — that stays
+  // true, and is what the payment is for. It changes what each of them has
+  // laid out: the payer is further out of pocket, the receiver less so. The
+  // trip total is untouched, and so is the invariant that the shares sum to
+  // it.
+  for (const pay of (input.payments || [])){
+    const from = pay.from, to = pay.to || input.selfId;
+    if (!from || !to || !pay.cents) continue;
+    person(from).paidCents += pay.cents;
+    person(to).paidCents -= pay.cents;
+  }
+
   for (const p of Object.values(people)) p.netCents = p.paidCents - p.owesCents;
   return { people, totalCents, unassignedCents, breakdown, warnings };
 }
@@ -3791,10 +3843,21 @@ function settlementGroups(trip){
   return out;
 }
 
+// Payments as the settlement wants them, newest last so the summary lists
+// them in the order they happened.
+function tripPayments(trip){
+  return (trip?.trip_payments || [])
+    .slice()
+    .sort((a, b) => (a.paid_on || "").localeCompare(b.paid_on || ""));
+}
+
 function settlementFor(trip){
   return settleTrip({
     bookings: settlementBookings(trip),
     groupMembers: settlementGroups(trip),
+    payments: tripPayments(trip).map(p => ({
+      from: p.from_person, to: p.to_person || null, cents: toCents(p.amount),
+    })),
     selfId: selfId(),
   });
 }
@@ -3843,6 +3906,7 @@ function tripMoney(trip){
       }
       return m;
     }, new Map()),
+    payments: tripPayments(trip),
     byBooking: new Map(r.breakdown.map(b => [b.id, b])),
   };
 }
@@ -4130,6 +4194,37 @@ function renderTripSummary(trip){
         ${money.over.length ? `<p class="summary-warn">Shares add up to more than the booking cost on
           ${money.over.map(o => `<b>${esc(o.label)}</b> (by ${fmt(o.by)})`).join(", ")} —
           worth a look, the figures below can't reconcile while that's true.</p>` : ""}
+        ${!paymentsAvailable ? "" : `
+        <div class="paid-block">
+          <div class="paid-head">Payments
+            <span class="field-opt">money actually handed over</span></div>
+          ${money.payments.length ? `<ul class="paid-list">
+            ${money.payments.map(p => `<li>
+              <span>${esc(personName(trip, p.from_person))} paid ${
+                esc(personName(trip, p.to_person))} <b>${fmt(Number(p.amount))}</b>
+                on ${esc(fmtShortDate(p.paid_on) || p.paid_on)}${
+                p.note ? ` — ${esc(p.note)}` : ""}</span>
+              <button type="button" class="btn-link" data-pay-del="${p.id}">remove</button>
+            </li>`).join("")}
+          </ul>` : `<p class="field-hint">Nothing recorded yet.</p>`}
+          <div class="paid-form">
+            <select data-pay-from aria-label="Who paid">
+              ${tripPeople(trip).map(tp => personById(tp.person_id)).filter(Boolean)
+                .map(pp => `<option value="${pp.id}">${esc(pp.name)}</option>`).join("")}
+            </select>
+            <select data-pay-to aria-label="Who they paid">
+              <option value="">paid you</option>
+              ${tripPeople(trip).map(tp => personById(tp.person_id)).filter(Boolean)
+                .filter(pp => !pp.is_self)
+                .map(pp => `<option value="${pp.id}">paid ${esc(pp.name)}</option>`).join("")}
+            </select>
+            <input type="number" step="0.01" data-pay-amount placeholder="amount" aria-label="Amount">
+            <input type="date" data-pay-on value="${todayISO()}"
+              aria-label="Date paid">
+            <input type="text" data-pay-note placeholder="note (optional)" aria-label="Note">
+            <button class="btn btn-sm" data-pay-add="${trip.id}">Record</button>
+          </div>
+        </div>`}
         <p class="field-hint">A booking with no per-person shares entered sits whole on whoever
           paid it. Watching items aren't counted.</p>`
         : `<p class="empty-hist">Nothing booked yet.</p>`}
@@ -5493,6 +5588,40 @@ document.addEventListener("change", (e) => {
   if (by){
     by.hidden = sel.value !== "covered";
     if (by.hidden) by.value = "";
+  }
+});
+
+// Recording and removing payments. Delegated, since the summary is rebuilt
+// on every render, and a full refresh afterwards because a payment changes
+// the figures the whole page is about.
+document.addEventListener("click", async (e) => {
+  if (!(e.target instanceof Element)) return;
+
+  const add = e.target.closest("[data-pay-add]");
+  if (add){
+    const field = sel => document.querySelector(sel);
+    const amount = parseFloat(field("[data-pay-amount]")?.value);
+    const paidOn = field("[data-pay-on]")?.value;
+    const from = field("[data-pay-from]")?.value;
+    const to = field("[data-pay-to]")?.value || null;
+    if (!from){ alert("Who paid?"); return; }
+    if (!(amount > 0)){ alert("How much did they pay?"); return; }
+    if (!paidOn){ alert("When did they pay?"); return; }
+    if (to && to === from){ alert("That's the same person paying themselves."); return; }
+    add.disabled = true;
+    const ok = await addPayment(add.dataset.payAdd, {
+      from, to, amount, paidOn, note: field("[data-pay-note]")?.value.trim(),
+    });
+    add.disabled = false;
+    if (ok) await refresh();
+    return;
+  }
+
+  const del = e.target.closest("[data-pay-del]");
+  if (del){
+    if (!confirm("Remove this payment?\n\nThe shares stay as they are; only the record of\nhaving paid goes.")) return;
+    await deletePayment(del.dataset.payDel);
+    await refresh();
   }
 });
 

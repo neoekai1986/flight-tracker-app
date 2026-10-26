@@ -467,6 +467,67 @@ function settleCase(input){
   assertReconciles("covering inside a room reconciles", r);
 }
 
+// ---- payments ------------------------------------------------------------
+// What someone owed stays true after they've paid it — that's what the
+// payment is for. Handing money over changes what each person is out of
+// pocket, not what their share was.
+
+{
+  const r = settleCase({
+    bookings: [{ id: "b1", label: "Stay", kind: "rental", paidCash: 600, paidBy: "me",
+                 participants: [{ personId: "alice" }, { personId: "bob" }, { personId: "me" }] }],
+    payments: [{ from: "alice", to: "me", cents: 20000 }],
+  });
+  check("the shares are untouched by a payment", owes(r),
+    { alice: 20000, bob: 20000, me: 20000 });
+  check("but what each has laid out moves",
+    Object.fromEntries(Object.entries(r.people).map(([k, v]) => [k, v.paidCents])),
+    { alice: 20000, bob: 0, me: 40000 });
+  check("so Alice is settled and Bob still owes",
+    Object.fromEntries(Object.entries(r.people).map(([k, v]) => [k, v.netCents])),
+    { alice: 0, bob: -20000, me: 20000 });
+  assertReconciles("a payment reconciles", r);
+}
+
+{
+  // Paying someone who isn't you.
+  const r = settleCase({
+    bookings: [{ id: "b1", label: "Stay", kind: "rental", paidCash: 600, paidBy: "alice",
+                 participants: [{ personId: "alice" }, { personId: "bob" }, { personId: "me" }] }],
+    payments: [{ from: "bob", to: "alice", cents: 20000 }],
+  });
+  check("a payment between two other people settles both of them",
+    Object.fromEntries(Object.entries(r.people).map(([k, v]) => [k, v.netCents])),
+    { alice: 20000, bob: 0, me: -20000 });
+  assertReconciles("a third-party payment reconciles", r);
+}
+
+{
+  // Left unsaid, a payment goes to you.
+  const r = settleCase({
+    bookings: [{ id: "b1", label: "Stay", kind: "rental", paidCash: 600, paidBy: "me",
+                 participants: [{ personId: "alice" }, { personId: "me" }] }],
+    payments: [{ from: "alice", cents: 30000 }],
+  });
+  check("an unnamed recipient is you",
+    Object.fromEntries(Object.entries(r.people).map(([k, v]) => [k, v.netCents])),
+    { alice: 0, me: 0 });
+  assertReconciles("an implied recipient reconciles", r);
+}
+
+{
+  // Overpaying is allowed, and shows as being owed money.
+  const r = settleCase({
+    bookings: [{ id: "b1", label: "Stay", kind: "rental", paidCash: 600, paidBy: "me",
+                 participants: [{ personId: "alice" }, { personId: "me" }] }],
+    payments: [{ from: "alice", cents: 40000 }],
+  });
+  check("paying too much leaves them owed the difference",
+    r.people.alice.netCents, 10000);
+  check("the trip still cost what it cost", r.totalCents, 60000);
+  assertReconciles("an overpayment reconciles", r);
+}
+
 // ---- damaged data ---------------------------------------------------------
 // A share row has to point at a person or a household. When it points at
 // neither — which repointing the shares at the master people list can leave
