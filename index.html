@@ -1209,6 +1209,34 @@ function wirePointsProgramField(prefix){
 // picker for kind="housing" — car rentals keep the plain free-text input
 // (no car-rental program list was requested), reusing that same input
 // element rather than rendering a second field.
+// A car has no bedrooms. Rooms, couch and whole-room belong to a place you
+// sleep, and the rental kind is a live choice on the form rather than
+// something known when it was rendered — so they come and go with it, the
+// same way the points-program field does below.
+function applyRentalKindToShares(prefix, kind){
+  const housing = kind !== "car";
+  document.querySelectorAll(`[data-${prefix}-bp-room]`).forEach(el => {
+    el.hidden = !housing;
+    if (!housing) el.value = "";
+  });
+  document.querySelectorAll(`[data-${prefix}-bp-unit]`).forEach(sel => {
+    for (const opt of sel.options){
+      if (opt.value === "couch" || opt.value === "wholeroom"){
+        opt.hidden = !housing;
+        opt.disabled = !housing;
+      }
+    }
+    // Switching to a car with someone on the couch would leave the share set
+    // to something the form no longer offers, so it goes back to an amount.
+    if (!housing && (sel.value === "couch" || sel.value === "wholeroom")){
+      sel.value = "amount";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  const hint = document.querySelector(`[data-${prefix}-room-hint]`);
+  if (hint) hint.hidden = !housing;
+}
+
 function applyRentalKindToProgramField(prefix, kind){
   const picker = document.querySelector(`[data-${prefix}-pointsprogram-picker]`);
   const starBtn = document.querySelector(`[data-${prefix}-pointsprogram-fav]`);
@@ -2434,11 +2462,11 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           ? ` Set the unit to <b>pass</b> for a companion seat — it costs its passenger
              nothing, and the summary says so rather than showing a bare $0.00.` : ""}${
         kind !== "flight" && lodgingRoomsAvailable
-          ? ` Name a <b>room</b> and the cost divides between rooms rather than between
-             people, so sharing one doesn't cost double. Anyone not taking a bedroom
-             goes down as <b>couch</b> — listed, and charged nothing. Set someone to
-             <b>whole room</b> to have them cover theirs on their own instead of
-             splitting it with whoever else is in it.` : ""}
+          ? `<span data-${prefix}-room-hint> Name a <b>room</b> and the cost divides between
+             rooms rather than between people, so sharing one doesn't cost double. Anyone
+             not taking a bedroom goes down as <b>couch</b> — listed, and charged nothing.
+             Set someone to <b>whole room</b> to have them cover theirs on their own
+             instead of splitting it with whoever else is in it.</span>` : ""}
         Set someone to <b>covered</b> and their share is worked out as usual and
         charged to whoever is covering it — the payer unless you say otherwise.
         A percentage can be written as a fraction: <b>1/5</b> means a fifth of the
@@ -6619,8 +6647,10 @@ function wireEvents(activeTrip){
     wireDateRangeButtons();
     wirePointsProgramField("nr");
     applyRentalKindToProgramField("nr", "housing");
+    applyRentalKindToShares("nr", "housing");
     holder.querySelector("[data-nr-kind]").addEventListener("change", (e) => {
       applyRentalKindToProgramField("nr", e.target.value);
+      applyRentalKindToShares("nr", e.target.value);
     });
     holder.querySelector("[data-nr-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
     holder.querySelector("[data-nr-save]").addEventListener("click", async () => {
@@ -6675,8 +6705,10 @@ function wireEvents(activeTrip){
       populatePointsProgramField("er", "hotel", rental.points_program || "");
       wirePointsProgramField("er");
       applyRentalKindToProgramField("er", rental.kind);
+      applyRentalKindToShares("er", rental.kind);
       form.querySelector("[data-er-kind]").addEventListener("change", (e) => {
         applyRentalKindToProgramField("er", e.target.value);
+        applyRentalKindToShares("er", e.target.value);
       });
       form.querySelector("[data-er-notes]").value = rental.notes || "";
       form.querySelector("[data-er-status]").value = rental.status || "booked";
