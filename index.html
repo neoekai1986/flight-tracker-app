@@ -756,6 +756,11 @@
      one filled in least often. */
   .bp-row-rooms{grid-template-columns:repeat(auto-fit,minmax(128px,1fr))}
   .bp-row-rooms .bp-ref{order:3}
+  /* Spans the row under the person it belongs to, since it's a sentence
+     about them rather than another column of the same table. */
+  .bp-row .bp-by{grid-column:1/-1;order:4;width:100%;max-width:none;margin-top:0;
+    font-size:12px;color:var(--muted)}
+  .bp-row .bp-by[hidden]{display:none}
   .bp-share{display:flex;gap:6px;align-items:center}
   .bp-share input{flex:1;min-width:0}
   .bp-share select{width:60px;flex-shrink:0;margin-top:0}
@@ -1869,6 +1874,7 @@ async function loadTrips(){
   if (bpSample){
     companionPassAvailable = "is_companion" in bpSample;
     lodgingRoomsAvailable = "room" in bpSample;
+    coveredSharesAvailable = "is_covered" in bpSample;
   }
   return data;
 }
@@ -1994,6 +2000,8 @@ let flightStopsAvailable = true;
 let companionPassAvailable = true;
 // booking_people.room / is_couch — likewise.
 let lodgingRoomsAvailable = true;
+// booking_people.is_covered / covered_by — likewise.
+let coveredSharesAvailable = true;
 
 async function loadWishlistBoards(){
   const withReactions =
@@ -2291,6 +2299,8 @@ async function saveBookingPeople(tripId, kind, id, rows){
     ...(companionPassAvailable ? { is_companion: !!r.isCompanion } : {}),
     ...(lodgingRoomsAvailable ? { room: r.room || null, is_couch: !!r.isCouch,
                                   covers_room: !!r.coversRoom } : {}),
+    ...(coveredSharesAvailable ? { is_covered: !!r.isCovered,
+                                   covered_by: r.coveredBy || null } : {}),
   }));
   let { error } = await supabase.from("booking_people").insert(build());
   // PGRST204 is "no such column" — the companion-pass migration hasn't run.
@@ -2301,6 +2311,7 @@ async function saveBookingPeople(tripId, kind, id, rows){
   if (error && error.code === "PGRST204"){
     companionPassAvailable = false;
     lodgingRoomsAvailable = false;
+    coveredSharesAvailable = false;
     ({ error } = await supabase.from("booking_people").insert(build()));
   }
   if (error) alert(error.message);
@@ -2359,7 +2370,10 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           const companion = !!row?.is_companion;
           const couch = !!row?.is_couch;
           const covers = !!row?.covers_room;
-          const freeSeat = companion || couch || covers;
+          const covered = !!row?.is_covered;
+          // All of these work the figure out from the booking, so there is
+          // nothing to type in the share box.
+          const freeSeat = companion || couch || covers || covered;
           const rooms = kind !== "flight" && lodgingRoomsAvailable;
           const val = row ? (isPct ? row.cost_percent : row.cost) : "";
           // A seat is priced per person, so a flight share starts at one
@@ -2383,12 +2397,22 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
               <select data-${prefix}-bp-unit="${sub.key}" data-bp-unit-select aria-label="Share unit">
                 <option value="amount" ${isPct || freeSeat ? "" : "selected"}>$</option>
                 <option value="percent" ${isPct ? "selected" : ""}>%</option>
+                ${coveredSharesAvailable
+                  ? `<option value="covered" ${covered ? "selected" : ""}>covered</option>` : ""}
                 ${kind === "flight" && companionPassAvailable
                   ? `<option value="companion" ${companion ? "selected" : ""}>pass</option>` : ""}
                 ${rooms ? `<option value="couch" ${couch ? "selected" : ""}>couch</option>
                 <option value="wholeroom" ${covers ? "selected" : ""}>whole room</option>` : ""}
               </select>
             </span>
+            ${!coveredSharesAvailable ? "" : `<select class="bp-by"
+              data-${prefix}-bp-by="${sub.key}" data-bp-by-select
+              aria-label="Covered by" ${covered ? "" : "hidden"}>
+              <option value="">covered by whoever paid</option>
+              ${subjects.filter(o => o.key !== sub.key && o.personId)
+                .map(o => `<option value="${o.personId}" ${
+                  row?.covered_by === o.personId ? "selected" : ""}>covered by ${esc(o.name)}</option>`).join("")}
+            </select>`}
           </div>`;
         }).join("")}
       </div>
@@ -2404,7 +2428,9 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
              people, so sharing one doesn't cost double. Anyone not taking a bedroom
              goes down as <b>couch</b> — listed, and charged nothing. Set someone to
              <b>whole room</b> to have them cover theirs on their own instead of
-             splitting it with whoever else is in it.` : ""}</span>
+             splitting it with whoever else is in it.` : ""}
+        Set someone to <b>covered</b> and their share is worked out as usual and
+        charged to whoever is covering it — the payer unless you say otherwise.</span>
     </div>`;
 }
 
@@ -2421,9 +2447,10 @@ function readBookingPeople(container, prefix){
     const companion = unit === "companion";
     const couch = unit === "couch";
     const covers = unit === "wholeroom";
+    const covered = unit === "covered";
     // "whole room" is a computed share, not a stated one — the figure comes
     // from how many rooms there are, so no amount is read from the form.
-    const free = companion || couch || covers;
+    const free = companion || couch || covers || covered;
     rows.push({
       personId: key.startsWith("p:") ? key.slice(2) : null,
       groupId: key.startsWith("g:") ? key.slice(2) : null,
@@ -2433,6 +2460,9 @@ function readBookingPeople(container, prefix){
       isCompanion: companion,
       isCouch: couch,
       coversRoom: covers,
+      isCovered: covered,
+      coveredBy: covered
+        ? (container.querySelector(`[data-${prefix}-bp-by="${key}"]`)?.value || null) : null,
       room: couch ? null
            : (container.querySelector(`[data-${prefix}-bp-room="${key}"]`)?.value.trim() || null),
     });
@@ -3444,6 +3474,10 @@ function splitCents(total, n){
 //              rather than by head — see the note where that happens.
 //              { coversRoom: true } takes that room's whole share, leaving
 //              the others in it listed but not charged.
+//              { covered: true, coveredBy } works out their share as usual
+//              and charges it to someone else — the ticket still costs what
+//              it costs, it just isn't theirs to pay. coveredBy defaults to
+//              whoever paid the booking.
 //
 // Returns per-person totals, a per-booking breakdown showing how each figure
 // was arrived at, and warnings for the two situations where the arithmetic
@@ -3524,10 +3558,28 @@ function settleTrip(input){
       } else evenly.push(p);
     }
     const orphaned = [];
+
+    // Charges one person's worked-out share, to them or to whoever is
+    // covering it. Returns the line to show, or null if there was nobody to
+    // charge — in which case the money is recorded as unassigned rather than
+    // quietly dropped.
+    const chargeShare = (p, c) => {
+      const by = p.covered ? { personId: p.coveredBy || payer } : null;
+      if (!by){
+        if (!charge(p, c, per)){ unassignedCents += c; orphaned.push(c); return null; }
+        return { subject: label(p), cents: c };
+      }
+      charge(p, 0, per);   // on the booking, with nothing of their own to pay
+      if (!charge(by, c, per)){ unassignedCents += c; orphaned.push(c); return null; }
+      return { subject: label(by), cents: c, forWhom: label(p) };
+    };
+
     for (const [p, c] of fixed){
-      if (!charge(p, c, per)){ unassignedCents += c; orphaned.push(c); continue; }
-      lines.push({ subject: label(p), cents: c, room: p.room || null,
-                   why: p.couch ? "couch" : p.companion ? "companion"
+      const line = chargeShare(p, c);
+      if (!line) continue;
+      lines.push({ ...line, room: p.room || null,
+                   why: line.forWhom ? "covering"
+                      : p.couch ? "couch" : p.companion ? "companion"
                       : p.amount != null && p.amount !== "" ? "amount" : "percent" });
     }
 
@@ -3569,10 +3621,11 @@ function settleTrip(input){
               lines.push({ subject: label(p), cents: 0, room: p.room, why: "sharing" });
               continue;
             }
-            const c = shares[at];
-            if (!charge(p, c, per)){ unassignedCents += c; orphaned.push(c); continue; }
-            lines.push({ subject: label(p), cents: c, room: p.room || null,
-                         why: p.coversRoom ? "covers" : p.room ? "room" : "even" });
+            const line = chargeShare(p, shares[at]);
+            if (!line) continue;
+            lines.push({ ...line, room: p.room || null,
+                         why: line.forWhom ? "covering"
+                            : p.coversRoom ? "covers" : p.room ? "room" : "even" });
           }
         });
       } else if (payer){
@@ -3635,6 +3688,8 @@ function settlementBooking(trip, kind, row){
       companion: !!x.is_companion,
       couch: !!x.is_couch,
       coversRoom: !!x.covers_room,
+      covered: !!x.is_covered,
+      coveredBy: x.covered_by || null,
       room: x.room || null,
     })),
   };
@@ -3710,11 +3765,17 @@ function tripMoney(trip){
     // Keyed the same way as `rows`, so the view just asks.
     freeFor: r.breakdown.reduce((m, b) => {
       for (const l of b.lines){
-        const note = l.why === "companion" ? "companion pass"
+        // A covered share is recorded against whoever is covering it, so the
+        // note belongs to the other person on that line — the one whose zero
+        // would otherwise be unexplained.
+        const subject = l.why === "covering" ? l.forWhom : l.subject;
+        const note = l.why === "covering"
+                     ? `covered by ${personName(trip, l.subject === SELF ? null : l.subject)}`
+                   : l.why === "companion" ? "companion pass"
                    : l.why === "couch" ? "on the couch"
                    : l.why === "sharing" ? "sharing a room" : null;
         if (!note) continue;
-        const id = l.subject === SELF ? (self?.id || null) : l.subject;
+        const id = subject === SELF ? (self?.id || null) : subject;
         if (!m.has(id)) m.set(id, new Set());
         m.get(id).add(note);
       }
@@ -3756,6 +3817,7 @@ const SHARE_BASIS = {
   even: "an equal cut of what was left over",
   room: "their room's share, divided between the people in it",
   covers: "covering the whole of their room",
+  covering: "covering someone else's share as well as their own",
   sharing: "in a room someone else is covering",
   couch: "not taking a bedroom, so not paying for one",
   companion: "flown on a companion pass, so it cost them nothing",
@@ -3768,7 +3830,8 @@ const SHARE_BASIS = {
 // for, and the people are how it divides.
 function shareParts(trip, b){
   const one = l => `<span title="${esc(SHARE_BASIS[l.why] || "")}">${
-    esc(settlementSubjectName(trip, l.subject))} <b>${
+    esc(settlementSubjectName(trip, l.subject))}${l.forWhom
+      ? ` <span class="field-opt">for ${esc(settlementSubjectName(trip, l.forWhom))}</span>` : ""} <b>${
     l.why === "couch" ? "no charge"
     : l.why === "sharing" ? "sharing"
     : l.why === "companion" ? "companion pass"
@@ -5277,17 +5340,24 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("change", (e) => {
   const sel = e.target instanceof Element ? e.target.closest("[data-bp-unit-select]") : null;
   if (!sel) return;
-  const computed = sel.value === "companion" || sel.value === "couch" || sel.value === "wholeroom";
+  const computed = ["companion", "couch", "wholeroom", "covered"].includes(sel.value);
   const amount = sel.closest(".bp-share")?.querySelector("input");
   if (amount){
     amount.disabled = computed;
     if (computed) amount.value = "";
   }
   // A couch isn't in a room, so its room box goes with it.
-  const room = sel.closest(".bp-row")?.querySelector("[data-bp-room-input]");
+  const row = sel.closest(".bp-row");
+  const room = row?.querySelector("[data-bp-room-input]");
   if (room){
     room.disabled = sel.value === "couch";
     if (sel.value === "couch") room.value = "";
+  }
+  // Asking who's covering it only makes sense once something is.
+  const by = row?.querySelector("[data-bp-by-select]");
+  if (by){
+    by.hidden = sel.value !== "covered";
+    if (by.hidden) by.value = "";
   }
 });
 

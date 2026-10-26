@@ -117,6 +117,7 @@ check("nothing to split", settle.splitCents(0, 3), [0, 0, 0]);
 const one = (over) => settleCase({
   bookings: [Object.assign({ id: "b1", label: "Stay", kind: "rental", paidCash: 640, paidBy: "me" }, over)],
 });
+
 function settleCase(input){
   return settle.settleTrip(Object.assign({ groupMembers: G, selfId: "me" }, input));
 }
@@ -409,6 +410,61 @@ function settleCase(input){
   check("a household in a room splits that room between its members", owes(r),
     { mika: 16000, jordan: 16000, me: 32000 });
   assertReconciles("a household in a room reconciles", r);
+}
+
+// ---- covered shares ------------------------------------------------------
+// "Covered" is not "free". The ticket still costs what it costs; it just
+// isn't theirs to pay. So the share is worked out exactly as it would have
+// been and charged to whoever is covering it — setting it to zero instead
+// would quietly shrink the booking.
+
+{
+  const r = one({ kind: "flight", paidCash: 150, passengers: 3, participants: [
+    { personId: "alice", amount: 150 },
+    { personId: "bob", amount: 150, covered: true },
+    { personId: "me", amount: 150 },
+  ]});
+  check("a covered ticket is charged to whoever paid", owes(r),
+    { alice: 15000, bob: 0, me: 30000 });
+  assertReconciles("a covered ticket reconciles", r);
+}
+
+{
+  const r = one({ kind: "flight", paidCash: 150, passengers: 3, participants: [
+    { personId: "alice", amount: 150 },
+    { personId: "bob", amount: 150, covered: true, coveredBy: "alice" },
+    { personId: "me", amount: 150 },
+  ]});
+  check("or to the person named, who needn't be the payer", owes(r),
+    { alice: 30000, bob: 0, me: 15000 });
+  check("and the line says who it's for",
+    r.breakdown[0].lines.filter(l => l.why === "covering")
+      .map(l => [l.subject, l.cents, l.forWhom]),
+    [["alice", 15000, "bob"]]);
+  assertReconciles("a named coverer reconciles", r);
+}
+
+{
+  // The booking doesn't get cheaper because someone else is paying.
+  const covered = one({ kind: "flight", paidCash: 150, passengers: 3, participants: [
+    { personId: "alice" }, { personId: "bob", covered: true }, { personId: "me" },
+  ]});
+  check("a covered blank share is still worked out, then handed over", owes(covered),
+    { alice: 15000, bob: 0, me: 30000 });
+  check("the trip still costs what it cost", covered.totalCents, 45000);
+  assertReconciles("a covered blank share reconciles", covered);
+}
+
+{
+  // Covering someone in a room: the room's share goes to the coverer.
+  const r = one({ participants: [
+    { personId: "alice", room: "Main" },
+    { personId: "bob",   room: "Main", covered: true, coveredBy: "alice" },
+    { personId: "me",    room: "Bunk" },
+  ]});
+  check("a covered room-mate's share goes to whoever covers them", owes(r),
+    { alice: 32000, bob: 0, me: 32000 });
+  assertReconciles("covering inside a room reconciles", r);
 }
 
 // ---- damaged data ---------------------------------------------------------
