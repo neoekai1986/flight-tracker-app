@@ -2370,8 +2370,8 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
               <input type="checkbox" data-${prefix}-bp-on="${sub.key}" ${row ? "checked" : ""}>
               <span>${esc(sub.name)}${sub.sub ? `<span class="bp-sub">${esc(sub.sub)}</span>` : ""}</span>
             </label>
-            <input type="text" class="bp-ref" data-${prefix}-bp-ref="${sub.key}"
-              placeholder="their reference" value="${esc(row?.reference || "")}">
+            ${kind === "flight" ? `<input type="text" class="bp-ref" data-${prefix}-bp-ref="${sub.key}"
+              placeholder="their reference" value="${esc(row?.reference || "")}">` : ""}
             ${rooms ? `<input type="text" data-${prefix}-bp-room="${sub.key}" data-bp-room-input
               list="bp-rooms-${prefix}" placeholder="room" aria-label="Room"
               value="${esc(row?.room || "")}" ${couch ? "disabled" : ""}>` : ""}
@@ -3808,7 +3808,11 @@ function renderTripSummary(trip){
   const cars = rentals.filter(r => r.kind === "car");
 
   const refsFor = (kind, row) => {
-    const rows = bookingPeopleFor(trip, kind, row.id).filter(x => x.reference);
+    // Only flights are referenced per traveller — a seat has its own record
+    // locator. A stay or a car is one booking with one reference, which lives
+    // on the booking itself.
+    const rows = kind === "flight"
+      ? bookingPeopleFor(trip, kind, row.id).filter(x => x.reference) : [];
     if (!rows.length) return row.confirmation_code ? `Ref <b>${esc(row.confirmation_code)}</b>` : "";
     return rows.map(x => `${esc(shareSubjectName(trip, x))} <b>${esc(x.reference)}</b>`).join(" · ");
   };
