@@ -39,7 +39,7 @@ const names = ["bookingCents", "splitCents", "settleTrip", "selfPerson", "person
   "groupById", "tripPeople", "personName", "bookingPeopleFor", "settlementBooking",
   "settlementBookings", "settlementGroups", "settlementFor", "tripMoney",
   "flightTicketCost", "settleOne", "myShareOf", "settlementSubjectName",
-  "rentalOurPortion", "rentalSplitText", "shareParts"];
+  "rentalOurPortion", "rentalSplitText", "shareParts", "parsePercent"];
 
 // The app's globals, supplied by the test rather than by a page load. esc and
 // fmtCash are display helpers and are stubbed to keep assertions readable.
@@ -51,7 +51,7 @@ const app = new Function("state", `
   ${extractConst("toCents")}${extractConst("fromCents")}
   ${extractConst("SELF")}${extractConst("selfId")}${extractConst("SHARE_BASIS")}
   ${names.map(extract).join("")}
-  return { tripMoney, rentalOurPortion, rentalSplitText, myShareOf,
+  return { tripMoney, rentalOurPortion, rentalSplitText, myShareOf, parsePercent,
            settlementGroups, settlementBooking, flightTicketCost, settlementFor };
 `);
 
@@ -290,6 +290,44 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
   const card = api.rentalSplitText(trip.rentals[0]);
   check("the card groups by room like the summary does",
     card.replace(/<[^>]+>/g, ""), "Main Eugene $450.00, Christine sharing &middot; Bunk Me $450.00");
+}
+
+// ---- percentages written as fractions ------------------------------------
+// A fraction in a percent box is a proportion of the booking — "1/6" is a
+// sixth of it, not six hundredths of a percent. Nobody writes it meaning the
+// latter, and reading it that way would be wrong by a factor of 600.
+
+{
+  const { api } = world();
+  const p = api.parsePercent;
+  check("a fifth", p("1/5"), 20);
+  check("three quarters", p("3/4"), 75);
+  check("spaces don't matter", p("1 / 4"), 25);
+  check("a plain number is already a percentage", p("20"), 20);
+  check("decimals survive", p("16.67"), 16.67);
+  check("a sixth, to full precision", Math.round(p("1/6") * 1e6) / 1e6, 16.666667);
+  // Anything else is a blank rather than a guess at a number.
+  for (const bad of ["", "abc", "1/0", "-5", "1/5/6", "/5", "5/"])
+    check(`"${bad}" is not a share`, p(bad), null);
+}
+
+{
+  // A sixth of a booking that doesn't divide by six: the figure still has to
+  // be exact to the cent.
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 1000, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-jay", cost_percent: 100 / 6,
+        cost_percent_text: "1/6" },
+      { rental_id: "r1", person_id: "p-me" },
+    ],
+  });
+  const m = api.tripMoney(trip);
+  check("a sixth of $1000 is $166.67", owed(m)["Jay"], 166.67);
+  check("and the rest is exactly the remainder", owed(m)["Me"], 833.33);
+  check("which together is the whole booking",
+    Math.round((owed(m)["Jay"] + owed(m)["Me"]) * 100), 100000);
 }
 
 // ---- damaged data ---------------------------------------------------------
