@@ -747,14 +747,16 @@
     .summary-sheet{border:none;padding:0;max-width:none}
   }
   .booking-people{display:flex;flex-direction:column;gap:6px;margin-top:6px}
-  .bp-row{display:grid;grid-template-columns:minmax(130px,1fr) minmax(0,1.1fr) 152px;
+  /* A share can now be a word — covered, companion, whole room — not just a
+     currency symbol, and none of those fit a 60px select wedged beside the
+     amount. So the amount and its unit take a line of their own and the
+     fields above them take as many columns as the form is wide enough for. */
+  .bp-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));
       gap:8px;align-items:center}
-  /* Lodging rows carry a room as well, and four controls don't fit across the
-     form at its usual width. auto-fit takes as many columns as there is room
-     for and wraps the rest, rather than a fixed count that overflows the card
-     on a narrow panel and gets clipped. The reference goes last, being the
-     one filled in least often. */
-  .bp-row-rooms{grid-template-columns:repeat(auto-fit,minmax(128px,1fr))}
+  .bp-row .bp-share{grid-column:1/-1;order:2}
+  .bp-row .bp-share select{width:auto;min-width:104px}
+  /* The reference goes last on a lodging row, being the one filled in least
+     often — though it isn't shown there at all any more. */
   .bp-row-rooms .bp-ref{order:3}
   /* Spans the row under the person it belongs to, since it's a sentence
      about them rather than another column of the same table. */
@@ -763,7 +765,7 @@
   .bp-row .bp-by[hidden]{display:none}
   .bp-share{display:flex;gap:6px;align-items:center}
   .bp-share input{flex:1;min-width:0}
-  .bp-share select{width:60px;flex-shrink:0;margin-top:0}
+  .bp-share select{flex-shrink:0;margin-top:0}
   .bp-sub{display:block;font-size:11px;color:var(--muted)}
   .bp-who{display:flex;align-items:center;gap:7px;font-size:13px;min-width:0}
   .bp-who input{accent-color:var(--amber);flex-shrink:0;margin:0}
@@ -774,7 +776,7 @@
      than .bp-share's flex sizing and would otherwise push the selector out
      past the edge of the card. */
   .bp-row .bp-share input{width:auto;flex:1 1 0;min-width:0}
-  @media (max-width:560px){ .bp-row,.bp-row-rooms{grid-template-columns:1fr} }
+  @media (max-width:560px){ .bp-row{grid-template-columns:1fr} }
   /* Nested inside a year, so indented to sit with that year's trips rather
      than reading as another year. */
   .tab-past{margin-left:14px}
