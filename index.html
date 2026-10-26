@@ -805,6 +805,20 @@
   @media (max-width:720px){ .person-card-main{grid-template-columns:1fr} }
   .summary-room{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
     color:var(--muted);margin-right:4px}
+  .owes-name{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;
+    display:inline-flex;align-items:center;gap:5px;text-align:left}
+  .owes-name:hover{color:var(--amber)}
+  .owes-caret{font-size:11px;line-height:1;color:var(--muted);transition:transform .15s}
+  .owes-name[aria-expanded="true"] .owes-caret{transform:rotate(180deg)}
+  /* The surrounding table right-aligns its cells, which would otherwise push
+     each label to the far side of its column, away from the name it belongs
+     to. Only the figure wants to be right-aligned. */
+  .owes-list{list-style:none;margin:0;padding:2px 0 4px 2px;display:flex;
+    flex-direction:column;gap:5px;text-align:left}
+  .owes-list li{display:grid;grid-template-columns:1fr auto;gap:2px 10px;font-size:12.5px}
+  .owes-what{color:var(--ink)}
+  .owes-sum{text-align:right;font-variant-numeric:tabular-nums}
+  .owes-why{grid-column:1/-1;color:var(--muted);font-size:11.5px}
   .people-ledger{width:100%;margin-top:6px}
   .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
   .person-row{display:flex;align-items:center;gap:9px;font-size:13px;padding:3px 0}
@@ -3551,10 +3565,14 @@ function settleTrip(input){
   // the caller records it as unassigned and the summary says so. Counting
   // such a share against the total while charging it to no one is precisely
   // how a ledger ends up not adding up.
-  const charge = (subject, cents, into) => {
+  const charge = (subject, cents, into, reason) => {
     const add = (id, c) => {
       person(id).owesCents += c;
-      if (into) into[id] = (into[id] || 0) + c;
+      if (!into) return;
+      into.cents[id] = (into.cents[id] || 0) + c;
+      // Why this person owes this, kept per booking so the summary can
+      // explain a figure instead of just stating it.
+      if (reason) into.reason[id] = reason;
     };
     if (subject.groupId){
       const members = groupMembers[subject.groupId] || [];
@@ -3586,7 +3604,7 @@ function settleTrip(input){
       else if (p.personId) person(p.personId);
     }
     const lines = [];
-    const per = {};
+    const per = { cents: {}, reason: {} };
     // Explicit figures first — they're statements of fact, not shares of a
     // remainder, so they don't depend on who else is on the booking.
     let claimed = 0;
@@ -3609,24 +3627,28 @@ function settleTrip(input){
     // covering it. Returns the line to show, or null if there was nobody to
     // charge — in which case the money is recorded as unassigned rather than
     // quietly dropped.
-    const chargeShare = (p, c) => {
+    const chargeShare = (p, c, why) => {
       const by = p.covered ? { personId: p.coveredBy || payer } : null;
       if (!by){
-        if (!charge(p, c, per)){ unassignedCents += c; orphaned.push(c); return null; }
+        if (!charge(p, c, per, { why, room: p.room || null })){
+          unassignedCents += c; orphaned.push(c); return null;
+        }
         return { subject: label(p), cents: c };
       }
-      charge(p, 0, per);   // on the booking, with nothing of their own to pay
-      if (!charge(by, c, per)){ unassignedCents += c; orphaned.push(c); return null; }
+      // On the booking, with nothing of their own to pay.
+      charge(p, 0, per, { why: "covered", by: label(by), room: p.room || null });
+      if (!charge(by, c, per, { why: "covering", forWhom: label(p) })){
+        unassignedCents += c; orphaned.push(c); return null;
+      }
       return { subject: label(by), cents: c, forWhom: label(p) };
     };
 
     for (const [p, c] of fixed){
-      const line = chargeShare(p, c);
+      const why = p.couch ? "couch" : p.companion ? "companion"
+                : p.amount != null && p.amount !== "" ? "amount" : "percent";
+      const line = chargeShare(p, c, why);
       if (!line) continue;
-      lines.push({ ...line, room: p.room || null,
-                   why: line.forWhom ? "covering"
-                      : p.couch ? "couch" : p.companion ? "companion"
-                      : p.amount != null && p.amount !== "" ? "amount" : "percent" });
+      lines.push({ ...line, room: p.room || null, why: line.forWhom ? "covering" : why });
     }
 
     const rest = total - claimed;
@@ -3663,21 +3685,22 @@ function settleTrip(input){
           for (const p of occupants){
             const at = charged.indexOf(p);
             if (at === -1){
-              charge(p, 0, per);   // listed in the room, owing nothing for it
+              // Listed in the room, owing nothing for it.
+              charge(p, 0, per, { why: "sharing", room: p.room });
               lines.push({ subject: label(p), cents: 0, room: p.room, why: "sharing" });
               continue;
             }
-            const line = chargeShare(p, shares[at]);
+            const why = p.coversRoom ? "covers" : p.room ? "room" : "even";
+            const line = chargeShare(p, shares[at], why);
             if (!line) continue;
             lines.push({ ...line, room: p.room || null,
-                         why: line.forWhom ? "covering"
-                            : p.coversRoom ? "covers" : p.room ? "room" : "even" });
+                         why: line.forWhom ? "covering" : why });
           }
         });
       } else if (payer){
         // Nobody else is on it, so it stays with whoever paid. Without this
         // the money would simply vanish from the ledger.
-        charge({ personId: payer }, rest, per);
+        charge({ personId: payer }, rest, per, { why: "payer" });
         lines.push({ subject: payer, cents: rest, room: null, why: "payer" });
       }
     }
@@ -3686,7 +3709,8 @@ function settleTrip(input){
                       shares: orphaned.length,
                       byCents: orphaned.reduce((n, c) => n + c, 0) });
     }
-    breakdown.push({ id: b.id, label: b.label, totalCents: total, payer, lines, perPerson: per });
+    breakdown.push({ id: b.id, label: b.label, totalCents: total, payer, lines,
+                     perPerson: per.cents, perReason: per.reason });
   }
 
   for (const p of Object.values(people)) p.netCents = p.paidCents - p.owesCents;
@@ -3807,23 +3831,15 @@ function tripMoney(trip){
       .map(w => ({ label: w.label, by: fromCents(w.byCents) })),
     orphans: r.warnings.filter(w => w.kind === "orphan")
       .map(w => ({ label: w.label, shares: w.shares, by: fromCents(w.byCents) })),
-    // Why someone's figure is zero — a companion seat, a night on the couch.
-    // Keyed the same way as `rows`, so the view just asks.
-    freeFor: r.breakdown.reduce((m, b) => {
-      for (const l of b.lines){
-        // A covered share is recorded against whoever is covering it, so the
-        // note belongs to the other person on that line — the one whose zero
-        // would otherwise be unexplained.
-        const subject = l.why === "covering" ? l.forWhom : l.subject;
-        const note = l.why === "covering"
-                     ? `covered by ${personName(trip, l.subject === SELF ? null : l.subject)}`
-                   : l.why === "companion" ? "companion pass"
-                   : l.why === "couch" ? "on the couch"
-                   : l.why === "sharing" ? "sharing a room" : null;
-        if (!note) continue;
-        const id = subject === SELF ? (self?.id || null) : subject;
-        if (!m.has(id)) m.set(id, new Set());
-        m.get(id).add(note);
+    // What each person owes, booking by booking, with the reason. This is
+    // what makes a figure checkable: "you owe $212.80" is a claim, and the
+    // only useful answer to doubting it is the list it came from.
+    detail: r.breakdown.reduce((m, b) => {
+      for (const [raw, cents] of Object.entries(b.perPerson)){
+        const id = raw === SELF ? (self?.id || null) : raw;
+        if (!m.has(id)) m.set(id, []);
+        m.get(id).push({ label: b.label, owes: fromCents(cents),
+                         reason: b.perReason[raw] || null });
       }
       return m;
     }, new Map()),
@@ -3914,6 +3930,28 @@ function shareParts(trip, b){
     const who = byRoom.get(key).map(one).join(", ");
     return key ? `<span class="summary-room">${esc(key)}</span> ${who}` : who;
   });
+}
+
+// One person's reason for one figure, in words. The settlement records why
+// it charged what it charged; this is the only place that decides how to say
+// it, so the wording can't drift between the places it appears.
+function reasonText(trip, r){
+  if (!r) return "";
+  const room = r.room ? ` in ${r.room}` : "";
+  switch (r.why){
+    case "amount":    return "a set share";
+    case "percent":   return "a percentage of the booking";
+    case "even":      return "an equal share";
+    case "room":      return `their share of ${r.room || "the room"}`;
+    case "covers":    return `covering the whole of ${r.room || "the room"}`;
+    case "sharing":   return `sharing ${r.room || "a room"}, covered by someone else`;
+    case "couch":     return "on the couch, so not paying for a bedroom";
+    case "companion": return "flying on a companion pass";
+    case "covered":   return `covered by ${settlementSubjectName(trip, r.by)}`;
+    case "covering":  return `covering ${settlementSubjectName(trip, r.forWhom)}${room} as well`;
+    case "payer":     return "the rest of the booking, as the one who paid";
+    default:          return "";
+  }
 }
 
 // The name against one line of a breakdown, whether it's a person or a
@@ -4033,16 +4071,35 @@ function renderTripSummary(trip){
         ${money.rows.length ? `
         <table class="hist summary-money">
           <tr><th>Person</th><th>Their share</th><th>They paid</th><th>Net</th></tr>
-          ${money.rows.map(r => `<tr>
-            <td>${esc(r.name)}${money.freeFor.has(r.personId)
-              ? ` <span class="field-opt">${esc([...money.freeFor.get(r.personId)].join(", "))}</span>`
-              : ""}</td>
+          ${money.rows.map(r => {
+            // Reuses the card-detail toggle, so opening a row is a `hidden`
+            // flip rather than a re-render.
+            const key = `owes:${r.personId}`;
+            const items = money.detail.get(r.personId) || [];
+            return `<tr>
+            <td>${items.length
+              ? `<button type="button" class="owes-name" data-card-toggle="${key}"
+                   aria-expanded="false">${esc(r.name)} <span class="owes-caret">▾</span></button>`
+              : esc(r.name)}</td>
             <td>${fmt(r.owes)}</td>
             <td>${fmt(r.paid)}</td>
             <td class="${r.net > 0.005 ? "down" : r.net < -0.005 ? "up" : "flat"}">${
               Math.abs(r.net) < 0.005 ? "settled"
                 : r.net > 0 ? `owed ${fmt(r.net)}` : `owes ${fmt(-r.net)}`}</td>
-          </tr>`).join("")}
+          </tr>
+          ${items.length ? `<tr class="owes-detail" data-card-detail="${key}" hidden>
+            <td colspan="4">
+              <ul class="owes-list">
+                ${items.map(it => `<li>
+                  <span class="owes-what">${esc(it.label)}</span>
+                  <span class="owes-sum">${fmt(it.owes)}</span>
+                  ${reasonText(trip, it.reason)
+                    ? `<span class="owes-why">${esc(reasonText(trip, it.reason))}</span>` : ""}
+                </li>`).join("")}
+              </ul>
+            </td>
+          </tr>` : ""}`;
+          }).join("")}
           <tr><td><b>Trip total</b></td><td colspan="3"><b>${fmt(money.total)}</b></td></tr>
         </table>
         ${(() => {

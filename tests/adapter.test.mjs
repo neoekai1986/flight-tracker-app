@@ -39,7 +39,7 @@ const names = ["bookingCents", "splitCents", "settleTrip", "selfPerson", "person
   "groupById", "tripPeople", "personName", "bookingPeopleFor", "settlementBooking",
   "settlementBookings", "settlementGroups", "settlementFor", "tripMoney",
   "flightTicketCost", "settleOne", "myShareOf", "settlementSubjectName",
-  "rentalOurPortion", "rentalSplitText", "shareParts", "parsePercent"];
+  "rentalOurPortion", "rentalSplitText", "shareParts", "parsePercent", "reasonText"];
 
 // The app's globals, supplied by the test rather than by a page load. esc and
 // fmtCash are display helpers and are stubbed to keep assertions readable.
@@ -51,7 +51,7 @@ const app = new Function("state", `
   ${extractConst("toCents")}${extractConst("fromCents")}
   ${extractConst("SELF")}${extractConst("selfId")}${extractConst("SHARE_BASIS")}
   ${names.map(extract).join("")}
-  return { tripMoney, rentalOurPortion, rentalSplitText, myShareOf, parsePercent,
+  return { tripMoney, rentalOurPortion, rentalSplitText, myShareOf, parsePercent, reasonText,
            settlementGroups, settlementBooking, flightTicketCost, settlementFor };
 `);
 
@@ -229,8 +229,9 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
   check("two bedrooms split the cabin, the couch pays nothing", owed(m),
     { Me: 450, Eugene: 225, Christine: 225, Jay: 0 });
   check("the couch is named as such",
-    [...(m.freeFor.get("p-jay") || [])], ["on the couch"]);
-  check("and nobody else is flagged", [...m.freeFor.keys()], ["p-jay"]);
+    m.detail.get("p-jay").map(d => d.reason.why), ["couch"]);
+  check("and the bedrooms say they're room shares",
+    m.detail.get("p-eug").map(d => d.reason.why), ["room"]);
   check("your own share follows the rooms", api.rentalOurPortion(trip.rentals[0]), 450);
 }
 
@@ -286,7 +287,8 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
   check("Eugene covers the room Christine is in", owed(m),
     { Me: 450, Eugene: 450, Christine: 0, Jay: 0 });
   check("and Christine's zero says why",
-    [...(m.freeFor.get("p-chr") || [])], ["sharing a room"]);
+    m.detail.get("p-chr").map(d => [d.owes, d.reason.why, d.reason.room]),
+    [[0, "sharing", "Main"]]);
   const card = api.rentalSplitText(trip.rentals[0]);
   check("the card groups by room like the summary does",
     card.replace(/<[^>]+>/g, ""), "Main Eugene $450.00, Christine sharing &middot; Bunk Me $450.00");
@@ -328,6 +330,44 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
   check("and the rest is exactly the remainder", owed(m)["Me"], 833.33);
   check("which together is the whole booking",
     Math.round((owed(m)["Jay"] + owed(m)["Me"]) * 100), 100000);
+}
+
+// ---- the breakdown behind a figure ---------------------------------------
+// "You owe $212.80" is a claim. The only useful answer to doubting it is the
+// list it came from, so every figure carries one.
+
+{
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+    flights: [{ id: "f1", trip_id: "t1", label: "Seats", paid_cash: 200,
+                passengers: 3, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-eug", room: "Main" },
+      { rental_id: "r1", person_id: "p-chr", room: "Main" },
+      { rental_id: "r1", person_id: "p-me",  room: "Bunk" },
+      { flight_id: "f1", person_id: "p-eug", cost: 200 },
+      { flight_id: "f1", person_id: "p-chr", is_covered: true, covered_by: "p-eug" },
+      { flight_id: "f1", person_id: "p-me",  cost: 200 },
+    ],
+  });
+  const m = api.tripMoney(trip);
+  const say = id => (m.detail.get(id) || [])
+    .map(d => [d.label, d.owes, api.reasonText(trip, d.reason)]);
+
+  // Flights first, then rentals — the order the settlement reads them in.
+  check("Eugene's figure breaks down booking by booking", say("p-eug"),
+    [["Seats", 400, "covering Christine as well"],
+     ["Cabin", 225, "their share of Main"]]);
+  check("Christine's says who covered her", say("p-chr"),
+    [["Seats", 0, "covered by Eugene"],
+     ["Cabin", 225, "their share of Main"]]);
+  check("and yours accounts for the whole of both", say("p-me"),
+    [["Seats", 200, "a set share"],
+     ["Cabin", 450, "their share of Bunk"]]);
+  check("the pieces add up to the figure in the table",
+    Math.round(say("p-eug").reduce((n, d) => n + d[1], 0) * 100),
+    Math.round(owed(m)["Eugene"] * 100));
 }
 
 // ---- damaged data ---------------------------------------------------------
