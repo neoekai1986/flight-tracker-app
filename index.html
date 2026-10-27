@@ -2357,6 +2357,17 @@ function bookingPeopleFor(trip, kind, id){
 // Replaces the whole set for one booking in a single round trip: delete what's
 // there, insert what's wanted. Simpler than diffing, and these sets are a
 // handful of rows at most.
+// Refuses a save and names the box at fault. A share that couldn't be read
+// must not be written as a blank: an equal split would quietly stand in for
+// what someone meant, and look deliberate while doing it.
+function sharesUnreadable(bad){
+  if (!bad.length) return false;
+  alert(`Can't read ${bad.length === 1 ? "a share" : "some shares"} on this booking:\n\n`
+    + bad.map(b => `    ${b.who} — "${b.typed}"`).join("\n")
+    + `\n\nA share can be money (150), a fraction of the booking (1/5),\nor a percentage (20%).`);
+  return true;
+}
+
 async function saveBookingPeople(tripId, kind, id, rows){
   const col = kind === "flight" ? "flight_id" : "rental_id";
   const { error: delErr } = await supabase.from("booking_people").delete().eq(col, id);
@@ -2455,8 +2466,6 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
       <div class="booking-people">
         ${subjects.map(sub => {
           const row = byKey.get(sub.key);
-          // Whichever column was filled in decides which unit shows.
-          const isPct = row ? (row.cost == null && row.cost_percent != null) : false;
           const companion = !!row?.is_companion;
           const couch = !!row?.is_couch;
           const covers = !!row?.covers_room;
@@ -2465,8 +2474,8 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           // nothing to type in the share box.
           const freeSeat = companion || couch || covers || covered;
           const rooms = kind !== "flight" && lodgingRoomsAvailable;
-          // A percentage shows as it was typed — "1/6", not 16.666666666666668.
-          const val = row ? (isPct ? (row.cost_percent_text ?? row.cost_percent) : row.cost) : "";
+          // Shown as it was typed — "1/6", not 16.666666666666668.
+          const val = shareValue(row);
           // A seat is priced per person, so a flight share starts at one
           // ticket rather than blank. Housing has no such natural unit.
           const ticket = kind === "flight" ? flightTicketCost(bookingRow) : 0;
@@ -2482,15 +2491,14 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
               list="bp-rooms-${prefix}" placeholder="room" aria-label="Room"
               value="${esc(row?.room || "")}" ${couch ? "disabled" : ""}>` : ""}
             <span class="bp-share">
-              <input type="${isPct ? "text" : "number"}" step="0.01" inputmode="decimal"
-                data-${prefix}-bp-val="${sub.key}"
+              <input type="text" inputmode="decimal" data-${prefix}-bp-val="${sub.key}"
                 data-ticket="${kind === "flight" ? ticket : ""}"
-                placeholder="${isPct ? "20 or 1/5"
-                  : kind === "flight" && ticket ? fmtCash(ticket, bookingRow.currency) : "share"}"
-                value="${freeSeat ? "" : (val ?? "")}" ${freeSeat ? "disabled" : ""}>
-              <select data-${prefix}-bp-unit="${sub.key}" data-bp-unit-select aria-label="Share unit">
-                <option value="amount" ${isPct || freeSeat ? "" : "selected"}>$</option>
-                <option value="percent" ${isPct ? "selected" : ""}>%</option>
+                placeholder="${kind === "flight" && ticket
+                  ? fmtCash(ticket, bookingRow.currency) : "150 or 1/5"}"
+                value="${freeSeat ? "" : esc(val)}" ${freeSeat ? "disabled" : ""}>
+              <select data-${prefix}-bp-unit="${sub.key}" data-bp-unit-select
+                aria-label="How their share is worked out">
+                <option value="auto" ${freeSeat ? "" : "selected"}>their share</option>
                 ${coveredSharesAvailable
                   ? `<option value="covered" ${covered ? "selected" : ""}>covered</option>` : ""}
                 ${kind === "flight" && companionPassAvailable
@@ -2525,23 +2533,21 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
              instead of splitting it with whoever else is in it.</span>` : ""}
         Set someone to <b>covered</b> and their share is worked out as usual and
         charged to whoever is covering it — the payer unless you say otherwise.
-        A percentage can be written as a fraction: <b>1/5</b> means a fifth of the
-        booking.</span>
+        The share box reads what you write: <b>150</b> is money, <b>1/5</b> is a fifth
+        of the booking, <b>20%</b> is a percentage.</span>
     </div>`;
 }
 
-function readBookingPeople(container, prefix){
+// Reads the share rows off a form. `bad` collects anything typed that isn't
+// a share, so the caller can refuse to save rather than writing a blank and
+// letting an equal split stand in for what someone meant.
+function readBookingPeople(container, prefix, bad){
   const rows = [];
   container.querySelectorAll(`[data-${prefix}-bp-on]`).forEach(box => {
     if (!box.checked) return;
     const key = box.getAttribute(`data-${prefix}-bp-on`);
     const raw = container.querySelector(`[data-${prefix}-bp-val="${key}"]`)?.value;
     const unit = container.querySelector(`[data-${prefix}-bp-unit="${key}"]`)?.value;
-    const pct = unit === "percent";
-    const num = pct ? parsePercent(raw)
-              : (raw === "" || raw == null ? null : parseFloat(raw));
-    // A companion seat or a couch is a stated share of nothing — not a blank,
-    // which would take an equal cut of whatever is left.
     const companion = unit === "companion";
     const couch = unit === "couch";
     const covers = unit === "wholeroom";
@@ -2552,19 +2558,22 @@ function readBookingPeople(container, prefix){
     // out of the division altogether and hand their share to everyone else.
     const zeroed = companion || couch;
     const computed = covers || covered;
-    // "whole room" is a computed share, not a stated one — the figure comes
-    // from how many rooms there are, so no amount is read from the form.
-    const free = companion || couch || covers || covered;
+    // None of those read a figure from the box: it comes from the booking.
+    const share = zeroed || computed ? { kind: "blank" } : parseShare(raw);
+    if (share.kind === "bad" && bad){
+      const label = container.querySelector(`[data-bp-row="${key}"] .bp-who span`)?.textContent;
+      bad.push({ who: (label || "someone").trim(), typed: String(raw).trim() });
+    }
     rows.push({
       personId: key.startsWith("p:") ? key.slice(2) : null,
       groupId: key.startsWith("g:") ? key.slice(2) : null,
       reference: container.querySelector(`[data-${prefix}-bp-ref="${key}"]`)?.value.trim() || null,
-      cost: zeroed ? 0 : computed ? null : (pct ? null : num),
-      costPercent: zeroed || computed ? null : (pct ? num : null),
-      // Kept only when it isn't already what the number would show, so the
-      // column stays empty for the ordinary case.
-      costPercentText: !free && pct && num != null && String(raw).trim() !== String(num)
-        ? String(raw).trim() : null,
+      cost: zeroed ? 0 : share.kind === "amount" ? share.value : null,
+      costPercent: share.kind === "percent" ? share.value : null,
+      // What was typed, when the number alone wouldn't show it — "1/5" rather
+      // than 20. Empty for the ordinary case.
+      costPercentText: share.kind === "percent" && share.text !== String(share.value)
+        ? share.text : null,
       isCompanion: companion,
       isCouch: couch,
       coversRoom: covers,
@@ -3934,22 +3943,42 @@ function flightTicketCost(f){
   }));
 }
 
-// A percentage share, as typed. A fraction is read as a proportion of the
-// booking — "1/6" is a sixth of it, not six hundredths of a percent — which
-// is the only thing anyone means by writing it in a percent box. A plain
-// number is already a percentage and is left alone.
+// What someone typed in a share box. One box, and the form of what's in it
+// says what it means:
 //
-// Returns null for anything that isn't one of those, which the form treats
-// as a blank share rather than guessing at a number.
-function parsePercent(raw){
+//   150, $150, 1,500.50   money
+//   1/5, 2/5              that fraction of the booking
+//   20%                   that percentage of it
+//
+// Nobody writes "1/5" in a share box meaning a fifth of a percent, and
+// nobody writes "20%" meaning twenty dollars, so there is nothing to choose
+// between — which is why the unit is read rather than picked.
+//
+// Anything else comes back as "bad" rather than as a blank. Reading an
+// unparseable share as "no share stated" is what hid a lost 1/5 behind an
+// equal split that looked deliberate.
+function parseShare(raw){
   const text = String(raw ?? "").trim();
-  if (!text) return null;
-  const frac = text.match(/^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/);
+  if (!text) return { kind: "blank" };
+  const bare = text.replace(/[$,\s]/g, "");
+  const frac = bare.match(/^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/);
   if (frac){
     const bottom = Number(frac[2]);
-    return bottom ? (Number(frac[1]) / bottom) * 100 : null;
+    if (!bottom) return { kind: "bad" };
+    return { kind: "percent", value: (Number(frac[1]) / bottom) * 100, text };
   }
-  return /^\d+(?:\.\d+)?$/.test(text) ? Number(text) : null;
+  const pct = bare.match(/^(\d+(?:\.\d+)?)%$/);
+  if (pct) return { kind: "percent", value: Number(pct[1]), text };
+  if (/^\d+(?:\.\d+)?$/.test(bare)) return { kind: "amount", value: Number(bare) };
+  return { kind: "bad" };
+}
+
+// A stored share, back in the box it was typed into.
+function shareValue(row){
+  if (!row) return "";
+  if (row.cost != null) return row.cost;
+  if (row.cost_percent != null) return row.cost_percent_text || `${row.cost_percent}%`;
+  return "";
 }
 
 // One booking settled on its own, as a breakdown entry. The cards and the
@@ -5571,25 +5600,11 @@ document.addEventListener("keydown", (e) => {
 document.addEventListener("change", (e) => {
   const sel = e.target instanceof Element ? e.target.closest("[data-bp-unit-select]") : null;
   if (!sel) return;
-  const computed = ["companion", "couch", "wholeroom", "covered"].includes(sel.value);
+  const computed = sel.value !== "auto";
   const amount = sel.closest(".bp-share")?.querySelector("input");
   if (amount){
     amount.disabled = computed;
     if (computed) amount.value = "";
-    // A number input discards "1/5" before anything can read it, so the box
-    // takes text while it's holding a percentage and goes back to a number
-    // for an amount, where a fraction has no agreed meaning.
-    const pct = sel.value === "percent";
-    if (pct !== (amount.type === "text")){
-      const keep = amount.value;
-      amount.type = pct ? "text" : "number";
-      // "1/6" is not one dollar. Switching to an amount clears anything that
-      // isn't already a plain number rather than keeping the leading digits
-      // of a fraction, which would be a figure nobody typed.
-      amount.value = pct || /^\d+(?:\.\d+)?$/.test(keep.trim()) ? keep : "";
-    }
-    amount.placeholder = pct ? "20 or 1/5"
-      : (amount.dataset.ticket ? fmtCash(Number(amount.dataset.ticket), "USD") : "share");
   }
   // A couch isn't in a room, so its room box goes with it.
   const row = sel.closest(".bp-row");
@@ -6884,6 +6899,9 @@ function wireEvents(activeTrip){
     holder.querySelector("[data-nr-save]").addEventListener("click", async () => {
       const label = holder.querySelector("[data-nr-label]").value.trim();
       if (!label){ alert("Name is required."); return; }
+      const badNr = [];
+      const peopleNr = readBookingPeople(holder, "nr", badNr);
+      if (sharesUnreadable(badNr)) return;
       const pc = holder.querySelector("[data-nr-paidcash]").value;
       const pp = holder.querySelector("[data-nr-paidpoints]").value;
       const createdRental = await createRental(activeTrip.id, {
@@ -6902,8 +6920,7 @@ function wireEvents(activeTrip){
         notes: holder.querySelector("[data-nr-notes]").value.trim(),
       });
       if (createdRental){
-        await saveBookingPeople(activeTrip.id, "rental", createdRental.id,
-          readBookingPeople(holder, "nr"));
+        await saveBookingPeople(activeTrip.id, "rental", createdRental.id, peopleNr);
       }
       await refresh();
     });
@@ -6961,10 +6978,13 @@ function wireEvents(activeTrip){
           status: form.querySelector("[data-er-status]").value,
           notes: form.querySelector("[data-er-notes]").value.trim() || null,
         };
+        const badEr = [];
+        const peopleEr = readBookingPeople(form, "er", badEr);
+        if (sharesUnreadable(badEr)) return;
         // A changed deadline should get a fresh reminder email.
         if (newCancelBy !== rental.cancel_by) patch.reminded_at = null;
         await updateRental(rid, patch);
-        await saveBookingPeople(activeTrip.id, "rental", rid, readBookingPeople(form, "er"));
+        await saveBookingPeople(activeTrip.id, "rental", rid, peopleEr);
         await refresh();
       });
     });
@@ -7051,6 +7071,9 @@ function wireEvents(activeTrip){
         const paidCash = pc === "" ? null : parseFloat(pc);
         const paidPoints = pp === "" ? null : parseFloat(pp);
         const passengers = parseInt(form.querySelector("[data-f-passengers]").value, 10) || 1;
+        const badF = [];
+        const peopleF = readBookingPeople(form, "f", badF);
+        if (sharesUnreadable(badF)) return;
         await updateFlight(fid, {
           label: form.querySelector("[data-f-label]").value.trim()
             || flightTitle({ origin, destination, departDate, departTime, returnDate, returnTime,
@@ -7081,7 +7104,7 @@ function wireEvents(activeTrip){
             form.querySelector("[data-f-pointscents]")?.value),
           notes: form.querySelector("[data-f-notes]").value.trim(),
         });
-        await saveBookingPeople(activeTrip.id, "flight", fid, readBookingPeople(form, "f"));
+        await saveBookingPeople(activeTrip.id, "flight", fid, peopleF);
         await refresh();
       });
       form.querySelector("[data-cancel-flight]").addEventListener("click", render);
@@ -7216,6 +7239,9 @@ function wireAddFlightForm(tripId){
            paidCash, paidPoints, leg,
            airline: holder.querySelector("[data-nf-airline]")?.value.trim() || null });
     if (!label) { alert("A title, or From/To airports to auto-generate one, is required."); return; }
+    const badNf = [];
+    const peopleNf = readBookingPeople(holder, "nf", badNf);
+    if (sharesUnreadable(badNf)) return;
     const currency = holder.querySelector("[data-nf-currency]").value.trim() || "USD";
     const ab = holder.querySelector("[data-nf-alert]").value;
     const notes = holder.querySelector("[data-nf-notes]").value.trim();
@@ -7237,7 +7263,7 @@ function wireAddFlightForm(tripId){
       notes
     });
     if (created){
-      await saveBookingPeople(tripId, "flight", created.id, readBookingPeople(holder, "nf"));
+      await saveBookingPeople(tripId, "flight", created.id, peopleNf);
     }
     // Record the price you entered as the first check, so a flight you add to
     // watch starts its history at the moment you found it rather than at

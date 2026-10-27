@@ -39,7 +39,7 @@ const names = ["bookingCents", "splitCents", "settleTrip", "selfPerson", "person
   "groupById", "tripPeople", "personName", "bookingPeopleFor", "settlementBooking",
   "settlementBookings", "settlementGroups", "settlementFor", "tripMoney", "tripPayments",
   "flightTicketCost", "settleOne", "myShareOf", "settlementSubjectName",
-  "rentalOurPortion", "rentalSplitText", "shareParts", "parsePercent", "reasonText"];
+  "rentalOurPortion", "rentalSplitText", "shareParts", "parseShare", "reasonText"];
 
 // The app's globals, supplied by the test rather than by a page load. esc and
 // fmtCash are display helpers and are stubbed to keep assertions readable.
@@ -51,7 +51,7 @@ const app = new Function("state", `
   ${extractConst("toCents")}${extractConst("fromCents")}
   ${extractConst("SELF")}${extractConst("selfId")}${extractConst("SHARE_BASIS")}
   ${names.map(extract).join("")}
-  return { tripMoney, rentalOurPortion, rentalSplitText, myShareOf, parsePercent, reasonText,
+  return { tripMoney, rentalOurPortion, rentalSplitText, myShareOf, parseShare, reasonText,
            settlementGroups, settlementBooking, flightTicketCost, settlementFor };
 `);
 
@@ -301,16 +301,34 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
 
 {
   const { api } = world();
-  const p = api.parsePercent;
-  check("a fifth", p("1/5"), 20);
-  check("three quarters", p("3/4"), 75);
-  check("spaces don't matter", p("1 / 4"), 25);
-  check("a plain number is already a percentage", p("20"), 20);
-  check("decimals survive", p("16.67"), 16.67);
-  check("a sixth, to full precision", Math.round(p("1/6") * 1e6) / 1e6, 16.666667);
-  // Anything else is a blank rather than a guess at a number.
-  for (const bad of ["", "abc", "1/0", "-5", "1/5/6", "/5", "5/"])
-    check(`"${bad}" is not a share`, p(bad), null);
+  const p = s => { const r = api.parseShare(s); return [r.kind, r.value]; };
+
+  // A plain number is money.
+  check("a number is money", p("150"), ["amount", 150]);
+  check("a dollar sign is allowed", p("$150"), ["amount", 150]);
+  check("so are thousands separators", p("1,500.50"), ["amount", 1500.5]);
+
+  // A fraction is a fraction of the booking — nobody writes 1/5 in a share
+  // box meaning a fifth of one percent.
+  check("a fifth", p("1/5"), ["percent", 20]);
+  check("two fifths", p("2/5"), ["percent", 40]);
+  check("three quarters", p("3/4"), ["percent", 75]);
+  check("a sixth, to full precision",
+    Math.round(api.parseShare("1/6").value * 1e6) / 1e6, 16.666667);
+
+  // A trailing % is a percentage.
+  check("a percentage", p("20%"), ["percent", 20]);
+  check("a fractional percentage", p("16.67%"), ["percent", 16.67]);
+
+  check("nothing typed is a blank share", api.parseShare("").kind, "blank");
+
+  // Anything else says so, rather than being read as a blank — a blank would
+  // quietly become an equal split and look deliberate.
+  for (const bad of ["abc", "1/0", "-5", "1/5/6", "/5", "5/", "1-2"])
+    check(`"${bad}" is not a share`, api.parseShare(bad).kind, "bad");
+
+  // What was typed survives, so "1/5" doesn't come back as 20.
+  check("the typed form is kept", api.parseShare("1/5").text, "1/5");
 }
 
 {
