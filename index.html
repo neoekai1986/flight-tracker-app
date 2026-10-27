@@ -1253,9 +1253,9 @@ function applyRentalKindToShares(prefix, kind){
       }
     }
     // Switching to a car with someone on the couch would leave the share set
-    // to something the form no longer offers, so it goes back to an amount.
+    // to something the form no longer offers, so it goes back to their share.
     if (!housing && (sel.value === "couch" || sel.value === "wholeroom")){
-      sel.value = "amount";
+      sel.value = "auto";
       sel.dispatchEvent(new Event("change", { bubbles: true }));
     }
   });
@@ -4754,35 +4754,19 @@ function wireAutoTitle(container, sel){
     const rate = parseFloat(pointsCentsEl?.value) || 0;
     return cash + (pts && rate ? pts * rate / 100 : 0);
   };
+  // The box shows what one seat costs, as a placeholder. It doesn't fill it
+  // in: an empty box means "their share", which on a three-seat flight split
+  // three ways is one ticket anyway — and stays right when the number of
+  // people and the number of seats aren't the same, which a figure typed in
+  // once does not.
   const refreshTicketDefaults = () => {
     container.querySelectorAll("[data-ticket]").forEach(el => {
       const t = ticketNow();
       el.dataset.ticket = t || "";
-      el.placeholder = t ? fmtCash(t, "USD") : "share";
-      // Only move a value this same default put there, never one you typed.
-      if (el.dataset.autofilled === "1"){
-        if (t) el.value = t.toFixed(2); else el.value = "";
-      }
+      el.placeholder = t ? fmtCash(t, "USD") : "150 or 1/5";
     });
   };
   [cashEl, pointsEl, pointsCentsEl].forEach(el => el?.addEventListener("input", refreshTicketDefaults));
-  container.querySelectorAll("[data-ticket]").forEach(el => {
-    el.addEventListener("input", () => { el.dataset.autofilled = ""; });
-  });
-  container.querySelectorAll(`[data-${sel.bpPrefix || "x"}-bp-on]`).forEach(box => {
-    box.addEventListener("change", () => {
-      const key = box.getAttribute(`data-${sel.bpPrefix}-bp-on`);
-      const val = container.querySelector(`[data-${sel.bpPrefix}-bp-val="${key}"]`);
-      const unit = container.querySelector(`[data-${sel.bpPrefix}-bp-unit="${key}"]`);
-      if (!val) return;
-      if (box.checked && val.value === ""){
-        const t = ticketNow();
-        if (t){ val.value = t.toFixed(2); val.dataset.autofilled = "1"; if (unit) unit.value = "amount"; }
-      } else if (!box.checked && val.dataset.autofilled === "1"){
-        val.value = ""; val.dataset.autofilled = "";
-      }
-    });
-  });
 
   const resultEl = sel.result ? container.querySelector(sel.result) : null;
   const readoutEl = sel.resultRead ? container.querySelector(sel.resultRead) : null;
@@ -5643,8 +5627,8 @@ document.addEventListener("click", (e) => {
     if (by){ by.value = ""; by.hidden = true; }
     const unit = row.querySelector("[data-bp-unit-select]");
     // Through the change handler, so the row ends up in exactly the state a
-    // freshly chosen "$" leaves it in rather than one this function guessed.
-    if (unit){ unit.value = "amount"; unit.dispatchEvent(new Event("change", { bubbles: true })); }
+    // fresh "their share" leaves it in rather than one this function guessed.
+    if (unit){ unit.value = "auto"; unit.dispatchEvent(new Event("change", { bubbles: true })); }
   }
 });
 
