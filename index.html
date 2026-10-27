@@ -805,6 +805,7 @@
   @media (max-width:720px){ .person-card-main{grid-template-columns:1fr} }
   .summary-room{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
     color:var(--muted);margin-right:4px}
+  .bp-clear{float:right;font-size:12px;font-weight:400;text-transform:none;letter-spacing:0}
   .paid-block{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
   .paid-head{font-size:12px;letter-spacing:.14em;text-transform:uppercase;
     color:var(--muted);margin-bottom:7px}
@@ -2443,7 +2444,10 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
   // spellings would read as two rooms and halve the cost twice.
   const namedRooms = [...new Set((existing || []).map(b => b.room).filter(Boolean))];
   return `
-    <div class="form-section">Who's on this booking <span class="field-opt">(leave empty if it's all yours)</span></div>
+    <div class="form-section">Who's on this booking
+      <span class="field-opt">(leave empty if it's all yours)</span>
+      <button type="button" class="btn-link bp-clear" data-bp-clear>start over</button>
+    </div>
     <div class="field span2">
       ${kind !== "flight" && lodgingRoomsAvailable ? `<datalist id="bp-rooms-${prefix}">
         ${namedRooms.map(r => `<option value="${esc(r)}"></option>`).join("")}
@@ -2468,7 +2472,8 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           const ticket = kind === "flight" ? flightTicketCost(bookingRow) : 0;
           return `<div class="bp-row${rooms ? " bp-row-rooms" : ""}" data-bp-row="${sub.key}">
             <label class="bp-who">
-              <input type="checkbox" data-${prefix}-bp-on="${sub.key}" ${row ? "checked" : ""}>
+              <input type="checkbox" data-${prefix}-bp-on="${sub.key}" data-bp-on-box
+                ${row ? "checked" : ""}>
               <span>${esc(sub.name)}${sub.sub ? `<span class="bp-sub">${esc(sub.sub)}</span>` : ""}</span>
             </label>
             ${kind === "flight" ? `<input type="text" class="bp-ref" data-${prefix}-bp-ref="${sub.key}"
@@ -5598,6 +5603,33 @@ document.addEventListener("change", (e) => {
   if (by){
     by.hidden = sel.value !== "covered";
     if (by.hidden) by.value = "";
+  }
+});
+
+// Puts every share on one booking back to untouched. It only clears the
+// form — saving is what writes it — so cancelling still backs out, and there
+// is no destructive action here that the ordinary save path doesn't already
+// cover.
+document.addEventListener("click", (e) => {
+  const btn = e.target instanceof Element ? e.target.closest("[data-bp-clear]") : null;
+  if (!btn) return;
+  const block = btn.closest(".form-section")?.parentElement;
+  const rows = block?.querySelectorAll(".bp-row");
+  if (!rows?.length) return;
+  if (!confirm("Clear everyone off this booking?\n\nNothing is saved until you press Save, so you can still cancel.")) return;
+  for (const row of rows){
+    const box = row.querySelector("[data-bp-on-box]");
+    if (box) box.checked = false;
+    const room = row.querySelector("[data-bp-room-input]");
+    if (room){ room.value = ""; room.disabled = false; room.hidden = false; }
+    const amount = row.querySelector(".bp-share input");
+    if (amount){ amount.value = ""; amount.disabled = false; amount.type = "number"; }
+    const by = row.querySelector("[data-bp-by-select]");
+    if (by){ by.value = ""; by.hidden = true; }
+    const unit = row.querySelector("[data-bp-unit-select]");
+    // Through the change handler, so the row ends up in exactly the state a
+    // freshly chosen "$" leaves it in rather than one this function guessed.
+    if (unit){ unit.value = "amount"; unit.dispatchEvent(new Event("change", { bubbles: true })); }
   }
 });
 
