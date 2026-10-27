@@ -2541,6 +2541,12 @@ function readBookingPeople(container, prefix){
     const couch = unit === "couch";
     const covers = unit === "wholeroom";
     const covered = unit === "covered";
+    // companion and couch genuinely owe nothing, so a stated zero is the
+    // truth. covered and whole-room are different: their share is worked out
+    // and then redirected, so it has to stay blank. A zero would take them
+    // out of the division altogether and hand their share to everyone else.
+    const zeroed = companion || couch;
+    const computed = covers || covered;
     // "whole room" is a computed share, not a stated one — the figure comes
     // from how many rooms there are, so no amount is read from the form.
     const free = companion || couch || covers || covered;
@@ -2548,8 +2554,8 @@ function readBookingPeople(container, prefix){
       personId: key.startsWith("p:") ? key.slice(2) : null,
       groupId: key.startsWith("g:") ? key.slice(2) : null,
       reference: container.querySelector(`[data-${prefix}-bp-ref="${key}"]`)?.value.trim() || null,
-      cost: free ? 0 : (pct ? null : num),
-      costPercent: free ? null : (pct ? num : null),
+      cost: zeroed ? 0 : computed ? null : (pct ? null : num),
+      costPercent: zeroed || computed ? null : (pct ? num : null),
       // Kept only when it isn't already what the number would show, so the
       // column stays empty for the ordinary case.
       costPercentText: !free && pct && num != null && String(raw).trim() !== String(num)
@@ -3804,9 +3810,13 @@ function settlementBooking(trip, kind, row){
     participants: bookingPeopleFor(trip, kind, row.id).map(x => ({
       personId: x.group_id ? null : x.person_id,
       groupId: x.group_id || null,
-      // Whichever column was filled in decides the unit, matching the form.
-      amount: x.cost,
-      percent: x.cost == null ? x.cost_percent : null,
+      // Whichever column was filled in decides the unit, matching the form —
+      // except where the share is computed rather than stated. Rows saved
+      // before that was true carry a zero in cost, and reading it would put
+      // them back outside the division.
+      amount: (x.is_covered || x.covers_room) ? null : x.cost,
+      percent: (x.is_covered || x.covers_room) ? null
+             : x.cost == null ? x.cost_percent : null,
       companion: !!x.is_companion,
       couch: !!x.is_couch,
       coversRoom: !!x.covers_room,

@@ -4,7 +4,8 @@ No framework, no install. Plain Node, run from the directory holding
 `index.html` — not from its parent:
 
     cd ~/Downloads/flight-tracker-app
-    node tests/settlement.test.mjs && node tests/adapter.test.mjs && node tests/keystone.test.mjs
+    node tests/settlement.test.mjs && node tests/adapter.test.mjs \
+      && node tests/keystone.test.mjs && node tests/hiddenvalley.test.mjs
 
 Both read `index.html` and pull the functions they test straight out of it by
 name, so there's nothing to keep in step and no build step. If you rename one
@@ -18,6 +19,11 @@ of those functions the test will say so rather than silently passing.
   watching items, and share rows left pointing at nobody.
 - **keystone.test.mjs** — the real Keystone trip, copied out of the database,
   including the companion seat.
+- **hiddenvalley.test.mjs** — the real Hidden Valley rental, rows copied
+  verbatim including a zero that shouldn't have been written. Every other
+  suite passed throughout that bug because they build rows the way the model
+  assumes rather than the way the form wrote them. When a figure is wrong in
+  the app but right in the tests, copy the rows out of the database.
   This is the case that was reported wrong three times; it's here so it can't
   go wrong a fourth time without something failing.
 
