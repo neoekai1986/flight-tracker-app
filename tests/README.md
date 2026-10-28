@@ -4,13 +4,16 @@ No framework, no install. Plain Node, run from the directory holding
 `index.html` — not from its parent:
 
     cd ~/Downloads/flight-tracker-app
-    node tests/settlement.test.mjs && node tests/adapter.test.mjs \
-      && node tests/keystone.test.mjs && node tests/hiddenvalley.test.mjs
+    for t in tests/*.test.mjs; do node "$t" || break; done
 
 Both read `index.html` and pull the functions they test straight out of it by
 name, so there's nothing to keep in step and no build step. If you rename one
 of those functions the test will say so rather than silently passing.
 
+- **form.test.mjs** — reading share rows off the form, which is where input
+  has twice been lost between the box and the database. The settlement and
+  the adapter were both tested while this step wasn't, so a share could
+  vanish between them with every suite green.
 - **settlement.test.mjs** — the arithmetic. `settleTrip()` takes plain data
   and returns plain data, so it can be exercised directly. Every case asserts
   that the shares add up to exactly what the trip cost.
