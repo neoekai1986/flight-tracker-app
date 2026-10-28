@@ -18,7 +18,7 @@
   worker-src 'self' blob:;
   style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
   font-src 'self' https://fonts.gstatic.com;
-  img-src 'self' data: blob: https://mmqcbjgftpwzaughimkr.supabase.co;
+  img-src 'self' data: blob: https://mmqcbjgftpwzaughimkr.supabase.co https://icons.duckduckgo.com;
   connect-src 'self' data: blob: https://mmqcbjgftpwzaughimkr.supabase.co https://cdn.jsdelivr.net https://esm.sh https://tessdata.projectnaptha.com;
   object-src 'none';
   base-uri 'none';
@@ -454,6 +454,16 @@
   /* Stops ride with their leg, dimmer than the time they qualify. */
   .leg-stops{color:var(--muted);font-weight:400;font-size:12.5px}
   .card-airline{font-size:12.5px;color:var(--muted);font-weight:500}
+  /* The brand's own logo over a roundel in its colour. The roundel is what
+     you see while the logo loads, and all you see if it never does, so it
+     has to stand on its own — hence the initials underneath. */
+  .brand-mark{position:relative;flex:none;width:22px;height:22px;border-radius:6px;
+    background:var(--brand,#555);overflow:hidden;display:inline-grid;place-items:center}
+  .brand-mark i{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.01em;
+    color:var(--brand-ink,#fff);line-height:1}
+  .brand-mark img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
+    background:#fff;padding:2px}
+  .card-shelved .brand-mark{filter:grayscale(1)}
   /* Shelved: visibly set aside rather than hidden away, so the section reads
      as storage and not as a second list of live options. */
   .card-shelved{opacity:.72;border-left:3px solid var(--line)}
@@ -1145,6 +1155,123 @@ function safeExternalUrl(raw){
 const ICON_FLIGHT = `<img class="cat-icon" src="icon-flight.png" alt="" aria-hidden="true">`;
 const ICON_HOTEL = `<img class="cat-icon" src="icon-hotel.png" alt="" aria-hidden="true">`;
 const ICON_CAR = `<img class="cat-icon" src="icon-car.png" alt="" aria-hidden="true">`;
+
+// Brand marks — the airline's or the rental company's own logo on the card,
+// so a lane of cards can be read by shape before it's read by word.
+//
+// The logos aren't shipped with the app; they're someone else's trademarked
+// artwork and not ours to copy into the repository. They're fetched instead
+// from DuckDuckGo's icon service, which is keyed by domain alone and is told
+// nothing about the trip, the traveller or the price. An unknown domain comes
+// back 404, so nothing has to be kept in step with it.
+//
+// Everything stays readable without the fetch. The mark is a roundel in the
+// brand's colour with its initials, and the logo sits on top of it; a logo
+// that doesn't load — offline, blocked, or a company the service has never
+// heard of — removes itself and leaves the roundel showing.
+//
+// kind scopes the name matching: a cabin labelled "Alaska" is not a flight on
+// Alaska, and a "National Park" booking is not a car from National. A URL is
+// unambiguous, so it's matched against every brand regardless of kind.
+const BRANDS = [
+  { kind: "air", name: "Southwest",   short: "WN", domain: "southwest.com",          color: "#304CB2" },
+  { kind: "air", name: "United",      short: "UA", domain: "united.com",             color: "#002244" },
+  { kind: "air", name: "American",    short: "AA", domain: "aa.com",                 color: "#0078D2" },
+  { kind: "air", name: "Delta",       short: "DL", domain: "delta.com",              color: "#003268" },
+  { kind: "air", name: "Alaska",      short: "AS", domain: "alaskaair.com",          color: "#01426A" },
+  { kind: "air", name: "JetBlue",     short: "B6", domain: "jetblue.com",            color: "#003876" },
+  { kind: "air", name: "Hawaiian",    short: "HA", domain: "hawaiianairlines.com",   color: "#4F2170" },
+  { kind: "air", name: "Spirit",      short: "NK", domain: "spirit.com",             color: "#FFEB00" },
+  { kind: "air", name: "Frontier",    short: "F9", domain: "flyfrontier.com",        color: "#008A4F" },
+  { kind: "air", name: "Allegiant",   short: "G4", domain: "allegiantair.com",       color: "#003087" },
+  { kind: "air", name: "Sun Country", short: "SY", domain: "suncountry.com",         color: "#004B87" },
+  { kind: "air", name: "Breeze",      short: "MX", domain: "flybreeze.com",          color: "#0033A0" },
+  { kind: "air", name: "Avelo",       short: "XP", domain: "aveloair.com",           color: "#00AEEF" },
+
+  { kind: "stay", name: "Airbnb",        domain: "airbnb.com",          color: "#FF5A5F" },
+  { kind: "stay", name: "Vrbo",          domain: "vrbo.com",            color: "#1668E3" },
+  { kind: "stay", name: "Booking.com",   domain: "booking.com",         color: "#003580" },
+  { kind: "stay", name: "Expedia",       domain: "expedia.com",         color: "#FFC94D" },
+  { kind: "stay", name: "Hotels.com",    domain: "hotels.com",          color: "#D32F2F" },
+  { kind: "stay", name: "Marriott",      domain: "marriott.com",        color: "#A61C2D" },
+  { kind: "stay", name: "Hilton",        domain: "hilton.com",          color: "#1E4E79" },
+  { kind: "stay", name: "IHG",           domain: "ihg.com",             color: "#AD1F23" },
+  { kind: "stay", name: "Hyatt",         domain: "hyatt.com",           color: "#00254A" },
+  { kind: "stay", name: "Choice Hotels", domain: "choicehotels.com",    color: "#003865" },
+  { kind: "stay", name: "Wyndham",       domain: "wyndhamhotels.com",   color: "#0A3A5C" },
+  { kind: "stay", name: "Best Western",  domain: "bestwestern.com",     color: "#002B5C" },
+
+  { kind: "car", name: "Budget",              domain: "budget.com",       color: "#FF6A00" },
+  { kind: "car", name: "Hertz",               domain: "hertz.com",        color: "#FFD100" },
+  { kind: "car", name: "Avis",                domain: "avis.com",         color: "#D4002A" },
+  { kind: "car", name: "Enterprise",          domain: "enterprise.com",   color: "#00843D" },
+  { kind: "car", name: "National Car",        domain: "nationalcar.com",  color: "#004B2D" },
+  { kind: "car", name: "Alamo",               domain: "alamo.com",        color: "#0071CE" },
+  { kind: "car", name: "Sixt",                domain: "sixt.com",         color: "#FF5F00" },
+  { kind: "car", name: "Turo",                domain: "turo.com",         color: "#593BFB" },
+  { kind: "car", name: "Dollar Rent A Car",   domain: "dollar.com",       color: "#00843D" },
+  { kind: "car", name: "Thrifty",             domain: "thrifty.com",      color: "#005DAA" },
+];
+
+// The host a listing was booked on, with the www. and nothing else.
+function brandHost(url){
+  const safe = safeExternalUrl(url);
+  if (!safe) return null;
+  try { return new URL(safe).hostname.replace(/^www\./, "").toLowerCase(); }
+  catch { return null; }
+}
+
+// Enough of a colour to put white or black letters on. Anything light enough
+// to lose white text — Spirit's yellow, Hertz's — takes black instead.
+function brandInk(hex){
+  const h = /^#([0-9a-f]{6})$/i.exec(String(hex || ""));
+  if (!h) return "#fff";
+  const n = parseInt(h[1], 16);
+  const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+  return lum > 0.6 ? "#1a1a1a" : "#fff";
+}
+
+function brandFor(name, url, kinds){
+  const host = brandHost(url);
+  if (host){
+    const hit = BRANDS.find(b => host === b.domain || host.endsWith(`.${b.domain}`));
+    if (hit) return hit;
+  }
+  const text = String(name || "").trim();
+  const low = text.toLowerCase();
+  if (low){
+    // Longest name first, so "Dollar Rent A Car" isn't beaten to it by a
+    // shorter entry that happens to sit inside the same label.
+    const hit = BRANDS
+      .filter(b => kinds.includes(b.kind) && low.includes(b.name.toLowerCase()))
+      .sort((a, b) => b.name.length - a.name.length)[0];
+    if (hit) return hit;
+  }
+  // A site we've never listed is still a brand. Use the host it was booked
+  // on — the icon service has heard of far more companies than this table —
+  // and colour it from its own letters so it looks the same every time.
+  if (host){
+    let n = 0;
+    for (let i = 0; i < host.length; i++) n = (n * 31 + host.charCodeAt(i)) % 360;
+    return { name: host.replace(/\.[a-z.]+$/, ""), domain: host, color: `hsl(${n} 42% 34%)` };
+  }
+  return null;
+}
+
+const brandInitials = (s) => String(s).trim().split(/[\s.\-]+/).filter(Boolean)
+  .slice(0, 2).map(w => w[0].toUpperCase()).join("") || "?";
+
+function brandMark(name, url, kinds){
+  const b = brandFor(name, url, kinds);
+  if (!b) return "";
+  const letters = b.short || brandInitials(b.name);
+  const logo = b.domain
+    ? `<img src="https://icons.duckduckgo.com/ip3/${encodeURIComponent(b.domain)}.ico"
+           alt="" aria-hidden="true" loading="lazy" onerror="this.remove()">`
+    : "";
+  return `<span class="brand-mark" style="--brand:${b.color};--brand-ink:${brandInk(b.color)}"
+    title="${esc(b.name)}"><i>${esc(letters)}</i>${logo}</span>`;
+}
 
 // Curated loyalty-program lists for the points-program pickers — "Other…"
 // always remains an option, so an unlisted program (e.g. a credit card's
@@ -3324,6 +3451,7 @@ function renderCard(trip, f){
       <div class="res-main">
         <div class="card-title-row">
           <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
+          ${brandMark(f.airline, f.url, ["air"])}
           <h3>${esc(flightCardTitle(f))}</h3>
           ${f.airline ? `<span class="card-airline">${esc(f.airline)}</span>` : ""}
           ${f.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
@@ -5086,6 +5214,7 @@ function renderRentalCard(trip, r){
       <div class="res-main">
         <div class="card-title-row">
           <span class="drag-handle" draggable="true" data-rental-drag="${r.id}" title="Drag to reorder">⠿</span>
+          ${brandMark(r.label, r.url, r.kind === "car" ? ["car"] : ["stay"])}
           <h3>${icon} ${esc(r.label)}</h3>
           ${r.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
         </div>
