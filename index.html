@@ -3751,6 +3751,7 @@ function addFlightFormHTML(tripId, trip){
     <div class="span2 row form-actions">
       <button class="btn btn-sm" data-nf-save="${tripId}">Add flight</button>
       <button class="btn-link" data-nf-cancel="${tripId}">cancel</button>
+      <span class="field-hint">or press Enter</span>
     </div>
   </div>`;
 }
@@ -7562,11 +7563,34 @@ function wireEvents(activeTrip){
   wireDragEvents(activeTrip);
 }
 
+// Enter saves the form, from any of its single-line fields.
+//
+// The form is a grid of labels rather than a <form>, so there is no submit
+// behaviour to inherit and the key has to be wired by hand. Textareas keep
+// Enter for the new line they need — a pasted search result is several lines
+// by nature, and so are notes. A button does its own thing on Enter and a
+// file field opens its picker, so neither is taken over. A select with its
+// list open never reaches this: the browser's own popup takes the key.
+function wireEnterToSave(holder, saveBtn){
+  holder.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || e.isComposing) return;
+    if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+    const el = e.target;
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag !== "input" && tag !== "select") return;
+    if (tag === "input" && ["file", "button", "submit", "reset"].includes(el.type)) return;
+    e.preventDefault();
+    if (saveBtn.disabled) return;
+    saveBtn.click();
+  });
+}
+
 function wireAddFlightForm(tripId){
   const holder = document.querySelector(`[data-add-flight-form="${tripId}"]`);
   const saveBtn = holder.querySelector("[data-nf-save]");
   const cancelBtn = holder.querySelector("[data-nf-cancel]");
   if (!saveBtn) return;
+  wireEnterToSave(holder, saveBtn);
   wireDateRangeButtons();
   wirePointsProgramField("nf");
   wireAutoTitle(holder, { url: "[data-nf-url]", origin: "[data-nf-origin]",
