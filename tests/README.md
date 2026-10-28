@@ -14,6 +14,9 @@ of those functions the test will say so rather than silently passing.
   has twice been lost between the box and the database. The settlement and
   the adapter were both tested while this step wasn't, so a share could
   vanish between them with every suite green.
+- **calendar.test.mjs** — laying flights out on the month grid: the week a
+  trip runs over, the bar that has to know it began somewhere else, and two
+  flights on the same day not landing on top of each other.
 - **enter.test.mjs** — Enter saving the add-flight form, and the fields it
   has to keep its hands off: the paste box and the notes, where Enter is a
   new line and not a save.
