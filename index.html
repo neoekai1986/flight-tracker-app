@@ -1491,6 +1491,21 @@ function fmtShortDate(iso){
   return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+// "Mon, Mar 23" — the same date with the day of the week in front, for the
+// cards. A trip is planned around the days as much as the dates: a flight
+// that lands on a Sunday is a different flight from one that lands on a
+// Monday, and a cancellation deadline on a Saturday is worth knowing before
+// it arrives. Built from the parts like the one above rather than from
+// Date.parse, which reads a bare ISO date as UTC and can hand back the day
+// before in anything west of Greenwich.
+function fmtShortDateDay(iso){
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Date(y, m - 1, d)
+    .toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
 // "22:00" -> "10:00 PM"
 function fmtTime(t){
   if (!t) return "";
@@ -3377,7 +3392,7 @@ function renderCard(trip, f){
     return `<div class="leg">
       <div class="leg-when">
         <b>${esc(times) || "—"}</b>
-        ${when ? `<span>${esc(fmtShortDate(when))}</span>` : ""}
+        ${when ? `<span>${esc(fmtShortDateDay(when))}</span>` : ""}
       </div>
       <div class="leg-stops">${stops ? esc(stops) : ""}</div>
       <div class="leg-route">
@@ -5153,10 +5168,10 @@ function rentalCancelBadge(r){
   const [y,m,d] = r.cancel_by.split("-").map(Number);
   const cancelDate = new Date(y, m-1, d);
   const daysLeft = Math.round((cancelDate - today) / 86400000);
-  let cls = "", txt = `Cancel by ${fmtShortDate(r.cancel_by)}`;
-  if (daysLeft < 0){ txt = `Cancel window passed (${fmtShortDate(r.cancel_by)})`; }
+  let cls = "", txt = `Cancel by ${fmtShortDateDay(r.cancel_by)}`;
+  if (daysLeft < 0){ txt = `Cancel window passed (${fmtShortDateDay(r.cancel_by)})`; }
   else if (daysLeft === 0){ txt = "LAST DAY to cancel"; cls = "status-warn"; }
-  else if (daysLeft <= 7){ txt = `Cancel by ${fmtShortDate(r.cancel_by)} — ${daysLeft}d left`; cls = "status-warn"; }
+  else if (daysLeft <= 7){ txt = `Cancel by ${fmtShortDateDay(r.cancel_by)} — ${daysLeft}d left`; cls = "status-warn"; }
   return `<span class="status ${cls}">${txt}</span>${r.reminded_at ? ` <span class="status">reminder sent</span>` : ""}`;
 }
 
@@ -5205,7 +5220,7 @@ function renderRentalCard(trip, r){
   // Paid / your-share move into the right-aligned price block, same as flights.
   const metaBits = [];
   if (r.rental_start || r.rental_end){
-    metaBits.push(`<b>${fmtShortDate(r.rental_start) || "?"} → ${fmtShortDate(r.rental_end) || "?"}</b>`);
+    metaBits.push(`<b>${fmtShortDateDay(r.rental_start) || "?"} → ${fmtShortDateDay(r.rental_end) || "?"}</b>`);
   }
   if (r.confirmation_code) metaBits.push(`Conf. <b>${esc(r.confirmation_code)}</b>`);
   return `

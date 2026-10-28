@@ -14,6 +14,10 @@ of those functions the test will say so rather than silently passing.
   has twice been lost between the box and the database. The settlement and
   the adapter were both tested while this step wasn't, so a share could
   vanish between them with every suite green.
+- **dates.test.mjs** — the date on a card, weekday and all. The second half
+  re-runs itself from Honolulu and Kiritimati, because a bare ISO date read
+  as UTC comes back as the day before west of Greenwich and this app has
+  already filed a payment on tomorrow's date that way.
 - **brand.test.mjs** — which company a card belongs to. A listing's URL
   outranks its label, and a name only matches inside its own kind, so a
   cabin called "Alaska" doesn't fly on Alaska.
