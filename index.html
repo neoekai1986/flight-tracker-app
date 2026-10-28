@@ -5622,7 +5622,10 @@ document.addEventListener("click", (e) => {
     const room = row.querySelector("[data-bp-room-input]");
     if (room){ room.value = ""; room.disabled = false; room.hidden = false; }
     const amount = row.querySelector(".bp-share input");
-    if (amount){ amount.value = ""; amount.disabled = false; amount.type = "number"; }
+    // Not amount.type: the box is a text box, because it has to accept "1/5".
+    // Making it a number box here left it displaying a fraction while
+    // handing back an empty string, so the share was saved as nothing.
+    if (amount){ amount.value = ""; amount.disabled = false; }
     const by = row.querySelector("[data-bp-by-select]");
     if (by){ by.value = ""; by.hidden = true; }
     const unit = row.querySelector("[data-bp-unit-select]");
