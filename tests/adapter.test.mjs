@@ -431,6 +431,42 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
     api.tripMoney(trip).payments.map(p => p.id), ["a", "b"]);
 }
 
+// ---- shelved items --------------------------------------------------------
+// Set aside, not deleted. Everything on the card is kept; none of it is
+// money the trip cost.
+
+{
+  const { trip, api } = world({
+    rentals: [
+      { id: "r1", trip_id: "t1", kind: "housing", label: "Cabin",
+        paid_cash: 900, paid_by: "p-me", status: "booked" },
+      { id: "r2", trip_id: "t1", kind: "housing", label: "The one we didn't take",
+        paid_cash: 1200, paid_by: "p-me", status: "booked", shelved: true },
+    ],
+    flights: [
+      { id: "f1", trip_id: "t1", label: "Seats", paid_cash: 200, passengers: 2,
+        paid_by: "p-me", status: "booked" },
+      { id: "f2", trip_id: "t1", label: "Pricier seats", paid_cash: 500, passengers: 2,
+        paid_by: "p-me", status: "booked", shelved: true },
+    ],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-eug" },
+      { rental_id: "r1", person_id: "p-me" },
+      { flight_id: "f1", person_id: "p-eug" },
+      { flight_id: "f1", person_id: "p-me" },
+      // Both of these are on shelved bookings and must count for nothing.
+      { rental_id: "r2", person_id: "p-eug" },
+      { flight_id: "f2", person_id: "p-eug" },
+    ],
+  });
+  const m = api.tripMoney(trip);
+  check("a shelved booking isn't part of what the trip cost", m.total, 1300);
+  check("and nobody owes anything for one", owed(m),
+    { Me: 650, Eugene: 650, Christine: 0, Jay: 0 });
+  check("its shares are left alone, just not counted",
+    m.detail.get("p-eug").map(d => d.label), ["Seats", "Cabin"]);
+}
+
 // ---- damaged data ---------------------------------------------------------
 
 {

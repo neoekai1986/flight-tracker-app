@@ -454,6 +454,18 @@
   /* Stops ride with their leg, dimmer than the time they qualify. */
   .leg-stops{color:var(--muted);font-weight:400;font-size:12.5px}
   .card-airline{font-size:12.5px;color:var(--muted);font-weight:500}
+  /* Shelved: visibly set aside rather than hidden away, so the section reads
+     as storage and not as a second list of live options. */
+  .card-shelved{opacity:.72;border-left:3px solid var(--line)}
+  .card-shelved:hover{opacity:1}
+  .shelf{margin-top:18px;border-top:1px solid var(--line);padding-top:12px}
+  .shelf > summary{cursor:pointer;list-style:none;font-size:12px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--muted);display:flex;align-items:center;gap:7px}
+  .shelf > summary::-webkit-details-marker{display:none}
+  .shelf > summary .field-opt{letter-spacing:0;text-transform:none}
+  .shelf[open] .shelf-caret{transform:rotate(180deg)}
+  .shelf-caret{font-size:10px;transition:transform .15s}
+  .shelf .lane-stack{margin-top:10px}
   /* Stacks below the width where four columns stop being readable. */
   @media (max-width:560px){
     .leg{grid-template-columns:1fr auto}
@@ -1990,6 +2002,7 @@ async function loadTrips(){
     flightAirlineAvailable = "airline" in sample;
     flightStopsAvailable = "stops_out" in sample;
     flightLegsAvailable = "arrive_time" in sample;
+    shelvingAvailable = "shelved" in sample;
   }
   const bpSample = data.flatMap(t => t.booking_people || [])[0];
   if (bpSample){
@@ -2120,6 +2133,8 @@ let tripAlternativeAvailable = true;
 let flightStopsAvailable = true;
 // flights.arrive_time / return_arrive_time / duration_out / duration_back.
 let flightLegsAvailable = true;
+// flights.shelved / rentals.shelved.
+let shelvingAvailable = true;
 // booking_people.is_companion — see the note by flightAirlineAvailable.
 let companionPassAvailable = true;
 // booking_people.room / is_couch — likewise.
@@ -3273,7 +3288,7 @@ function renderCard(trip, f){
 
   const open = cardDetailOpen(f.id);
   return `
-  <div class="card${f.status === "watching" ? " card-watching" : " card-booked"}" data-card="${f.id}" data-leg="${legScope(f.leg)}" data-trip="${trip.id}">
+  <div class="card${f.shelved ? " card-shelved" : f.status === "watching" ? " card-watching" : " card-booked"}" data-card="${f.id}" data-leg="${legScope(f.leg)}" data-trip="${trip.id}">
     <div class="res-row">
       <div class="res-main">
         <div class="card-title-row">
@@ -3300,6 +3315,8 @@ function renderCard(trip, f){
           <div class="menu-panel">
             <button type="button" data-toggle-flight-status="${f.id}" data-next-status="${f.status === "watching" ? "booked" : "watching"}">
               ${f.status === "watching" ? "Mark booked" : "Mark watching"}</button>
+            ${!shelvingAvailable ? "" : `<button type="button" data-shelve-flight="${f.id}"
+              data-shelved="${f.shelved ? "1" : "0"}">${f.shelved ? "Take off the shelf" : "Shelve"}</button>`}
             ${moveOptions ? `<div class="menu-divider"></div>
               <label class="menu-label">Move to trip
                 <select data-move-flight="${f.id}">
@@ -3956,9 +3973,9 @@ function settlementBooking(trip, kind, row){
 function settlementBookings(trip){
   const out = [];
   for (const f of (trip.flights || []))
-    if (f.status !== "watching") out.push(settlementBooking(trip, "flight", f));
+    if (f.status !== "watching" && !f.shelved) out.push(settlementBooking(trip, "flight", f));
   for (const r of (trip.rentals || []))
-    if (r.status !== "watching") out.push(settlementBooking(trip, "rental", r));
+    if (r.status !== "watching" && !r.shelved) out.push(settlementBooking(trip, "rental", r));
   return out;
 }
 
@@ -4183,7 +4200,7 @@ function settlementSubjectName(trip, sub){
 function renderTripSummary(trip){
   const fmt = n => fmtCash(n, "USD");
   const money = tripMoney(trip);
-  const booked = (list) => (list || []).filter(x => x.status !== "watching");
+  const booked = (list) => (list || []).filter(x => x.status !== "watching" && !x.shelved);
   const flights = booked(trip.flights).slice()
     .sort((a,b) => (a.depart_date || "").localeCompare(b.depart_date || ""));
   const rentals = booked(trip.rentals);
@@ -4615,8 +4632,12 @@ function renderTripPanel(trip){
   // The rail narrows the lists only. Totals stay computed from everything
   // booked — "Total paid" is a fact about the trip, not about the current view,
   // and a filter that appeared to change what you'd paid would be a lie.
-  const allFlights = trip.flights || [];
-  const allRentals = trip.rentals || [];
+  // Shelved items are out of the way everywhere — the lanes, the totals, the
+  // settlement — and live in their own section at the foot of the trip.
+  const shelvedFlights = (trip.flights || []).filter(f => f.shelved);
+  const shelvedRentals = (trip.rentals || []).filter(r => r.shelved);
+  const allFlights = (trip.flights || []).filter(f => !f.shelved);
+  const allRentals = (trip.rentals || []).filter(r => !r.shelved);
   const passesProgram = x => facetAllows(sel.program, x.points_program || "");
   const flights = allFlights.filter(f =>
     facetAllows(sel.type, "flight") &&
@@ -4715,6 +4736,27 @@ function renderTripPanel(trip){
        </div>`
     : "";
 
+  // Out of the way but not gone: collapsed by default, and everything on a
+  // card still works from in here, so taking something off the shelf is one
+  // click and nothing had to be remembered in the meantime.
+  const shelvedCount = shelvedFlights.length + shelvedRentals.length;
+  const shelfHTML = !shelvedCount ? "" : `
+    <details class="shelf">
+      <summary><span class="shelf-caret">▾</span> Shelved
+        <span class="field-opt">${shelvedCount} item${shelvedCount > 1 ? "s" : ""} — not counted in any total</span>
+      </summary>
+      <div class="lane-stack">
+        ${shelvedFlights.length ? `<div class="lane">
+          <div class="lane-label">${ICON_FLIGHT} Flights</div>
+          <div class="solo-list">${shelvedFlights.map(f => renderCard(trip, f)).join("")}</div>
+        </div>` : ""}
+        ${shelvedRentals.length ? `<div class="lane">
+          <div class="lane-label">${ICON_HOTEL} Housing &amp; cars</div>
+          <div class="solo-list">${shelvedRentals.map(r => renderRentalCard(trip, r)).join("")}</div>
+        </div>` : ""}
+      </div>
+    </details>`;
+
   const isOwner = trip.owner_id === session.user.id;
   const collabs = trip.trip_collaborators || [];
 
@@ -4802,6 +4844,7 @@ function renderTripPanel(trip){
       </div>`}
 
       ${watchingHTML}
+      ${shelfHTML}
         </div>
       </div>`}
     </div>`;
@@ -5007,7 +5050,7 @@ function renderRentalCard(trip, r){
   }
   if (r.confirmation_code) metaBits.push(`Conf. <b>${esc(r.confirmation_code)}</b>`);
   return `
-  <div class="card${r.status === "watching" ? " card-watching" : " card-booked"}" data-rental-card="${r.id}" data-trip="${trip.id}">
+  <div class="card${r.shelved ? " card-shelved" : r.status === "watching" ? " card-watching" : " card-booked"}" data-rental-card="${r.id}" data-trip="${trip.id}">
     <div class="res-row">
       <div class="res-main">
         <div class="card-title-row">
@@ -5032,6 +5075,8 @@ function renderRentalCard(trip, r){
           <div class="menu-panel">
             <button type="button" data-toggle-rental-status="${r.id}" data-next-status="${r.status === "watching" ? "booked" : "watching"}">
               ${r.status === "watching" ? "Mark booked" : "Mark watching"}</button>
+            ${!shelvingAvailable ? "" : `<button type="button" data-shelve-rental="${r.id}"
+              data-shelved="${r.shelved ? "1" : "0"}">${r.shelved ? "Take off the shelf" : "Shelve"}</button>`}
             ${moveOptions ? `<div class="menu-divider"></div>
               <label class="menu-label">Move to trip
                 <select data-move-rental="${r.id}">
@@ -5224,7 +5269,9 @@ function renderStatsBar(){
     if (!byCategory.has(catKey)) byCategory.set(catKey, { cash: 0, pointsByProgram: new Map() });
     const catBucket = byCategory.get(catKey);
     for (const f of (t.flights || [])){
-      if (f.status === "watching") continue; // still comparing options — excluded from cost totals
+      // Watching is still being compared; shelved was set aside. Neither is
+      // money this trip cost.
+      if (f.status === "watching" || f.shelved) continue;
       const n = f.passengers || 1;
       const cash = (f.paid_cash || 0) * n, points = (f.paid_points || 0) * n;
       flightCash += cash; catBucket.cash += cash;
@@ -5232,7 +5279,7 @@ function renderStatsBar(){
       addPoints(catBucket.pointsByProgram, f.points_program, points);
     }
     for (const r of (t.rentals || [])){
-      if (r.status === "watching") continue;
+      if (r.status === "watching" || r.shelved) continue;
       const cash = rentalOurPortion(r) || 0, points = r.paid_points || 0;
       rentalCash += cash; catBucket.cash += cash;
       addPoints(rentalPointsByProgram, r.points_program, points);
@@ -5338,7 +5385,8 @@ function renderCancelDeadlines(){
   const rows = [];
   for (const t of scopedTrips()){
     for (const r of (t.rentals || [])){
-      if (!r.cancel_by || r.status === "watching") continue;
+      // A deadline on something you've shelved isn't a deadline any more.
+      if (!r.cancel_by || r.status === "watching" || r.shelved) continue;
       const [y,m,d] = r.cancel_by.split("-").map(Number);
       const cancelDate = new Date(y, m-1, d);
       const daysLeft = Math.round((cancelDate - today) / 86400000);
@@ -6823,6 +6871,22 @@ function wireEvents(activeTrip){
   });
 
   if (!activeTrip) return;
+
+  // Shelving leaves everything else alone — status, prices, the lot — so
+  // taking something off the shelf puts it back exactly as it was rather
+  // than as whatever the default happens to be.
+  document.querySelectorAll("[data-shelve-flight]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await updateFlight(btn.dataset.shelveFlight, { shelved: btn.dataset.shelved !== "1" });
+      await refresh();
+    });
+  });
+  document.querySelectorAll("[data-shelve-rental]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await updateRental(btn.dataset.shelveRental, { shelved: btn.dataset.shelved !== "1" });
+      await refresh();
+    });
+  });
 
   document.querySelectorAll("[data-toggle-flight-status]").forEach(btn => {
     btn.addEventListener("click", async () => {
