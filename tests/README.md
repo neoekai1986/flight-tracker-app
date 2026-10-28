@@ -14,6 +14,9 @@ of those functions the test will say so rather than silently passing.
   has twice been lost between the box and the database. The settlement and
   the adapter were both tested while this step wasn't, so a share could
   vanish between them with every suite green.
+- **parse.test.mjs** — reading a pasted search result. A result prints a
+  layover the way it prints a leg, so the parser has to tell the journey from
+  the hour spent waiting in the middle of it.
 - **settlement.test.mjs** — the arithmetic. `settleTrip()` takes plain data
   and returns plain data, so it can be exercised directly. Every case asserts
   that the shares add up to exactly what the trip cost.

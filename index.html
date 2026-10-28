@@ -1688,6 +1688,9 @@ function parseFlightResultText(text){
   const rangeRe = new RegExp(TIME + String.raw`\s*-\s*` + TIME + String.raw`(?:\s*\+\d)?`, "gi");
   const departures = [];
   const arrivals = [];
+  // Where each leg's times sit in the text, so the durations below can be
+  // sorted into the leg they belong to rather than taken in bare order.
+  const rangeAt = [];
   let m;
   while ((m = rangeRe.exec(t)) !== null){
     const ap1 = m[3] ? m[3].replace(/\./g, "") : null;
@@ -1697,7 +1700,7 @@ function parseFlightResultText(text){
     // And the other half, which was being matched and dropped. An arrival is
     // half of what a search result tells you about a leg.
     const arr = to24(m[4], m[5], ap2 || ap1);
-    if (dep){ departures.push(dep); arrivals.push(arr || null); }
+    if (dep){ departures.push(dep); arrivals.push(arr || null); rangeAt.push(m.index); }
   }
   out.ranges = departures.length;
   out.departTime = departures[0] || null;
@@ -1705,17 +1708,45 @@ function parseFlightResultText(text){
   out.arriveTime = arrivals[0] || null;
   out.returnArriveTime = arrivals[1] || null;
 
-  // "4h 54m", "3h", "55m" — stated by the result, in the order the legs
-  // appear. Not derived from the times above: those are local, so a flight
-  // that crosses a time zone would come out wrong by the offset.
-  out.durations = [];
+  // "4h 54m", "3h", "55m" — stated by the result, one per leg. Not derived
+  // from the times above: those are local, so a flight that crosses a time
+  // zone would come out wrong by the offset.
+  //
+  // A result writes a layover exactly the way it writes a leg — a one-stop
+  // IAD-RNO carries both "7h 46m" for the journey and "1h 03m" sitting in
+  // ORD — so the first duration printed against a leg is as likely to be the
+  // connection as the trip, and taking it in bare order put an hour on the
+  // card for a flight across the country. Within the stretch of text that
+  // belongs to one leg the journey is the longest of them, a layover being
+  // part of it, so take the longest.
   const durRe = /\b(\d{1,2})\s*h(?:\s*(\d{1,2})\s*m)?\b|\b(\d{1,3})\s*m\b/gi;
+  const found = [];
   let dm;
   while ((dm = durRe.exec(t)) !== null){
-    out.durations.push(dm[1] != null
-      ? `${dm[1]}h${dm[2] != null ? ` ${dm[2]}m` : ""}`
-      : `${dm[3]}m`);
+    found.push({
+      at: dm.index,
+      minutes: dm[1] != null
+        ? parseInt(dm[1], 10) * 60 + (dm[2] != null ? parseInt(dm[2], 10) : 0)
+        : parseInt(dm[3], 10),
+      text: dm[1] != null
+        ? `${dm[1]}h${dm[2] != null ? ` ${dm[2]}m` : ""}`
+        : `${dm[3]}m`
+    });
   }
+  // One bucket per leg, running from that leg's times to the next leg's.
+  // Anything ahead of the first leg — a heading, a total — is read as the
+  // first leg's. With no times to go by there are no legs to divide into,
+  // so the durations stand as they were found.
+  out.durations = rangeAt.length
+    ? rangeAt.map((start, i) => {
+        const from = i === 0 ? -1 : start;
+        const to = i + 1 < rangeAt.length ? rangeAt[i + 1] : Infinity;
+        const longest = found
+          .filter(d => d.at >= from && d.at < to)
+          .sort((a, b) => b.minutes - a.minutes)[0];
+        return longest ? longest.text : null;
+      })
+    : found.map(d => d.text);
 
   // Airline: prefer a name we already know, so "Alaska" isn't mistaken for a
   // city and a two-word carrier isn't cut in half.
