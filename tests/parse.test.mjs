@@ -103,5 +103,73 @@ $412
   is("no times", r.durations, ["4h 54m", "3h 56m"]);
 }
 
+// ---- Dates ----
+//
+// The date was the one thing a pasted result never gave up, so the box kept
+// whatever the trip's own travel window had put there and the flight was
+// filed on the wrong day.
+
+// Google Flights, with the year stated and each leg's date repeated beside
+// its times. Each date counts once, in the order it first appears.
+{
+  const r = parse(`
+Mon, Mar 23, 2026
+8:35 AM – 1:21 PM  IAD – RNO  United  1 stop ORD  7h 46m
+Mon, Mar 23, 2026
+
+Sun, Mar 29, 2026
+1:42 PM – 1:17 AM  RNO – IAD  United  1 stop SFO  8h 35m
+Sun, Mar 29, 2026
+`);
+  is("gflights dates", r.dates, ["2026-03-23", "2026-03-29"]);
+}
+
+// A search header stating the range, then the legs: still the depart date
+// first and the return second.
+{
+  const r = parse(`Mar 23 – Mar 29, 2026
+8:35 AM – 1:21 PM  IAD–RNO
+1:42 PM – 1:17 AM  RNO–IAD`);
+  is("range header", r.dates, ["2026-03-23", "2026-03-29"]);
+}
+
+// The year is usually missing, and is read against the date the form holds.
+{
+  is("yearless vs ref", parse("Mon, Mar 23\n8:35 AM – 1:21 PM", "2026-03-20").dates,
+     ["2026-03-23"]);
+  // A January flight found in December belongs to the year ahead, not eleven
+  // months behind.
+  is("rolls forward", parse("Jan 5", "2026-12-28").dates, ["2027-01-05"]);
+  // And the mirror: December shown while the form sits in January.
+  is("rolls back", parse("Dec 28", "2027-01-05").dates, ["2026-12-28"]);
+  // Inside six months it stays on the reference year.
+  is("stays put", parse("Aug 14", "2026-03-20").dates, ["2026-08-14"]);
+}
+
+// A range header states the year once, at the end, and the day before it
+// belongs to the year its own month implies — the December half of a
+// New Year trip is the year before the January half.
+{
+  is("header year shared", parse("Mar 23 - Mar 29, 2026").dates,
+     ["2026-03-23", "2026-03-29"]);
+  is("header year across new year", parse("Dec 28 - Jan 3, 2027").dates,
+     ["2026-12-28", "2027-01-03"]);
+}
+
+// The other spellings a result might use.
+{
+  is("slashes", parse("3/23/26  8:35 AM").dates, ["2026-03-23"]);
+  is("slashes long year", parse("3/23/2026").dates, ["2026-03-23"]);
+  is("iso", parse("2026-03-23 departs 8:35 AM").dates, ["2026-03-23"]);
+  is("day first", parse("23 Mar 2026").dates, ["2026-03-23"]);
+  is("abbreviated", parse("Sept. 4th, 2026").dates, ["2026-09-04"]);
+}
+
+// Times, routes, prices and durations are not dates.
+{
+  is("no dates in kayak row", parse(kayak).dates, []);
+  is("no dates at all", parse("8:35 AM – 1:21 PM  IAD–RNO  $412  7h 46m").dates, []);
+}
+
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

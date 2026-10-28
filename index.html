@@ -1941,9 +1941,9 @@ const MONTHS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov
 // so nothing here depends on line order or position. It finds every departure–
 // arrival pair in the text and takes the first as the outbound and the second
 // as the return, which is the one thing that holds across all of them.
-function parseFlightResultText(text){
+function parseFlightResultText(text, ref){
   const out = { departTime: null, returnTime: null, arriveTime: null,
-                returnArriveTime: null, durations: [],
+                returnArriveTime: null, durations: [], dates: [],
                 airline: null, price: null, stops: [], ranges: 0 };
   if (!text) return out;
   // Normalise the dash variants and the no-break spaces OCR likes to emit.
@@ -2048,6 +2048,69 @@ function parseFlightResultText(text){
       : `${sm[2]} stop${sm[2] === "1" ? "" : "s"}`;
     out.stops.push(sm[3] && label !== "nonstop" ? `${label} (${sm[3]})` : label);
   }
+
+  // Dates, in the order they first appear, so the outbound and the return
+  // line up with the time ranges above: "2026-03-23", "3/23/26", "Mon, Mar
+  // 23", "23 Mar 2026". A result repeats a leg's date on every row of it, so
+  // each date is kept once, at the position it was first seen.
+  //
+  // The year is often missing, and when a range header states it once it
+  // states it at the end ("Mar 23 - Mar 29, 2026"). So a yearless date takes
+  // its year from the nearest date in the text that does carry one, and only
+  // falls back to `ref` — the date the form already holds, which is the
+  // trip's own travel window — when the result never states a year at all.
+  // Either way it moves a year when the month is more than six off the
+  // reference, so a December search for January doesn't land eleven months
+  // in the past.
+  const refM = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ref || ""));
+  const now = new Date();
+  const refYear = refM ? parseInt(refM[1], 10) : now.getFullYear();
+  const refMonth = refM ? parseInt(refM[2], 10) : now.getMonth() + 1;
+  const MONTH_NAMES = "jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec";
+  const hits = [];
+  const addDate = (at, y, mo, d) => {
+    if (!(mo >= 1 && mo <= 12) || !(d >= 1 && d <= 31)) return;
+    hits.push({ at, y: y || null, mo, d });
+  };
+  let dd;
+  const isoRe = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g;
+  while ((dd = isoRe.exec(t)) !== null){
+    addDate(dd.index, parseInt(dd[1],10), parseInt(dd[2],10), parseInt(dd[3],10));
+  }
+  const slashRe = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g;
+  while ((dd = slashRe.exec(t)) !== null){
+    const y = dd[3] == null ? null
+      : (dd[3].length === 2 ? 2000 + parseInt(dd[3],10) : parseInt(dd[3],10));
+    addDate(dd.index, y, parseInt(dd[1],10), parseInt(dd[2],10));
+  }
+  const nameRe = new RegExp(
+    String.raw`\b(?:(` + MONTH_NAMES + String.raw`)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?`
+    + String.raw`|(\d{1,2})(?:st|nd|rd|th)?\s+(` + MONTH_NAMES + String.raw`)[a-z]*\.?)`
+    + String.raw`(?:,?\s*(\d{4}))?`, "gi");
+  while ((dd = nameRe.exec(t)) !== null){
+    const name = (dd[1] || dd[4]).toLowerCase();
+    addDate(dd.index, dd[5] ? parseInt(dd[5],10) : null,
+      MONTH_NAMES.split("|").indexOf(name) + 1, parseInt(dd[2] || dd[3], 10));
+  }
+  const stated = hits.filter(h => h.y);
+  const yearFor = (h) => {
+    if (h.y) return h.y;
+    const near = stated.length
+      ? stated.reduce((a, b) => Math.abs(b.at - h.at) < Math.abs(a.at - h.at) ? b : a)
+      : null;
+    const baseYear = near ? near.y : refYear;
+    const baseMonth = near ? near.mo : refMonth;
+    if (h.mo < baseMonth - 6) return baseYear + 1;
+    if (h.mo > baseMonth + 6) return baseYear - 1;
+    return baseYear;
+  };
+  const seenDate = new Set();
+  hits.sort((a, b) => a.at - b.at).forEach(h => {
+    const iso = `${yearFor(h)}-${String(h.mo).padStart(2,"0")}-${String(h.d).padStart(2,"0")}`;
+    if (seenDate.has(iso)) return;
+    seenDate.add(iso);
+    out.dates.push(iso);
+  });
   return out;
 }
 
@@ -5347,13 +5410,18 @@ function wireAutoTitle(container, sel){
     const applyResult = () => {
       const raw = resultEl.value.trim();
       if (!raw){ if (readoutEl) readoutEl.textContent = readoutEl.dataset.idle || ""; return; }
-      const r = parseFlightResultText(raw);
+      const r = parseFlightResultText(raw, dateEl ? dateEl.value : null);
       const got = [];
       const fill = (el, val, label) => {
         if (!el || val == null || val === "") return;
         el.value = val; got.push(label);
       };
       const pick = key => container.querySelector(sel[key] || "\0");
+      // A date stated by the result beats whatever is in the box. The box is
+      // prefilled with the trip's own travel window as a convenience for
+      // typing a flight in by hand, and leaving that in place quietly filed
+      // the flight on the wrong day.
+      fill(dateEl, r.dates[0], fmtShortDateDay(r.dates[0]));
       fill(timeEl, r.departTime, `out ${fmtTime(r.departTime)}`);
       // The arrival and the duration were already in what was pasted; they
       // just had nowhere to go until the flight rows learnt to show them.
@@ -5362,6 +5430,7 @@ function wireAutoTitle(container, sel){
       if (r.returnTime && legEl){
         legEl.value = "roundtrip";
         syncReturnVisibility();
+        fill(returnDateEl, r.dates[1], fmtShortDateDay(r.dates[1]));
         fill(returnTimeEl, r.returnTime, `back ${fmtTime(r.returnTime)}`);
         fill(pick("returnArrive"), r.returnArriveTime, `arrives ${fmtTime(r.returnArriveTime)}`);
         if (r.durations[1]) fill(pick("returnDuration"), r.durations[1], r.durations[1]);
