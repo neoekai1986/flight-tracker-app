@@ -440,8 +440,25 @@
       -webkit-line-clamp:3;-webkit-box-orient:vertical;overflow-wrap:break-word}
   .meta-line{font-size:12.5px;color:var(--muted);margin-bottom:8px;font-family:Inter,system-ui,sans-serif;line-height:1.6}
   .meta-line b{color:var(--ink);font-weight:600}
+  /* One row per leg, read left to right the way a search result is: when it
+     goes and lands, whether it stops, how long and where, and the flight
+     number last because you only want it once you've decided. Columns, not a
+     sentence — the point is to compare two legs at a glance. */
+  .legs{display:flex;flex-direction:column;gap:6px;margin-bottom:9px}
+  .leg{display:grid;grid-template-columns:minmax(132px,1.5fr) minmax(62px,.8fr) minmax(74px,1fr) auto;
+    gap:4px 12px;align-items:baseline;font-size:13px}
+  .leg-when b{font-size:14px;font-weight:600;color:var(--ink)}
+  .leg-when span,.leg-route span,.leg-no{display:block;font-size:11.5px;color:var(--muted)}
+  .leg-route b{font-weight:600;color:var(--ink)}
+  .leg-no{text-align:right;white-space:nowrap}
   /* Stops ride with their leg, dimmer than the time they qualify. */
-  .leg-stops{color:var(--muted);font-weight:400}
+  .leg-stops{color:var(--muted);font-weight:400;font-size:12.5px}
+  .card-airline{font-size:12.5px;color:var(--muted);font-weight:500}
+  /* Stacks below the width where four columns stop being readable. */
+  @media (max-width:560px){
+    .leg{grid-template-columns:1fr auto}
+    .leg-no{grid-column:2}
+  }
   /* Where the latest check sits against the best seen. Neutral for a single
      check — there's nothing to compare it with yet. */
   .price-standing{font-size:11px;border:1px solid var(--line);border-radius:20px;
@@ -1355,14 +1372,31 @@ function fmtTime(t){
 // the stops all sit on the meta line directly underneath, so putting them in
 // the title too made it three wrapped lines of things already written below it.
 // The arrow carries the one thing the meta line doesn't: round trip or one way.
+// The route, and nothing else. The price used to be part of the title and is
+// now a block of its own, so carrying it here said the same number twice —
+// and the airline reads better beside the title than inside it.
 function flightTitle(o){
-  const { origin, destination, paidCash, paidPoints, leg } = o || {};
+  const { origin, destination, leg } = o || {};
   if (!origin || !destination) return "";
   const arrow = leg === "roundtrip" ? "⇄" : "→";
-  const parts = [`${origin.toUpperCase()} ${arrow} ${destination.toUpperCase()}`];
-  if (paidPoints != null && paidPoints !== "" && !isNaN(paidPoints)) parts.push(fmtPoints(paidPoints));
-  else if (paidCash != null && paidCash !== "" && !isNaN(paidCash)) parts.push(fmtCash(paidCash));
-  return parts.join(", ");
+  return `${origin.toUpperCase()} ${arrow} ${destination.toUpperCase()}`;
+}
+
+// Titles written by the old version carry the price, which the card now
+// shows in its own block. Shortening one on the way to the screen keeps
+// those cards from saying the same number twice without rewriting anything:
+// only a label this app generated itself is touched, matched in full, so a
+// title someone typed is left exactly as they typed it.
+function flightCardTitle(f){
+  const route = flightTitle(f);
+  if (!route || !f.label) return f.label || "";
+  for (const priced of [
+    f.paid_points != null ? `${route}, ${fmtPoints(f.paid_points)}` : null,
+    f.paid_cash != null ? `${route}, ${fmtCash(f.paid_cash)}` : null,
+  ]){
+    if (priced && f.label === priced) return route;
+  }
+  return f.label;
 }
 
 // Pull everything a flight-search URL will give up. Southwest puts it in the
@@ -1619,7 +1653,9 @@ const MONTHS = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov
 // arrival pair in the text and takes the first as the outbound and the second
 // as the return, which is the one thing that holds across all of them.
 function parseFlightResultText(text){
-  const out = { departTime: null, returnTime: null, airline: null, price: null, stops: [], ranges: 0 };
+  const out = { departTime: null, returnTime: null, arriveTime: null,
+                returnArriveTime: null, durations: [],
+                airline: null, price: null, stops: [], ranges: 0 };
   if (!text) return out;
   // Normalise the dash variants and the no-break spaces OCR likes to emit.
   const t = String(text).replace(/[\u2010-\u2015\u2212]/g, "-").replace(/\u00a0/g, " ");
@@ -1639,17 +1675,35 @@ function parseFlightResultText(text){
   const TIME = String.raw`(\d{1,2}):(\d{2})\s*([ap]\.?m\.?)?`;
   const rangeRe = new RegExp(TIME + String.raw`\s*-\s*` + TIME + String.raw`(?:\s*\+\d)?`, "gi");
   const departures = [];
+  const arrivals = [];
   let m;
   while ((m = rangeRe.exec(t)) !== null){
     const ap1 = m[3] ? m[3].replace(/\./g, "") : null;
     const ap2 = m[6] ? m[6].replace(/\./g, "") : null;
     // "7:35 - 10:05 pm" leaves the first half unmarked; borrow the second's.
     const dep = to24(m[1], m[2], ap1 || ap2);
-    if (dep) departures.push(dep);
+    // And the other half, which was being matched and dropped. An arrival is
+    // half of what a search result tells you about a leg.
+    const arr = to24(m[4], m[5], ap2 || ap1);
+    if (dep){ departures.push(dep); arrivals.push(arr || null); }
   }
   out.ranges = departures.length;
   out.departTime = departures[0] || null;
   out.returnTime = departures[1] || null;
+  out.arriveTime = arrivals[0] || null;
+  out.returnArriveTime = arrivals[1] || null;
+
+  // "4h 54m", "3h", "55m" — stated by the result, in the order the legs
+  // appear. Not derived from the times above: those are local, so a flight
+  // that crosses a time zone would come out wrong by the offset.
+  out.durations = [];
+  const durRe = /\b(\d{1,2})\s*h(?:\s*(\d{1,2})\s*m)?\b|\b(\d{1,3})\s*m\b/gi;
+  let dm;
+  while ((dm = durRe.exec(t)) !== null){
+    out.durations.push(dm[1] != null
+      ? `${dm[1]}h${dm[2] != null ? ` ${dm[2]}m` : ""}`
+      : `${dm[3]}m`);
+  }
 
   // Airline: prefer a name we already know, so "Alaska" isn't mistaken for a
   // city and a two-word carrier isn't cut in half.
@@ -1935,6 +1989,7 @@ async function loadTrips(){
   if (sample){
     flightAirlineAvailable = "airline" in sample;
     flightStopsAvailable = "stops_out" in sample;
+    flightLegsAvailable = "arrive_time" in sample;
   }
   const bpSample = data.flatMap(t => t.booking_people || [])[0];
   if (bpSample){
@@ -2063,6 +2118,8 @@ let tripAlternativeAvailable = true;
 
 // ...and for the per-leg stops columns.
 let flightStopsAvailable = true;
+// flights.arrive_time / return_arrive_time / duration_out / duration_back.
+let flightLegsAvailable = true;
 // booking_people.is_companion — see the note by flightAirlineAvailable.
 let companionPassAvailable = true;
 // booking_people.room / is_couch — likewise.
@@ -2625,6 +2682,12 @@ async function createFlight(tripId, fields){
     row.stops_out = fields.stopsOut || null;
     row.stops_back = fields.stopsBack || null;
   }
+  if (flightLegsAvailable){
+    row.arrive_time = fields.arriveTime || null;
+    row.return_arrive_time = fields.returnArriveTime || null;
+    row.duration_out = fields.durationOut || null;
+    row.duration_back = fields.durationBack || null;
+  }
   let { data, error } = await supabase.from("flights").insert(row).select().single();
   // PGRST204 is "no such column" — the migration hasn't run. PostgREST rejects
   // the whole write for one unknown field, so without this, adding any flight
@@ -2634,7 +2697,10 @@ async function createFlight(tripId, fields){
   if (error && error.code === "PGRST204"){
     flightAirlineAvailable = false;
     flightStopsAvailable = false;
+    flightLegsAvailable = false;
     delete row.airline; delete row.stops_out; delete row.stops_back;
+    delete row.arrive_time; delete row.return_arrive_time;
+    delete row.duration_out; delete row.duration_back;
     ({ data, error } = await supabase.from("flights").insert(row).select().single());
   }
   if (error) { alert(error.message); return null; }
@@ -3127,23 +3193,37 @@ function renderCard(trip, f){
   const moveOptions = trips.filter(t => t.id !== trip.id)
     .map(t => `<option value="${t.id}">${esc(t.title)}</option>`).join("");
   const passengers = f.passengers || 1;
-  // What used to lead the meta line now has its own right-aligned block, so
-  // the line is free for the details you scan past the price.
+  // Each leg reads like the search result it came from: when it goes, when it
+  // lands, whether it stops, and the route — in that order, because that is
+  // the order you decide in. Anything missing collapses rather than leaving a
+  // gap, so a flight with only a departure date still lines up.
+  const legRow = (when, time, arrive, duration, stops, from, to, number) => {
+    const times = [fmtTime(time), fmtTime(arrive)].filter(Boolean).join(" – ");
+    const route = from && to ? `${esc(from.toUpperCase())}–${esc(to.toUpperCase())}` : "";
+    if (!times && !when && !route) return "";
+    return `<div class="leg">
+      <div class="leg-when">
+        <b>${esc(times) || "—"}</b>
+        ${when ? `<span>${esc(fmtShortDate(when))}</span>` : ""}
+      </div>
+      <div class="leg-stops">${stops ? esc(stops) : ""}</div>
+      <div class="leg-route">
+        ${duration ? `<b>${esc(duration)}</b>` : ""}
+        ${route ? `<span>${route}</span>` : ""}
+      </div>
+      <div class="leg-no">${number ? esc(number) : ""}</div>
+    </div>`;
+  };
+  const roundtrip = f.leg === "roundtrip" && f.return_date;
+  const legsHTML = [
+    legRow(f.depart_date, f.depart_time, f.arrive_time, f.duration_out,
+           f.stops_out, f.origin, f.destination, f.flight_number),
+    roundtrip ? legRow(f.return_date, f.return_time, f.return_arrive_time, f.duration_back,
+                       f.stops_back, f.destination, f.origin, null) : "",
+  ].join("");
+
+  // What's left over: things you look up rather than scan.
   const metaBits = [];
-  // Both legs, not just the return — the outbound was only ever in the title,
-  // which clamps to a couple of lines and was cutting it off on a narrow card.
-  const outbound = [fmtShortDate(f.depart_date), fmtTime(f.depart_time)].filter(Boolean).join(" ");
-  const withStops = (when, stops) =>
-    `<b>${esc(when)}</b>${stops ? ` <span class="leg-stops">${esc(stops)}</span>` : ""}`;
-  if (f.leg === "roundtrip" && f.return_date){
-    const ret = [fmtShortDate(f.return_date), fmtTime(f.return_time)].filter(Boolean).join(" ");
-    if (outbound) metaBits.push(`Out ${withStops(outbound, f.stops_out)}`);
-    metaBits.push(`Back ${withStops(ret, f.stops_back)}`);
-  } else if (outbound){
-    metaBits.push(`Out ${withStops(outbound, f.stops_out)}`);
-  }
-  if (f.airline) metaBits.push(`<b>${esc(f.airline)}</b>`);
-  if (f.flight_number) metaBits.push(`Flight <b>${esc(f.flight_number)}</b>`);
   if (f.confirmation_code) metaBits.push(`Conf. <b>${esc(f.confirmation_code)}</b>`);
   if (f.alert_below != null) metaBits.push(`Alert below <b>${fmtCash(f.alert_below, cur)}</b>`);
 
@@ -3198,10 +3278,12 @@ function renderCard(trip, f){
       <div class="res-main">
         <div class="card-title-row">
           <span class="drag-handle" draggable="true" data-drag-handle="${f.id}" title="Drag to reorder">⠿</span>
-          <h3>${esc(f.label)}</h3>
+          <h3>${esc(flightCardTitle(f))}</h3>
+          ${f.airline ? `<span class="card-airline">${esc(f.airline)}</span>` : ""}
           ${f.status === "watching" ? `<span class="watch-badge">👁 Watching</span>` : ""}
           ${priceStandingBadge(f)}
         </div>
+        ${legsHTML ? `<div class="legs">${legsHTML}</div>` : ""}
         ${metaBits.length ? `<p class="meta-line">${metaBits.join(" &middot; ")}</p>` : ""}
         ${f.notes ? `<p class="notes">${esc(f.notes)}</p>` : ""}
       </div>
@@ -3292,6 +3374,13 @@ function renderEditForm(f, trip){
     <label class="field field-narrow">Depart time <span class="field-opt">— optional</span>
       <input type="time" data-f-time>
     </label>
+    ${!flightLegsAvailable ? "" : `
+    <label class="field field-narrow">Arrive time <span class="field-opt">— optional</span>
+      <input type="time" data-f-arrive>
+    </label>
+    <label class="field field-narrow">Duration <span class="field-opt">— e.g. 4h 54m</span>
+      <input type="text" data-f-duration placeholder="4h 54m">
+    </label>`}
     <div class="span2" data-f-return-wrap style="display:none">
       <div class="edit-subgrid">
         <label class="field field-narrow">Return date
@@ -3300,6 +3389,13 @@ function renderEditForm(f, trip){
         <label class="field field-narrow">Return time <span class="field-opt">— optional</span>
           <input type="time" data-f-return-time>
         </label>
+        ${!flightLegsAvailable ? "" : `
+        <label class="field field-narrow">Return arrives <span class="field-opt">— optional</span>
+          <input type="time" data-f-return-arrive>
+        </label>
+        <label class="field field-narrow">Return duration <span class="field-opt">— e.g. 3h 56m</span>
+          <input type="text" data-f-return-duration placeholder="3h 56m">
+        </label>`}
       </div>
       <button type="button" class="btn-link daterange-btn" data-dr-btn
         data-dr-start="[data-f-date]" data-dr-end="[data-f-return-date]">📅 pick depart/return on one calendar</button>
@@ -3394,6 +3490,13 @@ function addFlightFormHTML(tripId, trip){
     <label class="field field-narrow">Depart time <span class="field-opt">— optional</span>
       <input type="time" data-nf-time>
     </label>
+    ${!flightLegsAvailable ? "" : `
+    <label class="field field-narrow">Arrive time <span class="field-opt">— optional</span>
+      <input type="time" data-nf-arrive>
+    </label>
+    <label class="field field-narrow">Duration <span class="field-opt">— e.g. 4h 54m</span>
+      <input type="text" data-nf-duration placeholder="4h 54m">
+    </label>`}
     <div class="span2" data-nf-return-wrap style="display:none">
       <div class="edit-subgrid">
         <label class="field field-narrow">Return date
@@ -3402,6 +3505,13 @@ function addFlightFormHTML(tripId, trip){
         <label class="field field-narrow">Return time <span class="field-opt">— optional</span>
           <input type="time" data-nf-return-time>
         </label>
+        ${!flightLegsAvailable ? "" : `
+        <label class="field field-narrow">Return arrives <span class="field-opt">— optional</span>
+          <input type="time" data-nf-return-arrive>
+        </label>
+        <label class="field field-narrow">Return duration <span class="field-opt">— e.g. 3h 56m</span>
+          <input type="text" data-nf-return-duration placeholder="3h 56m">
+        </label>`}
       </div>
       <button type="button" class="btn-link daterange-btn" data-dr-btn
         data-dr-start="[data-nf-date]" data-dr-end="[data-nf-return-date]">📅 pick depart/return on one calendar</button>
@@ -4780,14 +4890,21 @@ function wireAutoTitle(container, sel){
         if (!el || val == null || val === "") return;
         el.value = val; got.push(label);
       };
+      const pick = key => container.querySelector(sel[key] || "\0");
       fill(timeEl, r.departTime, `out ${fmtTime(r.departTime)}`);
+      // The arrival and the duration were already in what was pasted; they
+      // just had nowhere to go until the flight rows learnt to show them.
+      fill(pick("arrive"), r.arriveTime, `arrives ${fmtTime(r.arriveTime)}`);
+      if (r.durations[0]) fill(pick("duration"), r.durations[0], r.durations[0]);
       if (r.returnTime && legEl){
         legEl.value = "roundtrip";
         syncReturnVisibility();
         fill(returnTimeEl, r.returnTime, `back ${fmtTime(r.returnTime)}`);
+        fill(pick("returnArrive"), r.returnArriveTime, `arrives ${fmtTime(r.returnArriveTime)}`);
+        if (r.durations[1]) fill(pick("returnDuration"), r.durations[1], r.durations[1]);
       }
-      const stopsOutEl = container.querySelector(sel.stopsOut || "\0");
-      const stopsBackEl = container.querySelector(sel.stopsBack || "\0");
+      const stopsOutEl = pick("stopsOut");
+      const stopsBackEl = pick("stopsBack");
       if (stopsOutEl && r.stops[0]) fill(stopsOutEl, r.stops[0], r.stops[0]);
       if (stopsBackEl && r.stops[1]) fill(stopsBackEl, r.stops[1], r.stops[1]);
       if (airlineEl && r.airline && !airlineEl.value.trim()) fill(airlineEl, r.airline, r.airline);
@@ -7014,6 +7131,12 @@ function wireEvents(activeTrip){
         form.querySelector("[data-f-stops-out]").value = flight.stops_out || "";
         form.querySelector("[data-f-stops-back]").value = flight.stops_back || "";
       }
+      if (flightLegsAvailable){
+        form.querySelector("[data-f-arrive]").value = (flight.arrive_time || "").slice(0,5);
+        form.querySelector("[data-f-return-arrive]").value = (flight.return_arrive_time || "").slice(0,5);
+        form.querySelector("[data-f-duration]").value = flight.duration_out || "";
+        form.querySelector("[data-f-return-duration]").value = flight.duration_back || "";
+      }
       form.querySelector("[data-f-flightnumber]").value = flight.flight_number || "";
       form.querySelector("[data-f-confirmation]").value = flight.confirmation_code || "";
       form.querySelector("[data-f-paidcash]").value = flight.paid_cash ?? "";
@@ -7042,6 +7165,8 @@ function wireEvents(activeTrip){
         airline: "[data-f-airline]",
         result: "[data-f-result]", resultRead: "[data-f-result-read]",
         stopsOut: "[data-f-stops-out]", stopsBack: "[data-f-stops-back]",
+        arrive: "[data-f-arrive]", returnArrive: "[data-f-return-arrive]",
+        duration: "[data-f-duration]", returnDuration: "[data-f-return-duration]",
         pointsCents: "[data-f-pointscents]", bpPrefix: "f" });
 
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
@@ -7082,6 +7207,14 @@ function wireEvents(activeTrip){
           ...(flightStopsAvailable ? {
             stops_out: form.querySelector("[data-f-stops-out]")?.value || null,
             stops_back: form.querySelector("[data-f-stops-back]")?.value || null,
+          } : {}),
+          ...(flightLegsAvailable ? {
+            arrive_time: form.querySelector("[data-f-arrive]")?.value || null,
+            return_arrive_time: leg === "roundtrip"
+              ? (form.querySelector("[data-f-return-arrive]")?.value || null) : null,
+            duration_out: form.querySelector("[data-f-duration]")?.value.trim() || null,
+            duration_back: leg === "roundtrip"
+              ? (form.querySelector("[data-f-return-duration]")?.value.trim() || null) : null,
           } : {}),
           flight_number: form.querySelector("[data-f-flightnumber]").value.trim() || null,
           confirmation_code: form.querySelector("[data-f-confirmation]").value.trim() || null,
@@ -7206,6 +7339,8 @@ function wireAddFlightForm(tripId){
     airline: "[data-nf-airline]",
     result: "[data-nf-result]", resultRead: "[data-nf-result-read]",
     stopsOut: "[data-nf-stops-out]", stopsBack: "[data-nf-stops-back]",
+    arrive: "[data-nf-arrive]", returnArrive: "[data-nf-return-arrive]",
+    duration: "[data-nf-duration]", returnDuration: "[data-nf-return-duration]",
     pointsCents: "[data-nf-pointscents]", bpPrefix: "nf" });
   saveBtn.addEventListener("click", async () => {
     const url = holder.querySelector("[data-nf-url]").value.trim();
@@ -7242,6 +7377,12 @@ function wireAddFlightForm(tripId){
         holder.querySelector("[data-nf-pointscents]")?.value),
       stopsOut: holder.querySelector("[data-nf-stops-out]")?.value || null,
       stopsBack: holder.querySelector("[data-nf-stops-back]")?.value || null,
+      arriveTime: holder.querySelector("[data-nf-arrive]")?.value || null,
+      returnArriveTime: leg === "roundtrip"
+        ? (holder.querySelector("[data-nf-return-arrive]")?.value || null) : null,
+      durationOut: holder.querySelector("[data-nf-duration]")?.value.trim() || null,
+      durationBack: leg === "roundtrip"
+        ? (holder.querySelector("[data-nf-return-duration]")?.value.trim() || null) : null,
       flightNumber: holder.querySelector("[data-nf-flightnumber]").value.trim() || null,
       confirmationCode: holder.querySelector("[data-nf-confirmation]").value.trim() || null,
       alertBelow: ab === "" ? null : parseFloat(ab),
