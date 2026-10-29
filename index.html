@@ -479,6 +479,7 @@
     font:inherit;font-size:11.5px;line-height:1.5;cursor:pointer;text-align:left;
     background:var(--good);color:var(--btn-ink)}
   /* Booked and watching keep the colours they wear on their cards. */
+  .tcal-bar-day{gap:3px;margin:0 1px;padding:2px 3px}
   .tcal-bar-watching{background:var(--amber)}
   /* Square off the end that runs on, so a bar continuing into the next week
      reads as one trip rather than two. */
@@ -487,9 +488,9 @@
   /* The route and the price hold their size; the times give way first, so a
      bar that runs out of room loses a departure time rather than its name
      or what it cost. */
-  .tcal-route{font-weight:700;flex:0 2 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .tcal-route{font-weight:700;flex:0 1000 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
   .tcal-time{opacity:.85;flex:1 999 0;min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .tcal-cost{font-weight:700;flex:0 0 auto;min-width:0;padding-left:4px;
+  .tcal-cost{font-weight:700;flex:0 1 auto;min-width:0;padding-left:1px;
     overflow:hidden;text-overflow:ellipsis}
   .tcal-bar .brand-mark{width:15px;height:15px;border-radius:3px}
   .tcal-bar .brand-mark i{font-size:7px}
@@ -1178,6 +1179,13 @@ let authError = "", authMsg = "";
 
 const fmtCash = (n, cur="USD") =>
   new Intl.NumberFormat("en-US",{style:"currency",currency:cur}).format(n);
+// The same figure without the cents, for the calendar. A bar is a day wide at
+// its narrowest and ".00" is three characters of it, which is the difference
+// between reading the price and reading "$1,1...". The card and the tooltip
+// keep the exact number.
+const fmtCashShort = (n, cur="USD") =>
+  new Intl.NumberFormat("en-US",{style:"currency",currency:cur,
+    minimumFractionDigits:0,maximumFractionDigits:0}).format(n);
 const fmtPoints = n => `${Number(n).toLocaleString()} pts`;
 const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -5023,36 +5031,34 @@ function calendarBarHTML(bar){
   // pushes the route off the end, and the airline's own logo is already
   // sitting at the front of it. The tooltip keeps the full figure.
   const seats = f.passengers || 1;
-  const price = f.paid_cash != null ? fmtCash(f.paid_cash * seats, f.currency)
+  const price = f.paid_cash != null ? fmtCashShort(f.paid_cash * seats, f.currency)
     : f.paid_points != null ? fmtPoints(f.paid_points * seats) : "";
   // How many days this piece of the bar covers. A one-day bar is a column
   // wide and fits a route and nothing else, so what goes on it is decided
   // here rather than by a screen-width rule that can't see how long the
   // trip is. Whatever doesn't fit is in the tooltip.
   const days = bar.to - bar.from + 1;
-  // The last day or two of a trip that ran over a Saturday sits alone on the
-  // next row, with the route already read on the row above. Those cells give
-  // the route up rather than ellipsing both halves of "IAD - RNO $412" down
-  // to nothing: the price is why you came back for a second look.
-  const tail = !bar.opens && days <= 2 && !!price;
   const bits = [];
-  // The route first, because it's what names the flight. A single day is one
-  // column wide and the logo would cost it half the room.
+  // The route first, because it's what names the flight, then the price
+  // beside it. The price sits on the day the flight leaves rather than the
+  // day it comes back: that's the end of the bar you look at, it's the piece
+  // that's always on the grid, and a trip running over a Saturday puts its
+  // return on the row below where the price went unseen. No width test on
+  // it either — it is the thing the calendar is read for, so the times give
+  // way first and the route after that.
   if (bar.opens && days >= 2) bits.push(brandMark(f.airline, f.url, ["air"]));
-  if (!tail) bits.push(`<span class="tcal-route">${esc(route)}</span>`);
+  bits.push(`<span class="tcal-route">${esc(route)}</span>`);
+  if (bar.opens && price) bits.push(`<span class="tcal-cost">${esc(price)}</span>`);
   if (bar.opens && outTimes && days >= 3) bits.push(`<span class="tcal-time">${esc(outTimes)}</span>`);
   if (bar.closes && roundtrip && backTimes && days >= 5){
     bits.push(`<span class="tcal-time">${esc(backTimes)}</span>`);
   }
-  // No width test on the price. One was there, and a trip ending on a Sunday
-  // — the end of the week, so a one-column bar of its own — failed it and
-  // showed no price anywhere on the calendar.
-  if (bar.closes && price) bits.push(`<span class="tcal-cost">${esc(price)}</span>`);
   const tip = [route, outTimes && `out ${outTimes}`, roundtrip && backTimes && `back ${backTimes}`,
                cost !== "—" && cost.replace(/<[^>]*>/g, ""),
                f.status === "watching" && "watching"]
     .filter(Boolean).join(" · ");
-  return `<button type="button" class="tcal-bar${f.status === "watching" ? " tcal-bar-watching" : ""}${
+  return `<button type="button" class="tcal-bar${days === 1 ? " tcal-bar-day" : ""}${
+    f.status === "watching" ? " tcal-bar-watching" : ""}${
     bar.opens ? " tcal-bar-opens" : ""}${bar.closes ? " tcal-bar-closes" : ""}"
     data-tcal-flight="${f.id}" title="${esc(tip)}"
     style="grid-column:${bar.from + 1}/${bar.to + 2};grid-row:${bar.lane + 2}">${bits.join("")}</button>`;

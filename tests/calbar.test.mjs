@@ -31,7 +31,8 @@ function extractConst(name){
 }
 
 const calendarBarHTML = new Function(
-  extractConst("esc") + extractConst("fmtCash") + extractConst("fmtPoints")
+  extractConst("esc") + extractConst("fmtCash") + extractConst("fmtCashShort")
+  + extractConst("fmtPoints")
   + extractConst("pointsText") + extractConst("BRANDS") + extractConst("brandInitials")
   + extract("fmtTime") + extract("flightTitle") + extract("flightCardTitle")
   + extract("flightTotalText") + extract("safeExternalUrl") + extract("brandHost")
@@ -62,20 +63,20 @@ const united = {
 const text = html => html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
 const bar = (f, over) => calendarBarHTML({ f, lane: 0, ...over });
 
-// The long first row: route, the day's times, no price yet.
+// The row the trip starts on carries everything: the airline, the route, the
+// price beside it, and the day's times.
 {
   const html = bar(united, { from: 1, to: 6, opens: true, closes: false });
-  is("week one text", text(html), "UA IAD ⇄ RNO 8:35 AM – 1:21 PM");
-  is("week one has no cost", /tcal-cost/.test(html), false);
+  is("week one text", text(html), "UA IAD ⇄ RNO $412 8:35 AM – 1:21 PM");
+  is("week one has the cost", /tcal-cost/.test(html), true);
 }
 
-// The one cell on the row below: the price, which is what that row is for.
+// The price sits on the day it leaves, not the day it comes back: the second
+// row of a trip that ran over a Saturday is a continuation, not a new fare.
 {
   const html = bar(united, { from: 0, to: 0, opens: false, closes: true });
-  is("week two text", text(html), "$412.00");
-  is("week two has the cost", /tcal-cost/.test(html), true);
-  // The route is on the row above; repeating it here would leave no room.
-  is("week two drops the route", /tcal-route/.test(html), false);
+  is("week two text", text(html), "IAD ⇄ RNO");
+  is("week two doesn't repeat the cost", /tcal-cost/.test(html), false);
 }
 
 // The same trip when it happens to fit inside one week: everything on it.
@@ -90,8 +91,18 @@ const bar = (f, over) => calendarBarHTML({ f, lane: 0, ...over });
   const oneway = { ...united, leg: "oneway", return_date: null, return_time: null,
                    return_arrive_time: null };
   const html = bar(oneway, { from: 3, to: 3, opens: true, closes: true });
-  is("one day text", text(html), "IAD → RNO $412.00");
+  is("one day text", text(html), "IAD → RNO $412");
   is("one day drops the times", /tcal-time/.test(html), false);
+  is("one day is a tighter box", /tcal-bar-day/.test(html), true);
+}
+
+// The cents are dropped on a bar — three characters of a column, and the
+// exact figure is on the card and in the tooltip.
+{
+  const odd = { ...united, paid_cash: 1183.47 };
+  const html = bar(odd, { from: 1, to: 6, opens: true, closes: true });
+  is("no cents on the bar", /\$1,183\b(?!\.)/.test(text(html)), true);
+  is("cents in the tooltip", /\$1,183\.47/.test(html), true);
 }
 
 // Points instead of cash, multiplied out by the seats, with the program name
@@ -99,17 +110,18 @@ const bar = (f, over) => calendarBarHTML({ f, lane: 0, ...over });
 {
   const award = { ...united, paid_cash: null, paid_points: 22000,
                   points_program: "Southwest Rapid Rewards", passengers: 2 };
-  const html = bar(award, { from: 0, to: 0, opens: false, closes: true });
-  is("points cost", text(html), "44,000 pts");
+  const html = bar(award, { from: 1, to: 6, opens: true, closes: true });
+  is("points cost", /44,000 pts/.test(text(html)), true);
   is("program in the tooltip", /Southwest Rapid Rewards/.test(html), true);
 }
 
-// A flight with no price to show keeps its route rather than drawing an
+// A flight with no price to show still names itself rather than drawing an
 // empty bar.
 {
   const free = { ...united, paid_cash: null, paid_points: null };
-  const html = bar(free, { from: 0, to: 0, opens: false, closes: true });
-  is("no price keeps the route", text(html), "IAD ⇄ RNO");
+  const html = bar(free, { from: 1, to: 6, opens: true, closes: true });
+  is("no price keeps the route", /IAD ⇄ RNO/.test(text(html)), true);
+  is("and shows no cost", /tcal-cost/.test(html), false);
 }
 
 // Watching stays visibly different from booked, and the tooltip says so.
