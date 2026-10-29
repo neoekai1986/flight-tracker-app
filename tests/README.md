@@ -34,6 +34,9 @@ of those functions the test will say so rather than silently passing.
   prefilled with the trip's travel window, so a result whose date never got
   out of the parser filed the flight on the trip's start date instead of its
   own.
+- **calbar.test.mjs** — one bar on the calendar, and the C key that opens
+  the view. A trip ending on a Sunday ends its last day alone on the row
+  below, and that one-column bar is where the price lives.
 - **settlement.test.mjs** — the arithmetic. `settleTrip()` takes plain data
   and returns plain data, so it can be exercised directly. Every case asserts
   that the shares add up to exactly what the trip cost.
