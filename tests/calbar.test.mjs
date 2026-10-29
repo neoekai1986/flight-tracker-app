@@ -34,7 +34,8 @@ const calendarBarHTML = new Function(
   extractConst("esc") + extractConst("fmtCash") + extractConst("fmtCashShort")
   + extractConst("fmtPoints")
   + extractConst("pointsText") + extractConst("BRANDS") + extractConst("brandInitials")
-  + extract("fmtTime") + extract("flightTitle") + extract("flightCardTitle")
+  + extract("fmtTime") + extract("fmtShortDate") + extract("flightTitle")
+  + extract("flightCardTitle") + extract("latestPriceLog")
   + extract("flightTotalText") + extract("safeExternalUrl") + extract("brandHost")
   + extract("brandInk") + extract("brandFor") + extract("brandMark")
   + extract("calendarBarHTML")
@@ -137,6 +138,87 @@ const bar = (f, over) => calendarBarHTML({ f, lane: 0, ...over });
   const html = bar(united, { from: 1, to: 6, opens: true, closes: true });
   is("carries the flight id", /data-tcal-flight="f1"/.test(html), true);
   is("spans its own columns", /grid-column:2\/8/.test(html), true);
+}
+
+// ---- The latest check ----
+//
+// A card holds two figures: what it was saved at, and the last price checked
+// against it. On a flight you're watching they're rarely the same, and the
+// calendar was showing only the first.
+
+const checked = (logs) => ({ ...united, price_logs: logs });
+
+{
+  const html = bar(checked([
+    { date: "2026-01-02", price: 412, created_at: "2026-01-02T10:00:00Z" },
+    { date: "2026-02-14", price: 366, created_at: "2026-02-14T10:00:00Z" },
+  ]), { from: 1, to: 6, opens: true, closes: true });
+  is("both figures", text(html),
+     "UA IAD ⇄ RNO $412 ↓ $366 8:35 AM – 1:21 PM 1:42 PM – 1:17 AM");
+  is("the check is in the tooltip", /checked \$366 Feb 14/.test(html), true);
+}
+
+// Up as well as down, and the arrow is the only thing that says which.
+{
+  const html = bar(checked([{ date: "2026-02-14", price: 505 }]),
+                   { from: 1, to: 6, opens: true, closes: true });
+  is("a rise", /↑ \$505/.test(text(html)), true);
+}
+
+// The newest check is the one shown — by the date it's for, not by the order
+// the rows came back in.
+{
+  const html = bar(checked([
+    { date: "2026-02-14", price: 366, created_at: "2026-02-14T10:00:00Z" },
+    { date: "2026-03-01", price: 390, created_at: "2026-03-01T10:00:00Z" },
+    { date: "2026-01-02", price: 412, created_at: "2026-01-02T10:00:00Z" },
+  ]), { from: 1, to: 6, opens: true, closes: true });
+  is("newest by date", /↓ \$390/.test(text(html)), true);
+}
+
+// Two checks on one day: price_logs only records the date, so the one typed
+// in later wins.
+{
+  const html = bar(checked([
+    { date: "2026-03-01", price: 390, created_at: "2026-03-01T09:00:00Z" },
+    { date: "2026-03-01", price: 377, created_at: "2026-03-01T18:00:00Z" },
+  ]), { from: 1, to: 6, opens: true, closes: true });
+  is("same day, later entry", /↓ \$377/.test(text(html)), true);
+}
+
+// A check that came back at the price on the card says nothing: "$412 $412"
+// is two figures where there is only one.
+{
+  const html = bar(checked([{ date: "2026-02-14", price: 412 }]),
+                   { from: 1, to: 6, opens: true, closes: true });
+  is("unchanged shows once", text(html),
+     "UA IAD ⇄ RNO $412 8:35 AM – 1:21 PM 1:42 PM – 1:17 AM");
+  is("and no second figure", /tcal-now/.test(html), false);
+}
+
+// Points are checked in points, against the points the card holds, and both
+// are multiplied out by the seats.
+{
+  const award = { ...united, paid_cash: null, paid_points: 22000, passengers: 2,
+                  price_logs: [{ date: "2026-02-20", price: 26500, is_points: true }] };
+  const html = bar(award, { from: 1, to: 6, opens: true, closes: true });
+  is("points check", /44,000 pts ↑ 53,000 pts/.test(text(html)), true);
+}
+
+// A flight never priced, only watched, shows the check on its own.
+{
+  const watched = { ...united, paid_cash: null, paid_points: null, status: "watching",
+                    price_logs: [{ date: "2026-02-14", price: 366 }] };
+  const html = bar(watched, { from: 1, to: 6, opens: true, closes: true });
+  is("check with nothing to compare", text(html),
+     "UA IAD ⇄ RNO $366 8:35 AM – 1:21 PM 1:42 PM – 1:17 AM");
+}
+
+// The continuation row carries neither figure: one trip, one fare.
+{
+  const html = bar(checked([{ date: "2026-02-14", price: 366 }]),
+                   { from: 0, to: 0, opens: false, closes: true });
+  is("not repeated on the next row", /tcal-now|tcal-cost/.test(html), false);
 }
 
 // ---- The C key ----

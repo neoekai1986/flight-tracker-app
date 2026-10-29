@@ -492,6 +492,8 @@
   .tcal-time{opacity:.85;flex:1 999 0;min-width:0;overflow:hidden;text-overflow:ellipsis}
   .tcal-cost{font-weight:700;flex:0 1 auto;min-width:0;padding-left:1px;
     overflow:hidden;text-overflow:ellipsis}
+  .tcal-now{font-weight:700;flex:0 4 auto;min-width:0;opacity:.78;
+    overflow:hidden;text-overflow:ellipsis}
   .tcal-bar .brand-mark{width:15px;height:15px;border-radius:3px}
   .tcal-bar .brand-mark i{font-size:7px}
   .tcal-bar .brand-mark img{padding:1px}
@@ -5012,6 +5014,19 @@ function emailExpense(personId){
     + `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join("\n"))}`;
 }
 
+// The newest check logged against a flight. By the date it's for, and by
+// when it was typed in where two share a date — price_logs is day-granular,
+// so several checks on one day tie and would otherwise come back in whatever
+// order the database happened to return them.
+function latestPriceLog(f){
+  return (f.price_logs || []).reduce((best, e) => {
+    if (!best) return e;
+    const d = (e.date || ""), bd = (best.date || "");
+    if (d !== bd) return d > bd ? e : best;
+    return (e.created_at || "") > (best.created_at || "") ? e : best;
+  }, null);
+}
+
 // One bar on the calendar. The ends carry what you'd want from a glance at
 // a date: when it leaves on the day it leaves, when it lands back on the day
 // it lands, and what it cost. A bar that runs off the end of a week doesn't
@@ -5033,6 +5048,24 @@ function calendarBarHTML(bar){
   const seats = f.passengers || 1;
   const price = f.paid_cash != null ? fmtCashShort(f.paid_cash * seats, f.currency)
     : f.paid_points != null ? fmtPoints(f.paid_points * seats) : "";
+  // And what it costs now. A card holds two figures — the one it was saved
+  // with and the last price checked against it — and on a flight you're
+  // watching they're rarely the same. The calendar is where a trip is looked
+  // at as a whole, so it shows the move rather than making you open the card
+  // to find out there was one. Logs are per seat, like the price they're
+  // compared against, so both are multiplied out the same way.
+  const log = latestPriceLog(f);
+  const against = log ? (log.is_points ? f.paid_points : f.paid_cash) : null;
+  const moved = !!log && (against == null || Math.abs(log.price - against) > 0.005);
+  const now = moved
+    ? (log.is_points ? fmtPoints(log.price * seats)
+                     : fmtCashShort(log.price * seats, f.currency))
+    : "";
+  // Which way it went, where there's something to have moved from. An arrow
+  // rather than a colour: the bar is already coloured by whether the flight
+  // is booked or watched, and a second colour on top of that reads as a
+  // third state.
+  const nowArrow = moved && against != null ? (log.price < against ? "↓" : "↑") : "";
   // How many days this piece of the bar covers. A one-day bar is a column
   // wide and fits a route and nothing else, so what goes on it is decided
   // here rather than by a screen-width rule that can't see how long the
@@ -5049,12 +5082,16 @@ function calendarBarHTML(bar){
   if (bar.opens && days >= 2) bits.push(brandMark(f.airline, f.url, ["air"]));
   bits.push(`<span class="tcal-route">${esc(route)}</span>`);
   if (bar.opens && price) bits.push(`<span class="tcal-cost">${esc(price)}</span>`);
+  if (bar.opens && now){
+    bits.push(`<span class="tcal-now">${esc([nowArrow, now].filter(Boolean).join(" "))}</span>`);
+  }
   if (bar.opens && outTimes && days >= 3) bits.push(`<span class="tcal-time">${esc(outTimes)}</span>`);
   if (bar.closes && roundtrip && backTimes && days >= 5){
     bits.push(`<span class="tcal-time">${esc(backTimes)}</span>`);
   }
   const tip = [route, outTimes && `out ${outTimes}`, roundtrip && backTimes && `back ${backTimes}`,
                cost !== "—" && cost.replace(/<[^>]*>/g, ""),
+               now && `checked ${now} ${fmtShortDate(log.date)}`,
                f.status === "watching" && "watching"]
     .filter(Boolean).join(" · ");
   return `<button type="button" class="tcal-bar${days === 1 ? " tcal-bar-day" : ""}${
