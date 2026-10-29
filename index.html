@@ -5079,10 +5079,19 @@ function calendarBarHTML(bar){
   // return on the row below where the price went unseen. No width test on
   // it either — it is the thing the calendar is read for, so the times give
   // way first and the route after that.
+  // Every piece of a bar carries the price, including the day or two left
+  // over on the row below when a trip runs past a Saturday. Those cells were
+  // reading as a flight with no price rather than as the end of one that had
+  // it; a repeated figure is the lesser confusion. They give the route up for
+  // it, since the row above already named the flight.
+  const tail = !bar.opens && days <= 2;
   if (bar.opens && days >= 2) bits.push(brandMark(f.airline, f.url, ["air"]));
-  bits.push(`<span class="tcal-route">${esc(route)}</span>`);
-  if (bar.opens && price) bits.push(`<span class="tcal-cost">${esc(price)}</span>`);
-  if (bar.opens && now){
+  if (!tail) bits.push(`<span class="tcal-route">${esc(route)}</span>`);
+  // With nothing on the card the check stands in, being the only price the
+  // flight has; with neither, a dash, so a bar without a figure reads as
+  // nothing recorded rather than as something that failed to draw.
+  bits.push(`<span class="tcal-cost">${esc(price || now || "—")}</span>`);
+  if (price && now && (bar.opens || days >= 2)){
     bits.push(`<span class="tcal-now">${esc([nowArrow, now].filter(Boolean).join(" "))}</span>`);
   }
   if (bar.opens && outTimes && days >= 3) bits.push(`<span class="tcal-time">${esc(outTimes)}</span>`);

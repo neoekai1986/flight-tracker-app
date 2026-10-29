@@ -72,12 +72,20 @@ const bar = (f, over) => calendarBarHTML({ f, lane: 0, ...over });
   is("week one has the cost", /tcal-cost/.test(html), true);
 }
 
-// The price sits on the day it leaves, not the day it comes back: the second
-// row of a trip that ran over a Saturday is a continuation, not a new fare.
+// The row below carries the price too. It is the same fare, but a bar with
+// no figure on it reads as a flight nobody priced, and that was the whole
+// complaint. The route goes instead — the row above just said it.
 {
   const html = bar(united, { from: 0, to: 0, opens: false, closes: true });
-  is("week two text", text(html), "IAD ⇄ RNO");
-  is("week two doesn't repeat the cost", /tcal-cost/.test(html), false);
+  is("week two text", text(html), "$412");
+  is("week two keeps the cost", /tcal-cost/.test(html), true);
+  is("week two drops the route", /tcal-route/.test(html), false);
+}
+
+// A continuation wide enough for both keeps both.
+{
+  const html = bar(united, { from: 0, to: 3, opens: false, closes: true });
+  is("wide continuation", text(html), "IAD ⇄ RNO $412");
 }
 
 // The same trip when it happens to fit inside one week: everything on it.
@@ -116,13 +124,12 @@ const bar = (f, over) => calendarBarHTML({ f, lane: 0, ...over });
   is("program in the tooltip", /Southwest Rapid Rewards/.test(html), true);
 }
 
-// A flight with no price to show still names itself rather than drawing an
-// empty bar.
+// A flight with nothing recorded says so with a dash, rather than leaving a
+// gap that reads as a bar which failed to draw its price.
 {
   const free = { ...united, paid_cash: null, paid_points: null };
   const html = bar(free, { from: 1, to: 6, opens: true, closes: true });
-  is("no price keeps the route", /IAD ⇄ RNO/.test(text(html)), true);
-  is("and shows no cost", /tcal-cost/.test(html), false);
+  is("nothing recorded", text(html), "UA IAD ⇄ RNO — 8:35 AM – 1:21 PM 1:42 PM – 1:17 AM");
 }
 
 // Watching stays visibly different from booked, and the tooltip says so.
@@ -214,11 +221,13 @@ const checked = (logs) => ({ ...united, price_logs: logs });
      "UA IAD ⇄ RNO $366 8:35 AM – 1:21 PM 1:42 PM – 1:17 AM");
 }
 
-// The continuation row carries neither figure: one trip, one fare.
+// The one-column continuation has room for the price but not for both
+// figures; the one on the card is the one it keeps.
 {
   const html = bar(checked([{ date: "2026-02-14", price: 366 }]),
                    { from: 0, to: 0, opens: false, closes: true });
-  is("not repeated on the next row", /tcal-now|tcal-cost/.test(html), false);
+  is("continuation keeps the saved price", text(html), "$412");
+  is("and leaves the check to the wider row", /tcal-now/.test(html), false);
 }
 
 // ---- The C key ----
