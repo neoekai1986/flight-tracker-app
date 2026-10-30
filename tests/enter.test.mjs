@@ -91,5 +91,24 @@ is("composing", fire(el("INPUT", "text"), "Enter", { isComposing: true }),
 is("already saving", harness({ disabled: true })(el("INPUT", "text")),
    { saved: false, prevented: true });
 
+// ---- Every form that saves ----
+//
+// The behaviour above is tested on the function; this is about reach. Enter
+// started on the add-flight form only, and a form that quietly doesn't take
+// it is worse than one that never did — you type, press Enter, and watch
+// nothing happen. A source check rather than a behavioural one: these call
+// sites sit inside click handlers that can't be lifted out of the file.
+for (const [form, button] of [
+  ["add flight", 'wireEnterToSave(holder, saveBtn)'],
+  ["edit flight", 'wireEnterToSave(form, form.querySelector("[data-save-flight]"))'],
+  ["add rental", 'wireEnterToSave(holder, holder.querySelector("[data-nr-save]"))'],
+  ["edit rental", 'wireEnterToSave(form, form.querySelector("[data-er-save]"))'],
+]){
+  is(`${form} takes Enter`, src.includes(button), true);
+}
+// And each says so, rather than leaving it to be discovered.
+is("the hint appears on all four",
+   (src.match(/or press Enter/g) || []).length, 3);  // the two rental forms share markup
+
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

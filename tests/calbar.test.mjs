@@ -30,17 +30,18 @@ function extractConst(name){
   return src.slice(start, src.indexOf(close, start) + close.length) + "\n";
 }
 
-const calendarBarHTML = new Function(
+const calbar = new Function(
   extractConst("esc") + extractConst("fmtCash") + extractConst("fmtCashShort")
   + extractConst("fmtPoints")
   + extractConst("pointsText") + extractConst("BRANDS") + extractConst("brandInitials")
   + extract("fmtTime") + extract("fmtShortDate") + extract("flightTitle")
-  + extract("flightCardTitle") + extract("latestPriceLog")
+  + extract("flightCardTitle") + extract("latestPriceLog") + extract("calendarPrice")
   + extract("flightTotalText") + extract("safeExternalUrl") + extract("brandHost")
   + extract("brandInk") + extract("brandFor") + extract("brandMark")
-  + extract("calendarBarHTML")
-  + "return calendarBarHTML;"
+  + extract("calendarBarHTML") + extract("calendarStayBarHTML")
+  + "return { calendarBarHTML, calendarStayBarHTML };"
 )();
+const { calendarBarHTML, calendarStayBarHTML } = calbar;
 
 let passed = 0, failed = 0;
 function is(what, got, want){
@@ -228,6 +229,53 @@ const checked = (logs) => ({ ...united, price_logs: logs });
                    { from: 0, to: 0, opens: false, closes: true });
   is("continuation keeps the saved price", text(html), "$412");
   is("and leaves the check to the wider row", /tcal-now/.test(html), false);
+}
+
+// ---- Stays and cars ----
+//
+// The same grid carries them, because a trip is a flight and several nights
+// and the point of a calendar is seeing where one sits against the other.
+// Less to say than a flight: no times, no route, so the name and the price.
+const stay = (over, item = {}) => calendarStayBarHTML({
+  r: { id: "r1", kind: "housing", label: "Airbnb — Incline Village",
+       url: "https://www.airbnb.com/rooms/1", paid_cash: 1180, currency: "USD",
+       status: "booked", ...item },
+  lane: 0, ...over,
+});
+
+{
+  const html = stay({ from: 1, to: 6, opens: true, closes: true });
+  is("a stay says what and how much", text(html), "A Airbnb — Incline Village $1,180");
+  is("drawn apart from the flights", /tcal-bar-stay/.test(html), true);
+  is("and goes back to its own card", /data-tcal-stay="r1"/.test(html), true);
+}
+
+// The brand is looked up in its own kind: a car company and a hotel chain
+// can share a name, and Budget is not an airline.
+{
+  const car = stay({ from: 1, to: 4, opens: true, closes: true },
+                   { kind: "car", label: "Budget — RNO airport",
+                     url: "https://www.budget.com/x", paid_cash: 214 });
+  is("a car", text(car), "B Budget — RNO airport $214");
+}
+
+// Nothing recorded reads as nothing recorded here too.
+{
+  const html = stay({ from: 1, to: 6, opens: true, closes: true },
+                    { paid_cash: null, label: "Hyatt Place Orlando", url: null });
+  is("a stay with no price", text(html), "H Hyatt Place Orlando —");
+}
+
+// Watching is watching, whatever it's a booking for.
+{
+  const html = stay({ from: 1, to: 6, opens: true, closes: true }, { status: "watching" });
+  is("watching stay", /tcal-bar-watching/.test(html), true);
+}
+
+// And the row below behaves the way a flight's does: the price, no name.
+{
+  const html = stay({ from: 0, to: 0, opens: false, closes: true });
+  is("stay continuation", text(html), "$1,180");
 }
 
 // ---- The C key ----

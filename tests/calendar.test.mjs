@@ -23,9 +23,10 @@ function extract(name){
 
 const C = new Function(
   extract("fmtISO") + extract("parseISODate") + extract("flightSpan") +
+  extract("rentalSpan") +
   extract("calendarWeeks") + extract("calendarSegments") + extract("packLanes") +
   extract("calendarTitle") +
-  "return { flightSpan, calendarWeeks, calendarSegments, packLanes, calendarTitle };"
+  "return { flightSpan, rentalSpan, calendarWeeks, calendarSegments, packLanes, calendarTitle };"
 )();
 
 let passed = 0, failed = 0;
@@ -107,6 +108,25 @@ is("back into the gap",
    lanes([{ id:"a", from:0, to:1 }, { id:"b", from:0, to:4 }, { id:"c", from:3, to:6 }]),
    [["b"],["a","c"]]);
 is("nothing to stack", C.packLanes([]), []);
+
+// --- what a stay covers ---------------------------------------------------
+//
+// More forgiving than a flight about which end it is given: a car dropped off
+// one way often carries only the day it goes back, and a bar on that day
+// beats no bar at all.
+is("a stay holds its nights",
+   C.rentalSpan({ rental_start: "2026-03-23", rental_end: "2026-03-29" }),
+   { start: "2026-03-23", end: "2026-03-29" });
+is("pick-up only is a day",
+   C.rentalSpan({ rental_start: "2026-03-23" }),
+   { start: "2026-03-23", end: "2026-03-23" });
+is("drop-off only is that day",
+   C.rentalSpan({ rental_end: "2026-03-29" }),
+   { start: "2026-03-29", end: "2026-03-29" });
+is("back to front is still a stay",
+   C.rentalSpan({ rental_start: "2026-03-29", rental_end: "2026-03-23" }),
+   { start: "2026-03-23", end: "2026-03-29" });
+is("no dates, no bar", C.rentalSpan({ label: "Somewhere" }), null);
 
 // --- what the grid is a calendar of ---------------------------------------
 //

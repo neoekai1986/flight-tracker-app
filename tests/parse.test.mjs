@@ -103,6 +103,29 @@ $412
   is("no times", r.durations, ["4h 54m", "3h 56m"]);
 }
 
+// Every spelling a result uses for a duration. Google Flights writes it
+// long, Kayak short; the card shows one form either way.
+{
+  const long = `8:35 AM – 1:21 PM
+IAD – RNO
+1 stop ORD
+1 hr 3 min layover in ORD
+7 hr 46 min`;
+  is("hr/min", parse(long).durations, ["7h 46m"]);
+  is("hours/minutes", parse("8:35 AM – 1:21 PM  7 hours 46 minutes").durations, ["7h 46m"]);
+  is("hrs", parse("8:35 AM – 1:21 PM  3 hrs").durations, ["3h"]);
+  is("mins alone", parse("9:10 pm – 11:59 pm  55 mins").durations, ["55m"]);
+  is("minutes alone", parse("9:10 pm – 11:59 pm  55 minutes").durations, ["55m"]);
+  // And the short forms still read as they did.
+  is("short still works", parse("7:35 am – 10:05 am  5h 30m").durations, ["5h 30m"]);
+}
+
+// A word that merely starts with h or m is not a duration.
+{
+  is("not miles", parse("8:35 AM – 1:21 PM  5 miles from the airport").durations, [null]);
+  is("not months", parse("8:35 AM – 1:21 PM  book 3 months ahead").durations, [null]);
+}
+
 // ---- Dates ----
 //
 // The date was the one thing a pasted result never gave up, so the box kept

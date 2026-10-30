@@ -482,6 +482,8 @@
   /* Booked and watching keep the colours they wear on their cards. */
   .tcal-bar-day{gap:3px;margin:0 1px;padding:2px 3px}
   .tcal-bar-watching{background:var(--amber)}
+  .tcal-bar-stay{background:color-mix(in srgb, var(--good) 40%, var(--panel2));color:var(--ink)}
+  .tcal-bar-stay.tcal-bar-watching{background:color-mix(in srgb, var(--amber) 40%, var(--panel2))}
   /* Square off the end that runs on, so a bar continuing into the next week
      reads as one trip rather than two. */
   .tcal-bar:not(.tcal-bar-opens){border-top-left-radius:0;border-bottom-left-radius:0;margin-left:0}
@@ -1706,6 +1708,16 @@ function flightSpan(f){
   return back < start ? { start: back, end: start } : { start, end: back };
 }
 
+// The same for a stay or a car: pick-up to drop-off. More forgiving than a
+// flight about which end it's given, because a car booked one way carries
+// only the day it goes back often enough to be worth drawing anyway.
+function rentalSpan(r){
+  const start = r.rental_start || r.rental_end || null;
+  if (!start) return null;
+  const end = r.rental_end || start;
+  return end < start ? { start: end, end: start } : { start, end };
+}
+
 // Every week the grid has to show, Sunday first, as arrays of ISO days.
 //
 // A mistyped year — 2206 for 2026 — would otherwise ask for nine thousand
@@ -2011,7 +2023,10 @@ function parseFlightResultText(text, ref){
   // card for a flight across the country. Within the stretch of text that
   // belongs to one leg the journey is the longest of them, a layover being
   // part of it, so take the longest.
-  const durRe = /\b(\d{1,2})\s*h(?:\s*(\d{1,2})\s*m)?\b|\b(\d{1,3})\s*m\b/gi;
+  // Google Flights writes it long ("7 hr 46 min"), Kayak short ("7h 46m"),
+  // and either may be spelled out in full. All of them come out as "7h 46m",
+  // which is what the card shows.
+  const durRe = /\b(\d{1,2})\s*h(?:ours?|rs?)?(?:\s*(\d{1,2})\s*m(?:in(?:ute)?s?)?)?\b|\b(\d{1,3})\s*m(?:in(?:ute)?s?)?\b/gi;
   const found = [];
   let dm;
   while ((dm = durRe.exec(t)) !== null){
@@ -3848,6 +3863,7 @@ function renderEditForm(f, trip){
     <div class="span2 row form-actions">
       <button class="btn btn-sm" data-save-flight="${f.id}">Save</button>
       <button class="btn-link" data-cancel-flight="${f.id}">cancel</button>
+      <span class="field-hint">or press Enter</span>
     </div>
   </div>`;
 }
@@ -5048,6 +5064,28 @@ function latestPriceLog(f){
   }, null);
 }
 
+// The figures a bar carries: what the card holds, and the latest check
+// beside it where one differs. Flights are the only thing re-checked over
+// time — price_logs hangs off a flight — so a stay simply has no second
+// figure, and the same code covers both. `seats` multiplies a per-ticket
+// price out; a room is booked once, whoever sleeps in it.
+function calendarPrice(item, seats){
+  const n = seats || 1;
+  const price = item.paid_cash != null ? fmtCashShort(item.paid_cash * n, item.currency)
+    : item.paid_points != null ? fmtPoints(item.paid_points * n) : "";
+  const log = latestPriceLog(item);
+  const against = log ? (log.is_points ? item.paid_points : item.paid_cash) : null;
+  const moved = !!log && (against == null || Math.abs(log.price - against) > 0.005);
+  const now = moved
+    ? (log.is_points ? fmtPoints(log.price * n) : fmtCashShort(log.price * n, item.currency))
+    : "";
+  // Which way it went, where there's something to have moved from. An arrow
+  // rather than a colour: the bar is already coloured by whether it's booked
+  // or watched, and a second colour on top of that reads as a third state.
+  const arrow = moved && against != null ? (log.price < against ? "↓" : "↑") : "";
+  return { price, now, arrow, exact: log ? fmtShortDate(log.date) : "" };
+}
+
 // One bar on the calendar. The ends carry what you'd want from a glance at
 // a date: when it leaves on the day it leaves, when it lands back on the day
 // it lands, and what it cost. A bar that runs off the end of a week doesn't
@@ -5066,27 +5104,11 @@ function calendarBarHTML(bar){
   // so it drops the program name the card carries — "22,000 pts (Southwest)"
   // pushes the route off the end, and the airline's own logo is already
   // sitting at the front of it. The tooltip keeps the full figure.
-  const seats = f.passengers || 1;
-  const price = f.paid_cash != null ? fmtCashShort(f.paid_cash * seats, f.currency)
-    : f.paid_points != null ? fmtPoints(f.paid_points * seats) : "";
-  // And what it costs now. A card holds two figures — the one it was saved
-  // with and the last price checked against it — and on a flight you're
-  // watching they're rarely the same. The calendar is where a trip is looked
-  // at as a whole, so it shows the move rather than making you open the card
-  // to find out there was one. Logs are per seat, like the price they're
-  // compared against, so both are multiplied out the same way.
-  const log = latestPriceLog(f);
-  const against = log ? (log.is_points ? f.paid_points : f.paid_cash) : null;
-  const moved = !!log && (against == null || Math.abs(log.price - against) > 0.005);
-  const now = moved
-    ? (log.is_points ? fmtPoints(log.price * seats)
-                     : fmtCashShort(log.price * seats, f.currency))
-    : "";
-  // Which way it went, where there's something to have moved from. An arrow
-  // rather than a colour: the bar is already coloured by whether the flight
-  // is booked or watched, and a second colour on top of that reads as a
-  // third state.
-  const nowArrow = moved && against != null ? (log.price < against ? "↓" : "↑") : "";
+  // A card holds two figures — the one it was saved with and the last price
+  // checked against it — and on a flight you're watching they're rarely the
+  // same. The calendar is where a trip is looked at as a whole, so it shows
+  // the move rather than making you open the card to find there was one.
+  const { price, now, arrow: nowArrow, exact: checkedOn } = calendarPrice(f, f.passengers);
   // How many days this piece of the bar covers. A one-day bar is a column
   // wide and fits a route and nothing else, so what goes on it is decided
   // here rather than by a screen-width rule that can't see how long the
@@ -5121,7 +5143,7 @@ function calendarBarHTML(bar){
   }
   const tip = [route, outTimes && `out ${outTimes}`, roundtrip && backTimes && `back ${backTimes}`,
                cost !== "—" && cost.replace(/<[^>]*>/g, ""),
-               now && `checked ${now} ${fmtShortDate(log.date)}`,
+               now && `checked ${now} ${checkedOn}`,
                f.status === "watching" && "watching"]
     .filter(Boolean).join(" · ");
   return `<button type="button" class="tcal-bar${days === 1 ? " tcal-bar-day" : ""}${
@@ -5131,18 +5153,46 @@ function calendarBarHTML(bar){
     style="grid-column:${bar.from + 1}/${bar.to + 2};grid-row:${bar.lane + 2}">${bits.join("")}</button>`;
 }
 
+// A stay or a car on the same grid. Less to say than a flight — there are no
+// times on it and no route — so it is the brand, the name and the price. Drawn
+// paler than a flight on purpose: a trip is usually one flight and several
+// nights, and at equal weight the nights win an argument they shouldn't.
+function calendarStayBarHTML(bar){
+  const r = bar.r;
+  const { price } = calendarPrice(r, 1);
+  const days = bar.to - bar.from + 1;
+  const tail = !bar.opens && days <= 2;
+  const bits = [];
+  if (bar.opens && days >= 2) bits.push(brandMark(r.label, r.url, r.kind === "car" ? ["car"] : ["stay"]));
+  if (!tail) bits.push(`<span class="tcal-route">${esc(r.label || "")}</span>`);
+  bits.push(`<span class="tcal-cost">${esc(price || "—")}</span>`);
+  const tip = [r.label, r.kind === "car" ? "car" : "stay",
+               price && price, r.confirmation_code && `conf. ${r.confirmation_code}`,
+               r.status === "watching" && "watching"].filter(Boolean).join(" · ");
+  return `<button type="button" class="tcal-bar tcal-bar-stay${days === 1 ? " tcal-bar-day" : ""}${
+    r.status === "watching" ? " tcal-bar-watching" : ""}${
+    bar.opens ? " tcal-bar-opens" : ""}${bar.closes ? " tcal-bar-closes" : ""}"
+    data-tcal-stay="${r.id}" title="${esc(tip)}"
+    style="grid-column:${bar.from + 1}/${bar.to + 2};grid-row:${bar.lane + 2}">${bits.join("")}</button>`;
+}
+
 // The trip on a month grid. A round trip draws the length of the trip rather
 // than two dates you have to subtract in your head, which is the whole reason
 // to look at a calendar instead of a list. Shelved flights stay out of it,
 // the same as everywhere else.
 function renderTripCalendar(trip){
-  const placed = (trip.flights || [])
-    .filter(f => !f.shelved)
-    .map(f => ({ f, span: flightSpan(f) }))
-    .filter(x => x.span);
+  // Flights, stays and cars on one grid: a trip is all three, and the whole
+  // point of looking at it as a calendar is seeing where the nights sit
+  // against the flights. Shelved items stay out of it, the same as everywhere.
+  const placed = [
+    ...(trip.flights || []).filter(f => !f.shelved)
+      .map(f => ({ id: f.id, f, span: flightSpan(f) })),
+    ...(trip.rentals || []).filter(r => !r.shelved)
+      .map(r => ({ id: r.id, r, span: rentalSpan(r) })),
+  ].filter(x => x.span);
   if (!placed.length){
-    return `<p class="empty-hist">No flight on this trip has a departure date yet.
-      Add one and it will show up here.</p>`;
+    return `<p class="empty-hist">Nothing on this trip has a date on it yet.
+      Add a departure date, or the dates of a stay, and it will show up here.</p>`;
   }
   const weeks = calendarWeeks(placed.map(x => x.span));
   const today = todayISO();
@@ -5156,21 +5206,21 @@ function renderTripCalendar(trip){
   weeks.forEach((week, r) => week.forEach((d, c) => at.set(d, r * 7 + c)));
   const lastCell = weeks.length * 7 - 1;
   const laneOf = new Map();
-  packLanes(placed.map(({ f, span }) => ({
-    f,
+  packLanes(placed.map(({ id, span }) => ({
+    id,
     from: at.has(span.start) ? at.get(span.start) : 0,
     to: at.has(span.end) ? at.get(span.end) : lastCell,
-  }))).forEach((lane, i) => lane.forEach(r => laneOf.set(r.f.id, i)));
+  }))).forEach((lane, i) => lane.forEach(row => laneOf.set(row.id, i)));
 
   const byWeek = weeks.map(() => []);
-  for (const { f, span } of placed){
-    for (const seg of calendarSegments(span, weeks)){
-      byWeek[seg.row].push({ ...seg, f, lane: laneOf.get(f.id) || 0 });
+  for (const entry of placed){
+    for (const seg of calendarSegments(entry.span, weeks)){
+      byWeek[seg.row].push({ ...seg, f: entry.f, r: entry.r, lane: laneOf.get(entry.id) || 0 });
     }
   }
 
   const weeksHTML = weeks.map((week, row) => {
-    const bars = byWeek[row].map(calendarBarHTML);
+    const bars = byWeek[row].map(b => b.f ? calendarBarHTML(b) : calendarStayBarHTML(b));
     const laneCount = Math.max(1, ...byWeek[row].map(b => b.lane + 1));
     const days = week.map((d, i) => {
       const day = Number(d.slice(8));
@@ -5188,7 +5238,8 @@ function renderTripCalendar(trip){
     <div class="tcal-dow">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
       .map(d => `<span>${d}</span>`).join("")}</div>
     ${weeksHTML}
-    <p class="field-hint">Each bar runs from the day you leave to the day you come back. Click one to open its card.</p>
+    <p class="field-hint">A flight runs from the day you leave to the day you come back,
+      a stay or a car from pick-up to drop-off. Click one to open its card.</p>
   </div>`;
 }
 
@@ -5731,6 +5782,7 @@ function rentalFormHTML(prefix, idAttr, defaults, trip, existingPeople){
     <div class="span2 row" style="margin:0">
       <button class="btn btn-sm" data-${p}-save>Save</button>
       <button class="btn-link" data-${p}-cancel>cancel</button>
+      <span class="field-hint">or press Enter</span>
     </div>
   </div>`;
 }
@@ -6448,15 +6500,16 @@ document.addEventListener("keydown", (e) => {
   btn.click();
 });
 
-// A bar on the calendar is a way back to the flight it stands for: the
+// A bar on the calendar is a way back to the booking it stands for: the
 // calendar answers "when", the card answers everything else.
 document.addEventListener("click", (e) => {
-  const bar = e.target.closest("[data-tcal-flight]");
+  const bar = e.target.closest("[data-tcal-flight], [data-tcal-stay]");
   if (!bar) return;
-  const id = bar.dataset.tcalFlight;
+  const id = bar.dataset.tcalFlight || bar.dataset.tcalStay;
+  const sel = bar.dataset.tcalFlight ? `[data-card="${id}"]` : `[data-rental-card="${id}"]`;
   tripViews[activeTripId] = "planning";
   render();
-  const card = document.querySelector(`[data-card="${id}"]`);
+  const card = document.querySelector(sel);
   if (!card) return;
   card.scrollIntoView({ behavior: "smooth", block: "center" });
   card.classList.add("card-found");
@@ -7664,6 +7717,7 @@ function wireEvents(activeTrip){
       applyRentalKindToShares("nr", e.target.value);
     });
     holder.querySelector("[data-nr-cancel]").addEventListener("click", () => { holder.innerHTML = ""; });
+    wireEnterToSave(holder, holder.querySelector("[data-nr-save]"));
     holder.querySelector("[data-nr-save]").addEventListener("click", async () => {
       const label = holder.querySelector("[data-nr-label]").value.trim();
       if (!label){ alert("Name is required."); return; }
@@ -7726,6 +7780,7 @@ function wireEvents(activeTrip){
       form.querySelector("[data-er-notes]").value = rental.notes || "";
       form.querySelector("[data-er-status]").value = rental.status || "booked";
       form.querySelector("[data-er-cancel]").addEventListener("click", render);
+      wireEnterToSave(form, form.querySelector("[data-er-save]"));
       form.querySelector("[data-er-save]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-er-paidcash]").value;
         const pp = form.querySelector("[data-er-paidpoints]").value;
@@ -7833,6 +7888,7 @@ function wireEvents(activeTrip){
         duration: "[data-f-duration]", returnDuration: "[data-f-return-duration]",
         pointsCents: "[data-f-pointscents]", bpPrefix: "f" });
 
+      wireEnterToSave(form, form.querySelector("[data-save-flight]"));
       form.querySelector("[data-save-flight]").addEventListener("click", async () => {
         const pc = form.querySelector("[data-f-paidcash]").value;
         const pp = form.querySelector("[data-f-paidpoints]").value;
