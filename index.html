@@ -463,6 +463,9 @@
      background the bars are drawn on, which is why the row template is
      emitted per week rather than set here. */
   .tcal{margin-bottom:14px}
+  .trip-pick-past{margin-top:10px}
+  .trip-pick-past summary{cursor:pointer;color:var(--muted);font-size:12.5px;padding:4px 2px}
+  .trip-pick-past summary:hover{color:var(--amber)}
   .tcal-title{margin:0 0 10px;font-size:15px;font-weight:800;letter-spacing:.2px}
   .tcal-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:0;
     font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--muted);
@@ -8604,15 +8607,45 @@ async function processAddFlightHash(){
 }
 
 // Which trip is this flight for? Resolves to a trip, or null if dismissed.
+// Which trips are still ahead of you, and which have been and gone. A trip is
+// past once the day it ends has gone; one with no dates on it is a trip being
+// planned, so it counts as ahead. Upcoming are sorted soonest first with the
+// undated behind them — they have no place in a timeline — and past ones most
+// recently finished first, since that's the one you'd be adding to late.
+function tripsByTime(list, today){
+  const endsOn = t => t.travel_end || t.travel_start || "";
+  const startsOn = t => t.travel_start || t.travel_end || "";
+  const order = (a, b) => {
+    const sa = startsOn(a), sb = startsOn(b);
+    if (!sa && !sb) return (a.title || "").localeCompare(b.title || "");
+    if (!sa) return 1;
+    if (!sb) return -1;
+    return sa.localeCompare(sb);
+  };
+  const upcoming = [], past = [];
+  for (const t of list) ((!endsOn(t) || endsOn(t) >= today) ? upcoming : past).push(t);
+  upcoming.sort(order);
+  past.sort((a, b) => order(b, a));
+  return { upcoming, past };
+}
+
 function askWhichTrip(){
   return new Promise(resolve => {
     const host = document.createElement("div");
-    const byFolder = new Map();
-    for (const t of trips){
-      const key = folders.find(f => f.id === t.folder_id)?.title || "";
-      if (!byFolder.has(key)) byFolder.set(key, []);
-      byFolder.get(key).push(t);
-    }
+    // A flight sent from a search is for a trip you haven't taken. The list
+    // used to be every trip there had ever been, in folder order, so last
+    // year's holidays sat above the one being planned. Past trips are still
+    // reachable, a click away, because a booking does sometimes get written
+    // up after the fact.
+    const { upcoming, past } = tripsByTime(trips, todayISO());
+    const row = (t) => {
+      const folder = folders.find(f => f.id === t.folder_id)?.title || "";
+      return `<li><button type="button" class="trip-pick" data-trip-pick="${t.id}">
+        <strong>${esc(t.title)}</strong>
+        <span class="wl-profile-loc">${folder ? esc(folder) + " · " : ""}${
+          t.travel_start ? esc(fmtShortDate(t.travel_start)) : "no dates"}</span>
+      </button></li>`;
+    };
     host.innerHTML = `
       <div class="wl-profile-overlay" data-trip-pick-overlay>
         <div class="wl-profile" role="dialog" aria-label="Choose a trip">
@@ -8621,14 +8654,11 @@ function askWhichTrip(){
             <h3>Add this flight to…</h3>
             <p class="wl-profile-count">Sent from your browser — pick the trip it belongs to.</p>
           </div></div>
-          <ul class="wl-profile-list">
-            ${[...byFolder.entries()].map(([folder, list]) => list.map(t => `
-              <li><button type="button" class="trip-pick" data-trip-pick="${t.id}">
-                <strong>${esc(t.title)}</strong>
-                <span class="wl-profile-loc">${folder ? esc(folder) + " · " : ""}${
-                  t.travel_start ? esc(fmtShortDate(t.travel_start)) : "no dates"}</span>
-              </button></li>`).join("")).join("")}
-          </ul>
+          <ul class="wl-profile-list">${upcoming.map(row).join("")}</ul>
+          ${past.length ? `<details class="trip-pick-past"${upcoming.length ? "" : " open"}>
+            <summary>${past.length} trip${past.length > 1 ? "s" : ""} already taken</summary>
+            <ul class="wl-profile-list">${past.map(row).join("")}</ul>
+          </details>` : ""}
         </div>
       </div>`;
     document.body.appendChild(host);

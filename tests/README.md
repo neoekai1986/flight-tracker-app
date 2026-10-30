@@ -38,6 +38,9 @@ of those functions the test will say so rather than silently passing.
   and the C key that opens the view. Every bar has to carry a figure: a trip
   ending on a Sunday leaves its last day alone on the row below, and a bar
   with nothing on it reads as a booking nobody priced.
+- **trippick.test.mjs** — which trips are offered when a flight arrives from
+  the browser. A flight found in a search is for a trip you haven't taken, so
+  the ones already taken fold away rather than sitting at the top of the list.
 - **settlement.test.mjs** — the arithmetic. `settleTrip()` takes plain data
   and returns plain data, so it can be exercised directly. Every case asserts
   that the shares add up to exactly what the trip cost.
