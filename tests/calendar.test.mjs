@@ -24,7 +24,8 @@ function extract(name){
 const C = new Function(
   extract("fmtISO") + extract("parseISODate") + extract("flightSpan") +
   extract("calendarWeeks") + extract("calendarSegments") + extract("packLanes") +
-  "return { flightSpan, calendarWeeks, calendarSegments, packLanes };"
+  extract("calendarTitle") +
+  "return { flightSpan, calendarWeeks, calendarSegments, packLanes, calendarTitle };"
 )();
 
 let passed = 0, failed = 0;
@@ -106,6 +107,23 @@ is("back into the gap",
    lanes([{ id:"a", from:0, to:1 }, { id:"b", from:0, to:4 }, { id:"c", from:3, to:6 }]),
    [["b"],["a","c"]]);
 is("nothing to stack", C.packLanes([]), []);
+
+// --- what the grid is a calendar of ---------------------------------------
+//
+// The grid is built from a trip, not from a month, so it is routinely a week
+// of one month and the first days of the next. The heading has to say both,
+// and both years for a trip that sees in the new year.
+const title = (start, end) => C.calendarTitle(C.calendarWeeks([{ start, end }]));
+
+is("inside one month", title("2026-03-09", "2026-03-13"), "March 2026");
+// Whole weeks: a trip inside March still shows April once the last week of
+// it runs past the 31st.
+is("week spilling into the next month", title("2026-03-30", "2026-03-31"),
+   "March – April 2026");
+is("across two months", title("2026-03-23", "2026-04-06"), "March – April 2026");
+is("across the new year", title("2026-12-28", "2027-01-03"),
+   "December 2026 – January 2027");
+is("nothing to title", C.calendarTitle([]), "");
 
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

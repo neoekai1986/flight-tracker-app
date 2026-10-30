@@ -463,6 +463,7 @@
      background the bars are drawn on, which is why the row template is
      emitted per week rather than set here. */
   .tcal{margin-bottom:14px}
+  .tcal-title{margin:0 0 10px;font-size:15px;font-weight:800;letter-spacing:.2px}
   .tcal-dow{display:grid;grid-template-columns:repeat(7,1fr);gap:0;
     font-size:11px;font-weight:700;letter-spacing:.04em;color:var(--muted);
     text-transform:uppercase;padding:0 0 4px}
@@ -5014,6 +5015,26 @@ function emailExpense(personId){
     + `?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(lines.join("\n"))}`;
 }
 
+// What the grid is a calendar of. A month grid built from a trip rather than
+// from a month routinely runs across a boundary — a week of March and the
+// first days of April — so the heading names both, and both years when the
+// trip is one that sees in the new year.
+function calendarTitle(weeks){
+  if (!weeks.length) return "";
+  const first = weeks[0][0];
+  const last = weeks[weeks.length - 1][6];
+  const monthName = (iso) => {
+    const [y, m, d] = iso.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("en-US", { month: "long" });
+  };
+  const year = (iso) => iso.slice(0, 4);
+  if (first.slice(0, 7) === last.slice(0, 7)) return `${monthName(first)} ${year(first)}`;
+  if (year(first) === year(last)){
+    return `${monthName(first)} – ${monthName(last)} ${year(first)}`;
+  }
+  return `${monthName(first)} ${year(first)} – ${monthName(last)} ${year(last)}`;
+}
+
 // The newest check logged against a flight. By the date it's for, and by
 // when it was typed in where two share a date — price_logs is day-granular,
 // so several checks on one day tie and would otherwise come back in whatever
@@ -5163,6 +5184,7 @@ function renderTripCalendar(trip){
   }).join("");
 
   return `<div class="tcal">
+    <h3 class="tcal-title">${esc(calendarTitle(weeks))}</h3>
     <div class="tcal-dow">${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"]
       .map(d => `<span>${d}</span>`).join("")}</div>
     ${weeksHTML}
