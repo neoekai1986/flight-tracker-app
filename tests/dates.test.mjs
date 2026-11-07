@@ -73,5 +73,22 @@ if (!process.env.CARD_DATE_TZ_CHILD){
   }
 }
 
+// ---- Where the weekday has to appear ----
+//
+// A source check: these are template strings inside render functions that
+// can't be lifted out of the file. The trip header printed the raw column
+// — "2026-03-23" — which is the one place in the app you were left to work
+// the day out for yourself.
+for (const [place, snippet] of [
+  ["the trip header", 'fmtShortDateDay(trip.travel_start) || "?"'],
+  ["the summary sheet", 'trip.travel_start ? esc(fmtShortDateDay(trip.travel_start))'],
+  ["a flight leg", 'fmtShortDateDay(when)'],
+  ["a stay's dates", 'fmtShortDateDay(r.rental_start)'],
+]){
+  is(`${place} shows the day`, src.includes(snippet), true);
+}
+is("and no header prints a raw date",
+   src.includes('${esc(trip.travel_start || "?")}'), false);
+
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

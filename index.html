@@ -4654,8 +4654,8 @@ function renderTripSummary(trip){
     <div class="summary-sheet">
       <div class="summary-head">
         <h2>${esc(trip.title)}</h2>
-        <p>${trip.travel_start ? esc(fmtShortDate(trip.travel_start)) : "?"} → ${
-          trip.travel_end ? esc(fmtShortDate(trip.travel_end)) : "?"}${
+        <p>${trip.travel_start ? esc(fmtShortDateDay(trip.travel_start)) : "?"} → ${
+          trip.travel_end ? esc(fmtShortDateDay(trip.travel_end)) : "?"}${
           tripPeople(trip).length ? ` · ${tripPeople(trip).map(p=>esc(p.name)).join(", ")}` : ""}</p>
       </div>
 
@@ -5381,7 +5381,11 @@ function renderTripPanel(trip){
 
   const metaParts = [];
   if (trip.travel_start || trip.travel_end){
-    metaParts.push(`<div><b>Dates:</b> ${esc(trip.travel_start || "?")} → ${esc(trip.travel_end || "?")}</div>`);
+    // With the day of the week, like the cards: a trip that starts on a
+    // Friday is a different trip from one that starts on a Monday, and the
+    // ISO date this used to print made you work it out yourself.
+    metaParts.push(`<div><b>Dates:</b> ${esc(fmtShortDateDay(trip.travel_start) || "?")} → ${
+      esc(fmtShortDateDay(trip.travel_end) || "?")}</div>`);
   }
   if (trip.notes) metaParts.push(`<div><b>Notes:</b> ${esc(trip.notes)}</div>`);
   if (tripPeople(trip).length){
