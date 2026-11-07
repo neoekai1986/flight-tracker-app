@@ -41,6 +41,10 @@ of those functions the test will say so rather than silently passing.
 - **trippick.test.mjs** — which trips are offered when a flight arrives from
   the browser. A flight found in a search is for a trip you haven't taken, so
   the ones already taken fold away rather than sitting at the top of the list.
+- **vacation.test.mjs** — the leave a trip costs you, which is not its
+  length: a long weekend is four trip days and one vacation day. Also the
+  weekday count the field offers as a starting point, and the difference
+  between nobody having said and somebody having said nought.
 - **settlement.test.mjs** — the arithmetic. `settleTrip()` takes plain data
   and returns plain data, so it can be exercised directly. Every case asserts
   that the shares add up to exactly what the trip cost.

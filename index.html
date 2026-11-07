@@ -2401,6 +2401,7 @@ async function loadTrips(){
   // the form and the writes until it has.
   for (const t of data) (t.trip_people || []).sort((a,b) => a.position - b.position);
   if (data[0]) tripAlternativeAvailable = "is_alternative" in data[0];
+  if (data[0]) tripVacationDaysAvailable = "vacation_days" in data[0];
   const sample = data.flatMap(t => t.flights || [])[0];
   if (sample){
     flightAirlineAvailable = "airline" in sample;
@@ -2532,6 +2533,7 @@ let flightAirlineAvailable = true;
 // fail on an un-migrated database, since PostgREST rejects the whole write for
 // one unknown column.
 let tripAlternativeAvailable = true;
+let tripVacationDaysAvailable = true;
 
 // ...and for the per-leg stops columns.
 let flightStopsAvailable = true;
@@ -4656,6 +4658,9 @@ function renderTripSummary(trip){
         <h2>${esc(trip.title)}</h2>
         <p>${trip.travel_start ? esc(fmtShortDateDay(trip.travel_start)) : "?"} → ${
           trip.travel_end ? esc(fmtShortDateDay(trip.travel_end)) : "?"}${
+          trip.vacation_days != null
+            ? ` · ${esc(String(trip.vacation_days))} vacation day${trip.vacation_days === 1 ? "" : "s"}`
+            : ""}${
           tripPeople(trip).length ? ` · ${tripPeople(trip).map(p=>esc(p.name)).join(", ")}` : ""}</p>
       </div>
 
@@ -5387,6 +5392,9 @@ function renderTripPanel(trip){
     metaParts.push(`<div><b>Dates:</b> ${esc(fmtShortDateDay(trip.travel_start) || "?")} → ${
       esc(fmtShortDateDay(trip.travel_end) || "?")}</div>`);
   }
+  if (trip.vacation_days != null){
+    metaParts.push(`<div><b>Vacation days:</b> ${esc(String(trip.vacation_days))}</div>`);
+  }
   if (trip.notes) metaParts.push(`<div><b>Notes:</b> ${esc(trip.notes)}</div>`);
   if (tripPeople(trip).length){
     metaParts.push(`<div><b>Who's going:</b> <span class="tags">${
@@ -5807,6 +5815,14 @@ function renderMetaForm(trip){
       <button type="button" class="btn-link daterange-btn" data-dr-btn
         data-dr-start="[data-m-start]" data-dr-end="[data-m-end]">📅 pick both dates on one calendar</button>
     </div>
+    ${!tripVacationDaysAvailable ? "" : `
+    <label class="field field-narrow">Vacation days used
+      <input type="number" min="0" step="0.5" data-m-vacdays value="${trip.vacation_days ?? ""}"
+        placeholder="${tripWeekdayCount(trip) || ""}">
+      <span class="field-hint">${tripWeekdayCount(trip)
+        ? `These dates cover ${tripWeekdayCount(trip)} weekday${tripWeekdayCount(trip) === 1 ? "" : "s"}`
+        : "Days of leave this trip takes"} — half days are fine.</span>
+    </label>`}
     <label class="field">Year
       <select data-m-folder>
         <option value="">— No year —</option>
@@ -5873,6 +5889,37 @@ function tripDayCount(trip){
   return days > 0 ? days : 0;
 }
 
+// Mondays to Fridays inside a trip's dates. Not what the trip costs you in
+// leave — a public holiday is a day off you didn't book, and a flight out on
+// Saturday morning costs nothing — but it is the number you'd start from, so
+// the field offers it rather than making you count squares on a calendar.
+function tripWeekdayCount(trip){
+  if (!trip.travel_start || !trip.travel_end) return 0;
+  const [ys, ms, ds] = trip.travel_start.split("-").map(Number);
+  const [ye, me, de] = trip.travel_end.split("-").map(Number);
+  const cursor = new Date(ys, ms - 1, ds);
+  const last = new Date(ye, me - 1, de);
+  let days = 0;
+  while (cursor <= last){
+    const dow = cursor.getDay();
+    if (dow !== 0 && dow !== 6) days++;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return days;
+}
+
+// Leave earmarked across a set of trips. Null where nobody has said — which
+// is not the same as nought, and the stats bar shows the difference.
+function vacationDaysUsed(list){
+  let total = null;
+  for (const t of list){
+    const n = Number(t.vacation_days);
+    if (!Number.isFinite(n) || t.vacation_days == null) continue;
+    total = (total || 0) + n;
+  }
+  return total;
+}
+
 // Is this trip in the past? Judged on when it ends, so a trip you're on
 // today is still current.
 function isPastTrip(t){
@@ -5898,6 +5945,7 @@ function renderStatsBar(){
   const scoped = scopedTrips();
 
   let totalDays = 0, flightCash = 0, rentalCash = 0;
+  const vacationDays = vacationDaysUsed(scoped);
   const flightPointsByProgram = new Map(), rentalPointsByProgram = new Map();
   const byCategory = new Map(); // category id (or "none") -> {cash, pointsByProgram}
   for (const t of scoped){
@@ -5962,6 +6010,8 @@ function renderStatsBar(){
         <select id="statsFilterSelect">${yearOptionsHTML}</select>
       </div>
       <div class="stat"><span class="stat-label">Trip days</span><span class="stat-val">${totalDays}</span></div>
+      ${!tripVacationDaysAvailable ? "" : `<div class="stat"><span class="stat-label">Vacation days</span>
+        <span class="stat-val">${vacationDays == null ? "—" : vacationDays}</span></div>`}
       <div class="stat"><span class="stat-label">Flights</span>${costBlockHTML(flightCash, flightPointsByProgram)}</div>
       <div class="stat"><span class="stat-label">Rentals</span>${costBlockHTML(rentalCash, rentalPointsByProgram)}</div>
       <div class="stat stat-total"><span class="stat-label">Total cost</span>${costBlockHTML(flightCash+rentalCash, totalPointsByProgram)}</div>
@@ -7630,9 +7680,11 @@ function wireEvents(activeTrip){
       const notes = holder.querySelector(`[data-m-notes]`).value.trim();
       // People are rows of their own now, saved as you edit them rather than
       // with the rest of the form — attendees is left untouched on the trip.
+      const vacEl = holder.querySelector("[data-m-vacdays]");
       const skiEl = holder.querySelector("[data-m-skidays]");
       await updateTrip(activeTrip.id, { travel_start: start, travel_end: end, notes,
         ...(skiEl ? { ski_days: skiEl.value === "" ? null : parseInt(skiEl.value, 10) } : {}),
+        ...(vacEl ? { vacation_days: vacEl.value === "" ? null : parseFloat(vacEl.value) } : {}),
         ...(tripAlternativeAvailable
           ? { is_alternative: !!holder.querySelector("[data-m-alternative]")?.checked } : {}) });
       let folderSel = holder.querySelector(`[data-m-folder]`).value;
