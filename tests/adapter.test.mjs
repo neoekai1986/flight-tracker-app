@@ -295,8 +295,12 @@ const handovers = (api, trip, m) => Object.fromEntries(m.transfers.map(t =>
     m.detail.get("p-chr").map(d => [d.owes, d.reason.why, d.reason.room]),
     [[0, "sharing", "Main"]]);
   const card = api.rentalSplitText(trip.rentals[0]);
-  check("the card groups by room like the summary does",
-    card.replace(/<[^>]+>/g, ""), "Main Eugene $450.00, Christine sharing &middot; Bunk Me $450.00");
+  // Each room carries what the room itself cost, which is the figure the
+  // bedroom split exists to make visible — "Main $450.00" first, then how it
+  // divided between the people in it.
+  check("the card groups by room, with what each room cost",
+    card.replace(/<[^>]+>/g, ""),
+    "Main $450.00 Eugene $450.00, Christine sharing &middot; Bunk $450.00 Me $450.00");
 }
 
 // ---- percentages written as fractions ------------------------------------

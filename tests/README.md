@@ -51,6 +51,10 @@ of those functions the test will say so rather than silently passing.
 - **adapter.test.mjs** — the translation between stored rows and that
   function: households, percentages, per-seat flight pricing, points,
   watching items, and share rows left pointing at nobody.
+- **bedrooms.test.mjs** — splitting a house by its bedrooms. The divisor
+  used to be however many room names someone had typed, so a room's cost
+  moved with the turnout. Stating the count fixes it, and the room nobody
+  took still has to land on somebody — every case checks it did.
 - **transfers.test.mjs** — who hands money to whom, which the net column
   can't say once two people have paid for things. Every case checks the same
   property: follow the plan and everybody lands on zero, to the cent.
