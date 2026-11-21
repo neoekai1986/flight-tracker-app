@@ -38,6 +38,7 @@ function extractConst(name){
 const names = ["bookingCents", "splitCents", "settleTrip", "selfPerson", "personById",
   "groupById", "tripPeople", "personName", "bookingPeopleFor", "settlementBooking",
   "settlementBookings", "settlementGroups", "settlementFor", "tripMoney", "tripPayments",
+  "settlementPayments", "settlementTransfers",
   "flightTicketCost", "settleOne", "myShareOf", "settlementSubjectName",
   "rentalOurPortion", "rentalSplitText", "shareParts", "parseShare", "reasonText"];
 
@@ -52,7 +53,8 @@ const app = new Function("state", `
   ${extractConst("SELF")}${extractConst("selfId")}${extractConst("SHARE_BASIS")}
   ${names.map(extract).join("")}
   return { tripMoney, rentalOurPortion, rentalSplitText, myShareOf, parseShare, reasonText,
-           settlementGroups, settlementBooking, flightTicketCost, settlementFor };
+           settlementGroups, settlementBooking, flightTicketCost, settlementFor,
+           personName, settlementTransfers };
 `);
 
 let passed = 0, failed = 0;
@@ -91,6 +93,9 @@ function world(over = {}){
 
 const owed = m => Object.fromEntries(m.rows.map(r => [r.name, r.owes]));
 const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
+// The hand-over list by name, which is how it's read on the page.
+const handovers = (api, trip, m) => Object.fromEntries(m.transfers.map(t =>
+  [`${api.personName(trip, t.from)} pays ${api.personName(trip, t.to)}`, t.amount]));
 
 // ---- the roster always shows ----------------------------------------------
 
@@ -546,6 +551,71 @@ const paid = m => Object.fromEntries(m.rows.map(r => [r.name, r.paid]));
   check("and every cent was paid by someone", Math.round(sumPaid * 100),
     Math.round(m.total * 100));
   check("nothing went unassigned with sound data", m.unassigned, 0);
+}
+
+// ---- who hands money to whom ---------------------------------------------
+
+{
+  // Two payers, which is where the net column stops being enough: knowing
+  // Christine is down $674 says nothing about who she owes it to.
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Lodge",
+                paid_cash: 900, paid_by: "p-eug", status: "booked" }],
+    flights: [{ id: "f1", trip_id: "t1", label: "Seats", paid_cash: 200,
+                passengers: 2, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-eug" },
+      { rental_id: "r1", person_id: "p-chr" },
+      { rental_id: "r1", person_id: "p-jay" },
+      { flight_id: "f1", person_id: "p-me" },
+      { flight_id: "f1", person_id: "p-chr" },
+    ],
+  });
+  const m = api.tripMoney(trip);
+  check("each debt goes to whoever paid that booking", handovers(api, trip, m),
+    { "Christine pays Eugene": 300, "Christine pays Me": 200, "Jay pays Eugene": 300 });
+  check("and the biggest is listed first", m.transfers[0].amount, 300);
+
+  // What Christine owes, broken down — the question that started this.
+  const hers = m.detail.get("p-chr");
+  check("her shares name what they're for and who they're owed to",
+    hers.map(it => [it.label, it.owes, api.personName(trip, it.to)]),
+    [["Seats", 200, "Me"], ["Lodge", 300, "Eugene"]]);
+
+  // Following the plan leaves everyone on zero.
+  const net = Object.fromEntries(m.rows.map(r => [r.personId, r.net]));
+  for (const t of m.transfers){ net[t.from] += t.amount; net[t.to] -= t.amount; }
+  check("paying the plan settles everyone", Object.values(net).map(n => Math.round(n * 100)),
+    [0, 0, 0, 0]);
+}
+
+{
+  // You paid for everything, so every debt points at you — and none of your
+  // own share does.
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Lodge",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+    booking_people: [
+      { rental_id: "r1", person_id: "p-me" },
+      { rental_id: "r1", person_id: "p-eug" },
+      { rental_id: "r1", person_id: "p-jay" },
+    ],
+  });
+  const m = api.tripMoney(trip);
+  check("one payer: everyone pays you", handovers(api, trip, m),
+    { "Eugene pays Me": 300, "Jay pays Me": 300 });
+  check("your own share is owed to nobody",
+    (m.detail.get("p-me") || []).map(it => it.to), [null]);
+}
+
+{
+  // A booking that's wholly yours moves no money at all.
+  const { trip, api } = world({
+    rentals: [{ id: "r1", trip_id: "t1", kind: "housing", label: "Lodge",
+                paid_cash: 900, paid_by: "p-me", status: "booked" }],
+  });
+  const m = api.tripMoney(trip);
+  check("nothing shared, nothing to hand over", m.transfers, []);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

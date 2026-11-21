@@ -915,6 +915,14 @@
   .paid-form select,.paid-form input{margin-top:0;max-width:none;width:auto;flex:1 1 118px;
     min-width:0}
   .paid-form button{flex:0 0 auto}
+  .settle-list{list-style:none;margin:0;padding:0;display:flex;
+    flex-direction:column;gap:7px}
+  .settle-list li{display:grid;grid-template-columns:1fr auto;gap:1px 10px;
+    align-items:baseline}
+  .settle-who{color:var(--ink)}
+  .settle-sum{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+  .settle-why{grid-column:1/-1;color:var(--muted);font-size:11.5px}
+  .owes-to{color:var(--muted)}
   .owes-name{background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;
     display:inline-flex;align-items:center;gap:5px;text-align:left}
   .owes-name:hover{color:var(--amber)}
@@ -4325,6 +4333,62 @@ function settleTrip(input){
   return { people, totalCents, unassignedCents, breakdown, warnings };
 }
 
+// Who hands money to whom.
+//
+// The per-person table says what each of you is up or down overall, which is
+// all you need while one person is paying for everything. The moment two
+// people have paid it stops being enough: "Chrstine owes $674.37" doesn't say
+// whether she owes it to you or to Eugene, and there is no way to work it out
+// from a column of nets.
+//
+// Every debt here comes from a booking — whoever is on it owes their share to
+// whoever paid it — so each transfer can be traced back to the things it is
+// for. Debts between the same two people cancel, and money already handed
+// over comes off. What this deliberately does not do is re-pair debts to make
+// the list shorter: the usual trick of routing Chrstine's debt to Eugene
+// through you produces fewer transfers and no way to check any of them.
+function settlementTransfers(breakdown, payments, selfId){
+  // One entry per pair of people, signed: positive means a owes b.
+  const pairs = new Map();
+  const owe = (from, to, cents, item) => {
+    if (!from || !to || from === to || !cents) return;
+    const [a, b] = from < to ? [from, to] : [to, from];
+    const key = `${a}|${b}`;
+    if (!pairs.has(key)) pairs.set(key, { a, b, cents: 0, items: [] });
+    const p = pairs.get(key);
+    p.cents += from === a ? cents : -cents;
+    if (item) p.items.push({ ...item, from });
+  };
+
+  for (const b of (breakdown || [])){
+    const payer = b.payer || selfId;
+    for (const [id, cents] of Object.entries(b.perPerson || {})){
+      if (id === payer || !cents) continue;
+      owe(id, payer, cents, { label: b.label, cents });
+    }
+  }
+  // A payment settles what its sender owed its receiver, so it runs against
+  // the debt rather than alongside it. Handing over more than you owed turns
+  // the balance around, which the netting takes care of by itself.
+  for (const pay of (payments || [])){
+    owe(pay.to || selfId, pay.from, pay.cents, null);
+  }
+
+  const out = [];
+  for (const p of pairs.values()){
+    if (!p.cents) continue;
+    const from = p.cents > 0 ? p.a : p.b;
+    const to = p.cents > 0 ? p.b : p.a;
+    // The bookings behind the surviving direction. They add up to the
+    // transfer only when nothing was netted off it, so the figure is carried
+    // separately rather than left for the caller to assume.
+    const items = p.items.filter(i => i.from === from).sort((x, y) => y.cents - x.cents);
+    out.push({ from, to, cents: Math.abs(p.cents), items,
+               itemsCents: items.reduce((n, i) => n + i.cents, 0) });
+  }
+  return out.sort((x, y) => y.cents - x.cents || String(x.from).localeCompare(String(y.from)));
+}
+
 // ---------------- Settlement, as the app sees it ----------------
 //
 // settleTrip() above knows nothing about the database. Everything below
@@ -4411,13 +4475,19 @@ function tripPayments(trip){
     .sort((a, b) => (a.paid_on || "").localeCompare(b.paid_on || ""));
 }
 
+// The same payments the settlement sees, kept as a function because both
+// the running totals and the hand-over list have to read the identical set.
+function settlementPayments(trip){
+  return tripPayments(trip).map(p => ({
+    from: p.from_person, to: p.to_person || null, cents: toCents(p.amount),
+  }));
+}
+
 function settlementFor(trip){
   return settleTrip({
     bookings: settlementBookings(trip),
     groupMembers: settlementGroups(trip),
-    payments: tripPayments(trip).map(p => ({
-      from: p.from_person, to: p.to_person || null, cents: toCents(p.amount),
-    })),
+    payments: settlementPayments(trip),
     selfId: selfId(),
   });
 }
@@ -4461,12 +4531,29 @@ function tripMoney(trip){
       for (const [raw, cents] of Object.entries(b.perPerson)){
         const id = raw === SELF ? (self?.id || null) : raw;
         if (!m.has(id)) m.set(id, []);
-        m.get(id).push({ label: b.label, owes: fromCents(cents),
+        // Who the share is owed to: whoever paid the booking, unless that's
+        // the same person, in which case nobody is owed anything for it.
+        const to = raw === b.payer ? null
+                 : b.payer === SELF ? (self?.id || null) : b.payer;
+        m.get(id).push({ label: b.label, owes: fromCents(cents), to,
                          reason: b.perReason[raw] || null });
       }
       return m;
     }, new Map()),
     payments: tripPayments(trip),
+    // What's left to hand over, person to person.
+    transfers: settlementTransfers(r.breakdown, settlementPayments(trip), selfId())
+      .map(t => ({
+        from: t.from === SELF ? (self?.id || null) : t.from,
+        to: t.to === SELF ? (self?.id || null) : t.to,
+        amount: fromCents(t.cents),
+        items: t.items.map(i => ({ label: i.label, amount: fromCents(i.cents) })),
+        // True when the bookings listed account for the whole transfer. They
+        // don't once something has been netted off it — a debt the other way,
+        // or a payment already made — and saying so beats a list that
+        // silently doesn't add up.
+        whole: t.itemsCents === t.cents,
+      })),
     byBooking: new Map(r.breakdown.map(b => [b.id, b])),
   };
 }
@@ -4738,7 +4825,8 @@ function renderTripSummary(trip){
             <td colspan="4">
               <ul class="owes-list">
                 ${items.map(it => `<li>
-                  <span class="owes-what">${esc(it.label)}</span>
+                  <span class="owes-what">${esc(it.label)}${it.to
+                    ? ` <span class="owes-to">to ${esc(personName(trip, it.to))}</span>` : ""}</span>
                   <span class="owes-sum">${fmt(it.owes)}</span>
                   ${reasonText(trip, it.reason)
                     ? `<span class="owes-why">${esc(reasonText(trip, it.reason))}</span>` : ""}
@@ -4777,6 +4865,20 @@ function renderTripSummary(trip){
         ${money.over.length ? `<p class="summary-warn">Shares add up to more than the booking cost on
           ${money.over.map(o => `<b>${esc(o.label)}</b> (by ${fmt(o.by)})`).join(", ")} —
           worth a look, the figures below can't reconcile while that's true.</p>` : ""}
+        <div class="paid-block">
+          <div class="paid-head">Settle up
+            <span class="field-opt">what's left to hand over</span></div>
+          ${money.transfers.length ? `<ul class="settle-list">
+            ${money.transfers.map(t => `<li>
+              <span class="settle-who"><b>${esc(personName(trip, t.from))}</b> pays
+                <b>${esc(personName(trip, t.to))}</b></span>
+              <span class="settle-sum">${fmt(t.amount)}</span>
+              ${t.items.length ? `<span class="settle-why">${
+                t.items.map(i => `${esc(i.label)} ${fmt(i.amount)}`).join(" · ")}${
+                t.whole ? "" : " — less what's already settled between them"}</span>` : ""}
+            </li>`).join("")}
+          </ul>` : `<p class="field-hint">Nobody owes anybody — everyone's square.</p>`}
+        </div>
         ${!paymentsAvailable ? "" : `
         <div class="paid-block">
           <div class="paid-head">Payments
