@@ -51,6 +51,10 @@ of those functions the test will say so rather than silently passing.
 - **adapter.test.mjs** — the translation between stored rows and that
   function: households, percentages, per-seat flight pricing, points,
   watching items, and share rows left pointing at nobody.
+- **household.test.mjs** — a household naming whoever settles up for it, and
+  the share block laid out bedroom by bedroom instead of person by person.
+  The two go together: a bedroom is answerable from one name only because
+  picking the household puts the whole family in the room.
 - **bedrooms.test.mjs** — splitting a house by its bedrooms. The divisor
   used to be however many room names someone had typed, so a room's cost
   moved with the turnout. Stating the count fixes it, and the room nobody

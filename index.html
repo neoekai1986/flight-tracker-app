@@ -877,7 +877,7 @@
      than .bp-share's flex sizing and would otherwise push the selector out
      past the edge of the card. */
   .bp-row .bp-share input{width:auto;flex:1 1 0;min-width:0}
-  @media (max-width:560px){ .bp-row{grid-template-columns:1fr} }
+  @media (max-width:560px){ .bp-row,.bp-row-placed{grid-template-columns:1fr} }
   /* Nested inside a year, so indented to sit with that year's trips rather
      than reading as another year. */
   .tab-past{margin-left:14px}
@@ -908,6 +908,23 @@
     color:var(--muted);margin-right:4px}
   .summary-room-cost{font-weight:600;margin-right:4px}
   .bp-clear{float:right;font-size:12px;font-weight:400;text-transform:none;letter-spacing:0}
+  .bp-group{border:1px solid var(--line);border-radius:10px;padding:8px 10px 6px;
+    margin-bottom:8px;background:color-mix(in srgb, var(--panel2) 55%, transparent)}
+  .bp-group-head{display:flex;gap:8px;align-items:baseline;justify-content:space-between;
+    margin-bottom:4px}
+  .bp-group-name{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+  .bp-group-note{font-size:12px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .bp-group-empty{margin:2px 0 4px;font-size:12px;color:var(--muted)}
+  .bp-group-off{background:none;border-style:dashed;opacity:.85}
+  .bp-row-placed .bp-who{min-width:0}
+  /* Laid out by bedroom, a row is one line: who, where, and how their share
+     is worked out. The share box only drops to its own line in the flat
+     list, where the room name needs the width more. */
+  .bp-row-placed{grid-template-columns:minmax(104px,1.4fr) minmax(104px,1.1fr)
+    minmax(76px,1fr) minmax(100px,1fr);align-items:center}
+  .bp-row-placed .bp-share{display:contents}
+  .bp-row-placed .bp-share input{width:100%;max-width:none;margin-top:0}
+  .bp-row-placed .bp-share select{width:100%;max-width:none;margin-top:0;min-width:0}
   .paid-block{margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}
   .paid-head{font-size:12px;letter-spacing:.14em;text-transform:uppercase;
     color:var(--muted);margin-bottom:7px}
@@ -945,6 +962,12 @@
   .people-list{display:flex;flex-direction:column;gap:6px;margin-top:6px}
   .person-row{display:flex;align-items:center;gap:9px;font-size:13px;padding:3px 0}
   .person-row input[type=checkbox]{accent-color:var(--amber);margin:0;flex-shrink:0;width:auto}
+  /* The household picker sits at the end of the row, out of the way of the
+     name, which is what you're reading down the list for. */
+  .person-row select{margin:0 0 0 auto;width:auto;max-width:190px;flex:0 1 auto}
+  .person-row > span:first-of-type{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .trip-households{margin-top:10px;padding-top:4px;border-top:1px solid var(--line)}
+  .trip-households .form-section{margin-top:6px}
   .split-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;
       font-family:Inter,system-ui,sans-serif;margin-bottom:5px}
   .split-grid{display:grid;grid-template-columns:1.6fr 0.7fr 0.9fr;gap:6px}
@@ -1483,6 +1506,7 @@ function applyRentalKindToShares(prefix, kind){
     el.hidden = !housing;
     if (!housing) el.value = "";
   });
+  document.querySelectorAll("[data-bp-place]").forEach(el => { el.hidden = !housing; });
   document.querySelectorAll(`[data-${prefix}-bp-unit]`).forEach(sel => {
     for (const opt of sel.options){
       if (opt.value === "couch" || opt.value === "wholeroom"){
@@ -1511,22 +1535,15 @@ function applyRentalKindToShares(prefix, kind){
 // slept where, and that is the part the arithmetic is built on.
 function applyBedroomsToRooms(prefix){
   const field = document.querySelector(`[data-${prefix}-bedrooms]`);
-  const boxes = [...document.querySelectorAll(`[data-${prefix}-bp-room]`)];
-  if (!boxes.length) return;
-  const n = Math.max(0, Math.round(Number(field?.value) || 0));
-  const names = [];
-  for (let i = 1; i <= n; i++) names.push(`Bedroom ${i}`);
-  for (const el of boxes){
-    if (el.value && !names.includes(el.value)) names.push(el.value);
-  }
-  for (const el of boxes){
-    const key = el.getAttribute(`data-${prefix}-bp-room`);
-    const wrap = document.createElement("div");
-    wrap.innerHTML = roomFieldHTML(prefix, key, el.value, names, el.disabled);
-    const next = wrap.firstElementChild;
-    next.hidden = el.hidden;
-    el.replaceWith(next);
-  }
+  const ctx = bpContext[prefix];
+  if (!ctx || !field) return;
+  // The count decides the layout, not just the list of rooms: going from
+  // none to some turns the block into the bedrooms themselves. So the
+  // context it rebuilds from has to carry the number being typed, not the
+  // one the booking was loaded with.
+  ctx.bookingRow = { ...ctx.bookingRow,
+                     bedrooms: field.value === "" ? null : parseInt(field.value, 10) };
+  rerenderBookingPeople(prefix);
 }
 
 function applyRentalKindToProgramField(prefix, kind){
@@ -2470,6 +2487,7 @@ async function loadPeople(){
 async function loadPersonGroups(){
   const { data, error } = await supabase.from("person_groups").select("*").order("position", { ascending: true });
   if (error) { console.error(error); return []; }
+  if (data[0]) groupHeadAvailable = "head_id" in data[0];
   return data;
 }
 
@@ -2497,9 +2515,10 @@ async function deletePerson(id){
 
 async function createPersonGroup(name){
   const position = personGroups.length ? Math.max(...personGroups.map(g => g.position)) + 1000 : 0;
-  const { error } = await supabase.from("person_groups")
-    .insert({ owner_id: session.user.id, name, position });
-  if (error) alert(error.message);
+  const { data, error } = await supabase.from("person_groups")
+    .insert({ owner_id: session.user.id, name, position }).select().single();
+  if (error) { alert(error.message); return null; }
+  return data;
 }
 
 async function updatePersonGroup(id, patch){
@@ -2589,6 +2608,8 @@ let companionPassAvailable = true;
 let lodgingRoomsAvailable = true;
 // rentals.bedrooms — see the note by flightAirlineAvailable.
 let lodgingBedroomsAvailable = true;
+// person_groups.head_id — likewise.
+let groupHeadAvailable = true;
 // booking_people.is_covered / covered_by — likewise.
 let coveredSharesAvailable = true;
 // booking_people.cost_percent_text — likewise.
@@ -3007,6 +3028,158 @@ function roomFieldHTML(prefix, key, room, names, couch){
 }
 
 // The per-booking share block.
+// The context the share block was last rendered with, so a change that
+// regroups it can rebuild it without the caller passing everything back in.
+// One booking form is open at a time, which is what makes a single slot per
+// prefix enough.
+const bpContext = {};
+
+// One person or household on a booking. The same row whichever way the block
+// is laid out — the only difference is whether their room comes from a
+// placement picker (bedrooms stated, so the bedroom is the unit) or from the
+// room box beside their name.
+function bookingPersonRowHTML(trip, prefix, sub, row, kind, bookingRow, subjects, bedroomNames, placed){
+  const companion = !!row?.is_companion;
+  const couch = !!row?.is_couch;
+  const covers = !!row?.covers_room;
+  const covered = !!row?.is_covered;
+  // All of these work the figure out from the booking, so there is nothing
+  // to type in the share box.
+  const freeSeat = companion || couch || covers || covered;
+  const rooms = kind !== "flight" && lodgingRoomsAvailable;
+  // Shown as it was typed — "1/6", not 16.666666666666668.
+  const val = shareValue(row);
+  // A seat is priced per person, so a flight share starts at one ticket
+  // rather than blank. Housing has no such natural unit.
+  const ticket = kind === "flight" ? flightTicketCost(bookingRow) : 0;
+  const where = !row ? "" : couch ? "__couch__" : (row.room || "");
+  return `<div class="bp-row${rooms ? " bp-row-rooms" : ""}${placed ? " bp-row-placed" : ""}"
+      data-bp-row="${sub.key}">
+    <label class="bp-who">
+      <input type="checkbox" data-${prefix}-bp-on="${sub.key}" data-bp-on-box
+        ${row ? "checked" : ""}${placed ? " hidden" : ""}>
+      <span>${esc(sub.name)}${sub.sub ? `<span class="bp-sub">${esc(sub.sub)}</span>` : ""}</span>
+    </label>
+    ${kind === "flight" ? `<input type="text" class="bp-ref" data-${prefix}-bp-ref="${sub.key}"
+      placeholder="their reference" value="${esc(row?.reference || "")}">` : ""}
+    ${!rooms ? "" : placed
+      ? `<select data-bp-place="${sub.key}" aria-label="Where they're sleeping">
+          <option value="">— not on this booking —</option>
+          ${bedroomNames.map(n => `<option value="${esc(n)}" ${
+            n === where ? "selected" : ""}>${esc(n)}</option>`).join("")}
+          <option value="__couch__" ${couch ? "selected" : ""}>Couch — no bedroom</option>
+        </select>
+        <input type="hidden" data-${prefix}-bp-room="${sub.key}" data-bp-room-input
+          value="${esc(couch ? "" : (row?.room || ""))}">`
+      : roomFieldHTML(prefix, sub.key, row?.room || "", bedroomNames, couch)}
+    <span class="bp-share">
+      <input type="text" inputmode="decimal" data-${prefix}-bp-val="${sub.key}"
+        data-ticket="${kind === "flight" ? ticket : ""}"
+        placeholder="${kind === "flight" && ticket
+          ? fmtCash(ticket, bookingRow.currency) : "150 or 1/5"}"
+        value="${freeSeat ? "" : esc(val)}" ${freeSeat ? "disabled" : ""}>
+      <select data-${prefix}-bp-unit="${sub.key}" data-bp-unit-select
+        aria-label="How their share is worked out">
+        <option value="auto" ${freeSeat ? "" : "selected"}>their share</option>
+        ${coveredSharesAvailable
+          ? `<option value="covered" ${covered ? "selected" : ""}>covered</option>` : ""}
+        ${kind === "flight" && companionPassAvailable
+          ? `<option value="companion" ${companion ? "selected" : ""}>pass</option>` : ""}
+        ${rooms ? `<option value="couch" ${couch ? "selected" : ""}${placed ? " hidden" : ""}>couch</option>
+        <option value="wholeroom" ${covers ? "selected" : ""}>whole room</option>` : ""}
+      </select>
+    </span>
+    ${!coveredSharesAvailable ? "" : `<select class="bp-by"
+      data-${prefix}-bp-by="${sub.key}" data-bp-by-select
+      aria-label="Covered by" ${covered ? "" : "hidden"}>
+      <option value="">covered by whoever paid</option>
+      ${subjects.filter(o => o.key !== sub.key && o.personId)
+        .map(o => `<option value="${o.personId}" ${
+          row?.covered_by === o.personId ? "selected" : ""}>covered by ${esc(o.name)}</option>`).join("")}
+    </select>`}
+  </div>`;
+}
+
+// Which bedroom, couch or nothing a subject is in. The key a row is filed
+// under when the block is laid out bedroom by bedroom.
+function bookingPlacement(row){
+  if (!row) return "__off__";
+  if (row.is_couch) return "__couch__";
+  return row.room || "__nobed__";
+}
+
+// The inside of the share block: either a plain list of everyone, or — once
+// the place has a stated number of bedrooms — the bedrooms themselves, each
+// with whoever is paying for it underneath. The second is the shape of the
+// question you actually have while sorting out a house: not "where is Eugene
+// sleeping" but "who's got the big room, and what is it costing them".
+function bookingPeopleRowsHTML(trip, prefix, existing, kind, bookingRow){
+  const subjects = bookingSubjects(trip, kind);
+  const byKey = new Map((existing || []).map(b =>
+    [b.group_id ? `g:${b.group_id}` : `p:${b.person_id}`, b]));
+  const bedroomNames = kind === "flight" ? [] : bedroomOptions(bookingRow, existing);
+  const stated = kind !== "flight" && lodgingRoomsAvailable
+    && Math.max(0, Math.round(Number(bookingRow?.bedrooms) || 0)) > 0;
+  const row = sub => bookingPersonRowHTML(trip, prefix, sub, byKey.get(sub.key),
+    kind, bookingRow, subjects, bedroomNames, stated);
+
+  if (!stated) return subjects.map(row).join("");
+
+  const inside = (where) => subjects.filter(sub => bookingPlacement(byKey.get(sub.key)) === where);
+  const cost = bedroomCost(bookingRow);
+  const group = (title, note, members) => `<div class="bp-group">
+    <div class="bp-group-head"><span class="bp-group-name">${esc(title)}</span>${
+      note ? `<span class="bp-group-note">${note}</span>` : ""}</div>
+    ${members.length ? members.map(row).join("")
+      : `<p class="bp-group-empty">Nobody in it — this one's on whoever booked the place.</p>`}
+  </div>`;
+
+  const parts = bedroomNames.map(name => {
+    const members = inside(name);
+    // Who is being charged for the room, which is not the same as who is in
+    // it: one of them may be covering the whole thing.
+    const paying = members.filter(sub => {
+      const r = byKey.get(sub.key);
+      return !r?.is_covered;
+    });
+    const covering = paying.filter(sub => byKey.get(sub.key)?.covers_room);
+    const splitBetween = (covering.length ? covering : paying).length;
+    const note = [
+      cost ? esc(fmtCash(cost, bookingRow.currency)) : "",
+      splitBetween > 1 && cost ? `${esc(fmtCash(cost / splitBetween, bookingRow.currency))} each` : "",
+    ].filter(Boolean).join(" · ");
+    return group(name, note, members);
+  });
+
+  const couch = inside("__couch__");
+  if (couch.length) parts.push(group("Couch", "listed, charged nothing", couch));
+  const nobed = inside("__nobed__");
+  if (nobed.length) parts.push(group("On the booking, no bedroom", "", nobed));
+  const off = inside("__off__");
+  if (off.length) parts.push(`<div class="bp-group bp-group-off">
+    <div class="bp-group-head"><span class="bp-group-name">Not on this booking</span></div>
+    ${off.map(row).join("")}
+  </div>`);
+  return parts.join("");
+}
+
+// Rebuilds the block in place after somebody moves room, so they appear under
+// the bedroom they just picked. Reads the form rather than the database,
+// because nothing here is saved until Save is pressed and the half-finished
+// state is the one being edited.
+function rerenderBookingPeople(prefix){
+  const ctx = bpContext[prefix];
+  const host = document.querySelector(`[data-bp-people="${prefix}"]`);
+  if (!ctx || !host) return;
+  const existing = readBookingPeople(host, prefix, null).map(r => ({
+    person_id: r.personId, group_id: r.groupId, room: r.room,
+    cost: r.cost, cost_percent: r.costPercent, cost_percent_text: r.costPercentText,
+    is_companion: r.isCompanion, is_couch: r.isCouch, covers_room: r.coversRoom,
+    is_covered: r.isCovered, covered_by: r.coveredBy, reference: r.reference,
+  }));
+  host.innerHTML = bookingPeopleRowsHTML(ctx.trip, prefix, existing, ctx.kind, ctx.bookingRow);
+}
+
 function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
   const subjects = bookingSubjects(trip, kind);
   bookingRow = bookingRow || {};
@@ -3016,15 +3189,15 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
         <b>Trip details</b> and they'll show up here.</span>
     </div>`;
   }
-  const byKey = new Map((existing || []).map(b =>
-    [b.group_id ? `g:${b.group_id}` : `p:${b.person_id}`, b]));
+  // Stashed for the rebuild that follows a move between bedrooms.
+  bpContext[prefix] = { trip, kind, bookingRow };
   // Rooms already named on this booking, offered as suggestions — the second
   // person into a room should pick the name, not retype it, since two
   // spellings would read as two rooms and halve the cost twice.
   const namedRooms = [...new Set((existing || []).map(b => b.room).filter(Boolean))];
-  const bedroomNames = kind === "flight" ? [] : bedroomOptions(bookingRow, existing);
+  const beds = kind !== "flight" && Math.max(0, Math.round(Number(bookingRow.bedrooms) || 0));
   return `
-    <div class="form-section">Who's on this booking
+    <div class="form-section">${beds ? "Who's in each bedroom" : "Who's on this booking"}
       <span class="field-opt">(leave empty if it's all yours)</span>
       <button type="button" class="btn-link bp-clear" data-bp-clear>start over</button>
     </div>
@@ -3032,60 +3205,14 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
       ${kind !== "flight" && lodgingRoomsAvailable ? `<datalist id="bp-rooms-${prefix}">
         ${namedRooms.map(r => `<option value="${esc(r)}"></option>`).join("")}
       </datalist>` : ""}
-      <div class="booking-people">
-        ${subjects.map(sub => {
-          const row = byKey.get(sub.key);
-          const companion = !!row?.is_companion;
-          const couch = !!row?.is_couch;
-          const covers = !!row?.covers_room;
-          const covered = !!row?.is_covered;
-          // All of these work the figure out from the booking, so there is
-          // nothing to type in the share box.
-          const freeSeat = companion || couch || covers || covered;
-          const rooms = kind !== "flight" && lodgingRoomsAvailable;
-          // Shown as it was typed — "1/6", not 16.666666666666668.
-          const val = shareValue(row);
-          // A seat is priced per person, so a flight share starts at one
-          // ticket rather than blank. Housing has no such natural unit.
-          const ticket = kind === "flight" ? flightTicketCost(bookingRow) : 0;
-          return `<div class="bp-row${rooms ? " bp-row-rooms" : ""}" data-bp-row="${sub.key}">
-            <label class="bp-who">
-              <input type="checkbox" data-${prefix}-bp-on="${sub.key}" data-bp-on-box
-                ${row ? "checked" : ""}>
-              <span>${esc(sub.name)}${sub.sub ? `<span class="bp-sub">${esc(sub.sub)}</span>` : ""}</span>
-            </label>
-            ${kind === "flight" ? `<input type="text" class="bp-ref" data-${prefix}-bp-ref="${sub.key}"
-              placeholder="their reference" value="${esc(row?.reference || "")}">` : ""}
-            ${rooms ? roomFieldHTML(prefix, sub.key, row?.room || "", bedroomNames, couch) : ""}
-            <span class="bp-share">
-              <input type="text" inputmode="decimal" data-${prefix}-bp-val="${sub.key}"
-                data-ticket="${kind === "flight" ? ticket : ""}"
-                placeholder="${kind === "flight" && ticket
-                  ? fmtCash(ticket, bookingRow.currency) : "150 or 1/5"}"
-                value="${freeSeat ? "" : esc(val)}" ${freeSeat ? "disabled" : ""}>
-              <select data-${prefix}-bp-unit="${sub.key}" data-bp-unit-select
-                aria-label="How their share is worked out">
-                <option value="auto" ${freeSeat ? "" : "selected"}>their share</option>
-                ${coveredSharesAvailable
-                  ? `<option value="covered" ${covered ? "selected" : ""}>covered</option>` : ""}
-                ${kind === "flight" && companionPassAvailable
-                  ? `<option value="companion" ${companion ? "selected" : ""}>pass</option>` : ""}
-                ${rooms ? `<option value="couch" ${couch ? "selected" : ""}>couch</option>
-                <option value="wholeroom" ${covers ? "selected" : ""}>whole room</option>` : ""}
-              </select>
-            </span>
-            ${!coveredSharesAvailable ? "" : `<select class="bp-by"
-              data-${prefix}-bp-by="${sub.key}" data-bp-by-select
-              aria-label="Covered by" ${covered ? "" : "hidden"}>
-              <option value="">covered by whoever paid</option>
-              ${subjects.filter(o => o.key !== sub.key && o.personId)
-                .map(o => `<option value="${o.personId}" ${
-                  row?.covered_by === o.personId ? "selected" : ""}>covered by ${esc(o.name)}</option>`).join("")}
-            </select>`}
-          </div>`;
-        }).join("")}
+      <div class="booking-people" data-bp-people="${prefix}">
+        ${bookingPeopleRowsHTML(trip, prefix, existing, kind, bookingRow)}
       </div>
-      <span class="field-hint">Tick who it covers.${kind === "flight"
+      <span class="field-hint">${beds
+        ? `Put each person — or each household — in a bedroom. A bedroom's cost divides
+           between whoever is in it, so sharing one doesn't cost double, and a household
+           counts as one: it goes to whoever pays for them.`
+        : "Tick who it covers."}${kind === "flight"
         ? " A flight share starts at one ticket; change it for anyone who paid a different fare."
         : " A share can be a flat amount or a percentage of the booking."}
         A share left blank takes an equal cut of whatever the others haven't claimed.${
@@ -3093,18 +3220,15 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           ? ` Set the unit to <b>pass</b> for a companion seat — it costs its passenger
              nothing, and the summary says so rather than showing a bare $0.00.` : ""}${
         kind !== "flight" && lodgingRoomsAvailable
-          ? `<span data-${prefix}-room-hint> Put each person in a <b>bedroom</b> and the
-             cost divides between rooms rather than between people, so sharing one doesn't
-             cost double.${bedroomCost(bookingRow)
+          ? `<span data-${prefix}-room-hint>${bedroomCost(bookingRow)
                ? ` Each bedroom is ${esc(fmtCash(bedroomCost(bookingRow), bookingRow.currency))}
                  of this booking, and one nobody takes still costs that — it goes to
                  whoever booked the place.`
-               : ` Say how many <b>bedrooms</b> the place has, above, and they become a
-                 list to pick from.`}
+               : ` Say how many <b>bedrooms</b> the place has, above, and this turns into a
+                 list of them to put people in.`}
              Anyone not taking a bedroom goes down as <b>couch</b> — listed, and charged nothing.
              Set someone to <b>whole room</b> to have them cover theirs on their own
-             instead of splitting it with whoever else is in it — a parent taking the
-             family's room.</span>` : ""}
+             instead of splitting it with whoever else is in it.</span>` : ""}
         Set someone to <b>covered</b> and their share is worked out as usual and
         charged to whoever is covering it — the payer unless you say otherwise.
         The share box reads what you write: <b>150</b> is money, <b>1/5</b> is a fifth
@@ -4245,6 +4369,7 @@ function splitCents(total, n){
 // can't mean what it appears to.
 function settleTrip(input){
   const groupMembers = input.groupMembers || {};
+  const groupHeads = input.groupHeads || {};
   const people = {};
   const warnings = [];
   const breakdown = [];
@@ -4278,6 +4403,25 @@ function settleTrip(input){
     if (subject.groupId){
       const members = groupMembers[subject.groupId] || [];
       if (!members.length) return false;
+      // A household can name someone who carries its costs — the one who
+      // actually settles up for the family. Then the figure is theirs whole
+      // rather than divided, and the rest of the household stays on the
+      // booking at nothing, because being there is the fact that put the
+      // charge on their head in the first place.
+      const head = groupHeads[subject.groupId];
+      if (head && members.includes(head)){
+        for (const m of members){
+          if (m === head) continue;
+          person(m).owesCents += 0;
+          if (into){
+            into.cents[m] = (into.cents[m] || 0) + 0;
+            into.reason[m] = { why: "household", by: head,
+                               room: reason ? reason.room || null : null };
+          }
+        }
+        add(head, cents);
+        return true;
+      }
       splitCents(cents, members.length).forEach((c, i) => add(members[i], c));
       return true;
     }
@@ -4611,10 +4755,20 @@ function settlementPayments(trip){
   }));
 }
 
+// Who carries each household's costs, for the households that have said.
+// Account-level, like the household itself: who settles up for the family
+// doesn't change from one trip to the next.
+function settlementHeads(){
+  const out = {};
+  for (const g of personGroups) if (g.head_id) out[g.id] = g.head_id;
+  return out;
+}
+
 function settlementFor(trip){
   return settleTrip({
     bookings: settlementBookings(trip),
     groupMembers: settlementGroups(trip),
+    groupHeads: settlementHeads(),
     payments: settlementPayments(trip),
     selfId: selfId(),
   });
@@ -4760,6 +4914,7 @@ const SHARE_BASIS = {
   covers: "covering the whole of their room",
   covering: "covering someone else's share as well as their own",
   sharing: "in a room someone else is covering",
+  household: "in a household whose costs someone else carries",
   couch: "not taking a bedroom, so not paying for one",
   companion: "flown on a companion pass, so it cost them nothing",
   payer: "the remainder, left with whoever paid",
@@ -4780,6 +4935,7 @@ function shareParts(trip, b){
       ? ` <span class="field-opt">for ${esc(settlementSubjectName(trip, l.forWhom))}</span>` : ""} <b>${
     l.why === "couch" ? "no charge"
     : l.why === "sharing" ? "sharing"
+    : l.why === "household" ? "with their household"
     : l.why === "companion" ? "companion pass"
     : fmtCash(fromCents(l.cents), "USD")}</b></span>`;
 
@@ -4821,6 +4977,7 @@ function reasonText(trip, r){
     case "sharing":   return `sharing ${r.room || "a room"}, covered by someone else`;
     case "couch":     return "on the couch, so not paying for a bedroom";
     case "companion": return "flying on a companion pass";
+    case "household": return `in the room, covered by ${settlementSubjectName(trip, r.by)}`;
     case "covered":   return `covered by ${settlementSubjectName(trip, r.by)}`;
     case "covering":  return `covering ${settlementSubjectName(trip, r.forWhom)}${room} as well`;
     case "payer":     return "the rest of the booking, as the one who paid";
@@ -5101,6 +5258,20 @@ function renderPeoplePage(){
   wirePeopleBody();
 }
 
+// Who settles up for a household. "Split between them" is the old behaviour
+// and stays the default, because a household that has never said is not the
+// same as one that has said everybody pays their own way — and the figures
+// read the same either way until somebody is named.
+function headPickerHTML(g){
+  const members = people.filter(p => p.group_id === g.id);
+  if (!members.length) return "";
+  return `<select data-pg-head="${g.id}" aria-label="Who pays for this household">
+    <option value="">— split between them —</option>
+    ${members.map(m => `<option value="${m.id}" ${m.id === g.head_id ? "selected" : ""}>${
+      esc(m.name)} pays</option>`).join("")}
+  </select>`;
+}
+
 function renderPeopleBody(){
   const fmt = n => fmtCash(n, "USD");
   // One row per person. Households decide how a booking is charged, not how
@@ -5141,12 +5312,15 @@ function renderPeopleBody(){
 
       <section class="people-section">
         <div class="section-head">Households</div>
-        <p class="field-hint">People in a household have their shares added together and settle as one.</p>
+        <p class="field-hint">People in a household have their shares added together and settle as
+          one. Name whoever settles up for them and the whole household's costs are theirs,
+          rather than divided between the people in it.</p>
         <div class="people-table">
           ${personGroups.map(g => `
             <div class="person-card">
               <div class="person-card-main">
                 <input type="text" value="${esc(g.name)}" data-pg-name="${g.id}" aria-label="Household name">
+                ${groupHeadAvailable ? headPickerHTML(g) : ""}
                 <span class="field-hint">${
                   people.filter(p => p.group_id === g.id).map(p => esc(p.name)).join(", ") || "nobody yet"}</span>
               </div>
@@ -5240,6 +5414,12 @@ function wirePeopleBody(){
       const g = groupById(el.dataset.pgName), name = el.value.trim();
       if (!g || !name || name === g.name){ el.value = g?.name || name; return; }
       await updatePersonGroup(g.id, { name }); await reload();
+    });
+  });
+  document.querySelectorAll("[data-pg-head]").forEach(el => {
+    el.addEventListener("change", async () => {
+      await updatePersonGroup(el.dataset.pgHead, { head_id: el.value || null });
+      await reload();
     });
   });
   document.querySelectorAll("[data-pg-del]").forEach(btn => {
@@ -6110,19 +6290,43 @@ function renderMetaForm(trip){
         list, and stops counting toward any of your totals.</span>
     </label>`}
     <div class="field span2">Who's on this trip
-      <span class="field-hint">Tick anyone from your people list. Manage the list itself —
-        names, emails, households — on the <b>People &amp; costs</b> page.</span>
+      <span class="field-hint">Tick anyone from your people list, and put the ones who
+        travel together in a household. Add and rename people on the
+        <b>People &amp; costs</b> page.</span>
       <div class="people-list" data-m-people>
         ${people.length ? people.map(p => {
           const on = tripPeople(trip).find(tp => tp.person_id === p.id);
           return `<label class="person-row">
             <input type="checkbox" data-trip-person="${p.id}" ${on ? "checked" : ""}>
             <span>${esc(p.name)}${p.is_self ? " (you)" : ""}</span>
-            ${p.email ? `<span class="field-opt">${esc(p.email)}</span>` : ""}
+            <select data-m-person-group="${p.id}" aria-label="Household">
+              <option value="">— on their own —</option>
+              ${personGroups.map(g => `<option value="${g.id}" ${
+                g.id === p.group_id ? "selected" : ""}>${esc(g.name)}</option>`).join("")}
+              <option value="__new__">+ New household…</option>
+            </select>
           </label>`;
         }).join("") : `<p class="empty-hist">No one in your people list yet — add them on
           the People &amp; costs page.</p>`}
       </div>
+      ${!groupHeadAvailable ? "" : (() => {
+        // Only the households with somebody on this trip. The others are
+        // real, they're just not this trip's business.
+        const here = tripPeople(trip).map(tp => personById(tp.person_id)).filter(Boolean);
+        const shown = personGroups.filter(g => here.some(p => p.group_id === g.id));
+        if (!shown.length) return "";
+        return `<div class="trip-households">
+          <div class="form-section">Who pays for each household</div>
+          ${shown.map(g => `<label class="person-row">
+            <span>${esc(g.name)}<span class="bp-sub">${
+              people.filter(p => p.group_id === g.id).map(p => esc(p.name)).join(", ")}</span></span>
+            ${headPickerHTML(g)}
+          </label>`).join("")}
+          <span class="field-hint">Name someone and the household's share of a booking is
+            theirs whole, with the rest of the household listed on it at nothing. Leave it
+            and the share divides between them as it always did.</span>
+        </div>`;
+      })()}
     </div>
     ${categories.find(c => c.id === trip.category_id)?.is_ski ? `
     <label class="field field-narrow">Days on the slopes
@@ -6715,6 +6919,29 @@ document.addEventListener("change", (e) => {
     by.hidden = sel.value !== "covered";
     if (by.hidden) by.value = "";
   }
+});
+
+// The bedroom picker stands in for three controls at once — on the booking
+// at all, which room, and whether they're on the couch. It sets them, then
+// has the block rebuilt so the person moves to the bedroom they just chose.
+document.addEventListener("change", (e) => {
+  const sel = e.target instanceof Element ? e.target.closest("[data-bp-place]") : null;
+  if (!sel) return;
+  const host = sel.closest("[data-bp-people]");
+  const prefix = host?.getAttribute("data-bp-people");
+  const row = sel.closest(".bp-row");
+  if (!prefix || !row) return;
+  const box = row.querySelector("[data-bp-on-box]");
+  const roomEl = row.querySelector("[data-bp-room-input]");
+  const unit = row.querySelector("[data-bp-unit-select]");
+  const couch = sel.value === "__couch__";
+  if (box) box.checked = sel.value !== "";
+  if (roomEl) roomEl.value = couch || sel.value === "" ? "" : sel.value;
+  if (unit){
+    if (couch) unit.value = "couch";
+    else if (unit.value === "couch") unit.value = "auto";
+  }
+  rerenderBookingPeople(prefix);
 });
 
 // Puts every share on one booking back to untouched. It only clears the
@@ -7991,6 +8218,34 @@ function wireEvents(activeTrip){
         } else return;
         await refresh();
         document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+      });
+    });
+
+    // Reopens the panel on the same form, so a change that reshapes the
+    // household list is visible without hunting for the edit button again.
+    const reopenMeta = async () => {
+      await refresh();
+      document.querySelector(`[data-edit-meta="${activeTrip.id}"]`)?.click();
+    };
+    holder.querySelectorAll("[data-m-person-group]").forEach(sel => {
+      sel.addEventListener("change", async () => {
+        const personId = sel.dataset.mPersonGroup;
+        let groupId = sel.value;
+        if (groupId === "__new__"){
+          const name = prompt("Name the household \u2014 e.g. The Nguyens");
+          if (!name || !name.trim()){ sel.value = personById(personId)?.group_id || ""; return; }
+          const made = await createPersonGroup(name.trim());
+          if (!made){ sel.value = personById(personId)?.group_id || ""; return; }
+          groupId = made.id;
+        }
+        await updatePerson(personId, { group_id: groupId || null });
+        await reopenMeta();
+      });
+    });
+    holder.querySelectorAll("[data-pg-head]").forEach(sel => {
+      sel.addEventListener("change", async () => {
+        await updatePersonGroup(sel.dataset.pgHead, { head_id: sel.value || null });
+        await reopenMeta();
       });
     });
 
