@@ -309,6 +309,10 @@
   .lane-stack{display:flex;flex-direction:column;gap:16px}
   .lane-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
   @media (max-width:900px){ .lane-grid{grid-template-columns:1fr} }
+  /* An open edit form takes the whole width. Housing and cars sit side by
+     side to be read, which is the wrong shape for filling in a form — and
+     the room planner is unusable in half a lane. */
+  .lane-grid:has(.edit-grid),.pair-row:has(.edit-grid){grid-template-columns:minmax(0,1fr)}
   .lane{background:var(--panel);border:1px solid var(--line);border-radius:12px;
       padding:14px;display:flex;flex-direction:column;gap:16px}
   .lane.lane-warn{border-color:var(--bad);box-shadow:inset 5px 0 0 0 var(--bad);
@@ -916,6 +920,46 @@
   .bp-group-note{font-size:12px;color:var(--ink);font-variant-numeric:tabular-nums}
   .bp-group-empty{margin:2px 0 4px;font-size:12px;color:var(--muted)}
   .bp-group-off{background:none;border-style:dashed;opacity:.85}
+  .planner{margin-bottom:10px}
+  .planner-rooms{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
+    gap:10px;margin-bottom:10px}
+  .planner-place{border:1px solid var(--line);border-radius:12px;padding:8px 10px 10px;
+    background:color-mix(in srgb, var(--panel2) 55%, transparent);min-height:92px;
+    display:flex;flex-direction:column}
+  .planner-place-couch{background:none}
+  .planner-place-tray{background:none;border-style:dashed}
+  .planner-place-head{display:flex;gap:4px 8px;align-items:baseline;flex-wrap:wrap;
+    justify-content:space-between;margin-bottom:7px}
+  .planner-place-name{font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--muted);white-space:nowrap}
+  .planner-place-note{font-size:11.5px;color:var(--ink);font-variant-numeric:tabular-nums;
+    white-space:nowrap;margin-left:auto}
+  .planner-chips{display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start;flex:1}
+  .planner-empty{font-size:11.5px;color:var(--muted);align-self:center}
+  .planner-chip{border:1px solid var(--line);border-radius:9px;padding:5px 8px;
+    background:var(--panel);font-size:12.5px;cursor:grab;user-select:none;
+    display:flex;flex-direction:column;gap:2px;max-width:100%}
+  .planner-chip:hover{border-color:var(--amber)}
+  .planner-chip-name{font-weight:600;display:flex;gap:6px;align-items:baseline}
+  .planner-chip-who,.planner-chip-tag{font-size:10.5px;color:var(--muted);
+    letter-spacing:.02em;font-weight:400}
+  .planner-chip-sub{background:color-mix(in srgb, var(--panel2) 70%, transparent);
+    font-size:12px;padding:3px 7px}
+  .planner-chip-sub .planner-chip-name{font-weight:500}
+  .planner-under{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+  /* The one being dragged, and wherever it would land. */
+  .planner-chip-moving{opacity:.45}
+  .planner-over{border-color:var(--amber);
+    box-shadow:0 0 0 1px color-mix(in srgb, var(--amber) 55%, transparent)}
+  .planner-picked{border-color:var(--amber);
+    box-shadow:0 0 0 1px color-mix(in srgb, var(--amber) 55%, transparent)}
+  .planner-list{margin-top:4px}
+  .planner-list > summary{font-size:12px;color:var(--muted);cursor:pointer;
+    padding:4px 0;list-style:none}
+  .planner-list > summary::-webkit-details-marker{display:none}
+  .planner-list > summary::before{content:"▸";display:inline-block;margin-right:6px}
+  .planner-list[open] > summary::before{content:"▾"}
+  .planner-list > summary:hover{color:var(--amber)}
   .bp-row-placed .bp-who{min-width:0}
   /* Laid out by bedroom, a row is one line: who, where, and how their share
      is worked out. The share box only drops to its own line in the flat
@@ -3100,6 +3144,138 @@ function bookingPersonRowHTML(trip, prefix, sub, row, kind, bookingRow, subjects
   </div>`;
 }
 
+// ---------------- The room planner ----------------
+//
+// Dragging people into rooms, rather than reading down a list of names and
+// setting each one's room from a dropdown. The list is the better way to
+// check what you entered; this is the better way to enter it, because the
+// question — who's got which room, and who's sharing with whom — is a
+// question about a floor plan and not about a form.
+//
+// Nothing new is stored. A party is a covered share: drop Chrstine onto
+// Eugene and Chrstine's share is worked out as usual and charged to Eugene,
+// which is exactly "Eugene is responsible for that room". Being in a room
+// is the room name already on the share row. So the planner is a second way
+// to write the rows the list writes, and the two can't disagree about what
+// a booking says.
+
+// The person a subject's costs land on: themselves, or the household's head.
+// A household that hasn't named one falls back to whoever is listed first,
+// since somebody has to be the one holding the bill, and the chip says who.
+function subjectHead(sub){
+  if (sub.personId) return sub.personId;
+  const g = groupById(sub.groupId);
+  if (g?.head_id) return g.head_id;
+  const members = people.filter(pp => pp.group_id === sub.groupId);
+  return members[0]?.id || null;
+}
+
+// Who is a party of their own and who is under somebody else. A subject is
+// under another when its share is covered by that one's head.
+function plannerParties(subjects, byKey){
+  const headOf = new Map();
+  for (const sub of subjects){
+    const h = subjectHead(sub);
+    if (h) headOf.set(h, sub.key);
+  }
+  const under = new Map();
+  const top = [];
+  for (const sub of subjects){
+    const row = byKey.get(sub.key);
+    const by = row?.is_covered ? row.covered_by : null;
+    const host = by ? headOf.get(by) : null;
+    // Covered by someone who isn't on this trip, or by themselves, is not a
+    // party — it's a share arrangement the list handles. It stays top-level.
+    if (host && host !== sub.key){
+      if (!under.has(host)) under.set(host, []);
+      under.get(host).push(sub);
+    } else top.push(sub);
+  }
+  return { top, under };
+}
+
+// The rooms, and who's in each. The tray at the end is everyone not in the
+// house at all — on this booking means in a room or on the couch, because a
+// person on a stay with no room of any kind is charged for one.
+function plannerPlaces(subjects, byKey, bookingRow){
+  const { top, under } = plannerParties(subjects, byKey);
+  const names = bedroomOptions(bookingRow, [...byKey.values()]);
+  const cost = bedroomCost(bookingRow);
+  // A party's room is its head's room; the people under them follow.
+  const where = (sub) => {
+    const row = byKey.get(sub.key);
+    if (!row) return "__off__";
+    if (row.is_couch) return "__couch__";
+    return row.room || "__off__";
+  };
+  const party = (sub) => ({ sub, row: byKey.get(sub.key) || null,
+                            under: (under.get(sub.key) || []) });
+  const inside = (key) => top.filter(sub => where(sub) === key).map(party);
+
+  const places = names.map(name => {
+    const parties = inside(name);
+    return { key: name, name, kind: "bedroom", parties,
+             cost: cost || null,
+             each: cost && parties.length > 1 ? cost / parties.length : null };
+  });
+  places.push({ key: "__couch__", name: "Couch", kind: "couch",
+                parties: inside("__couch__"), cost: null, each: null });
+  places.push({ key: "__off__", name: "Not in the house", kind: "tray",
+                parties: inside("__off__"), cost: null, each: null });
+  return places;
+}
+
+function plannerChipHTML(p, depth){
+  const name = p.sub.name;
+  const head = depth ? "" : (p.under.length && p.sub.personId
+    ? `<span class="planner-chip-tag">pays for ${p.under.length + 1}</span>` : "");
+  return `<div class="planner-chip${depth ? " planner-chip-sub" : ""}"
+      draggable="true" data-bp-chip="${p.sub.key}">
+    <span class="planner-chip-name">${esc(name)}${head}</span>
+    ${p.sub.sub ? `<span class="planner-chip-who">${esc(p.sub.sub)}</span>` : ""}
+    ${p.under.length ? `<div class="planner-under">
+      ${p.under.map(sub => plannerChipHTML({ sub, under: [] }, 1)).join("")}
+    </div>` : ""}
+  </div>`;
+}
+
+function roomPlannerHTML(trip, prefix, existing, bookingRow){
+  const subjects = bookingSubjects(trip, "rental");
+  const byKey = new Map((existing || []).map(b =>
+    [b.group_id ? `g:${b.group_id}` : `p:${b.person_id}`, b]));
+  const places = plannerPlaces(subjects, byKey, bookingRow);
+  const box = (pl) => `<div class="planner-place planner-place-${pl.kind}"
+      data-bp-place-box="${esc(pl.key)}">
+    <div class="planner-place-head">
+      <span class="planner-place-name">${esc(pl.name)}</span>
+      <span class="planner-place-note">${pl.each
+        ? `${esc(fmtCash(pl.cost, bookingRow.currency))} · ${
+            esc(fmtCash(pl.each, bookingRow.currency))} each`
+        : pl.cost ? esc(fmtCash(pl.cost, bookingRow.currency))
+        : pl.kind === "couch" ? "no charge" : ""}</span>
+    </div>
+    <div class="planner-chips">
+      ${pl.parties.map(p => plannerChipHTML(p, 0)).join("")}
+      ${pl.parties.length ? "" : `<span class="planner-empty">${
+        pl.kind === "bedroom" ? "Nobody — on whoever booked"
+        : pl.kind === "couch" ? "Nobody on the couch"
+        : "Everyone's in the house"}</span>`}
+    </div>
+  </div>`;
+  const rooms = places.filter(pl => pl.kind !== "tray");
+  const tray = places.find(pl => pl.kind === "tray");
+  return `<div class="planner" data-bp-planner="${prefix}">
+    <div class="planner-rooms">${rooms.map(box).join("")}</div>
+    ${box(tray)}
+    <span class="field-hint">Drag someone into a bedroom, or tap them and then tap the
+      room. Drop one person onto another and they travel together: the one you dropped
+      them on pays for the room, and the rest of their party is listed in it at nothing.
+      Drag somebody out again to put them back on their own.</span>
+  </div>`;
+}
+
+// ---------------- /The room planner ----------------
+
 // Which bedroom, couch or nothing a subject is in. The key a row is filed
 // under when the block is laid out bedroom by bedroom.
 function bookingPlacement(row){
@@ -3124,6 +3300,12 @@ function bookingPeopleRowsHTML(trip, prefix, existing, kind, bookingRow){
     kind, bookingRow, subjects, bedroomNames, stated);
 
   if (!stated) return subjects.map(row).join("");
+
+  // The planner is the way in; the list below it is the way to check what
+  // went in, and the only place the odd cases live — a flat share somebody
+  // agreed, a percentage, a seat on a companion pass. Both write the same
+  // inputs, so opening the list after a drag shows what the drag did.
+  const planner = roomPlannerHTML(trip, prefix, existing, bookingRow);
 
   const inside = (where) => subjects.filter(sub => bookingPlacement(byKey.get(sub.key)) === where);
   const cost = bedroomCost(bookingRow);
@@ -3160,7 +3342,10 @@ function bookingPeopleRowsHTML(trip, prefix, existing, kind, bookingRow){
     <div class="bp-group-head"><span class="bp-group-name">Not on this booking</span></div>
     ${off.map(row).join("")}
   </div>`);
-  return parts.join("");
+  return planner + `<details class="planner-list">
+    <summary>Every share, in a list</summary>
+    ${parts.join("")}
+  </details>`;
 }
 
 // Rebuilds the block in place after somebody moves room, so they appear under
@@ -6918,6 +7103,190 @@ document.addEventListener("change", (e) => {
   if (by){
     by.hidden = sel.value !== "covered";
     if (by.hidden) by.value = "";
+  }
+});
+
+// Moving somebody in the planner. Everything here writes the same form
+// inputs the list below writes — the room they're in, whether they're on the
+// couch, and whose bill their share goes on — and then has the block rebuilt
+// so they appear where they were dropped.
+//
+// What makes a party a party is the covered share, so joining one and
+// leaving one is just that flag going on and off. A head's dependants move
+// with them, because a party that sleeps in two rooms isn't a party.
+function plannerRowControls(prefix, key){
+  const host = document.querySelector(`[data-bp-people="${prefix}"]`);
+  const row = host?.querySelector(`.bp-row[data-bp-row="${key}"]`);
+  if (!row) return null;
+  return {
+    on: row.querySelector("[data-bp-on-box]"),
+    room: row.querySelector("[data-bp-room-input]"),
+    unit: row.querySelector("[data-bp-unit-select]"),
+    by: row.querySelector("[data-bp-by-select]"),
+  };
+}
+
+// Everyone travelling with this subject: them, and anyone whose share is
+// covered by their head.
+function plannerParty(prefix, key){
+  const ctx = bpContext[prefix];
+  const host = document.querySelector(`[data-bp-people="${prefix}"]`);
+  if (!ctx || !host) return [key];
+  const subjects = bookingSubjects(ctx.trip, "rental");
+  const me = subjects.find(sub => sub.key === key);
+  const head = me ? subjectHead(me) : null;
+  const out = [key];
+  if (!head) return out;
+  for (const sub of subjects){
+    if (sub.key === key) continue;
+    const c = plannerRowControls(prefix, sub.key);
+    if (c?.unit?.value === "covered" && c.by?.value === head) out.push(sub.key);
+  }
+  return out;
+}
+
+// Put one subject in a place: a bedroom by name, the couch, or out of the
+// house altogether.
+function plannerPlaceOne(prefix, key, where){
+  const c = plannerRowControls(prefix, key);
+  if (!c) return;
+  const off = where === "__off__";
+  const couch = where === "__couch__";
+  if (c.on) c.on.checked = !off;
+  if (c.room) c.room.value = off || couch ? "" : where;
+  if (c.unit){
+    if (couch) c.unit.value = "couch";
+    else if (c.unit.value === "couch") c.unit.value = "auto";
+  }
+}
+
+// Leaving a party: their share goes back to being their own.
+function plannerDetach(prefix, key){
+  const c = plannerRowControls(prefix, key);
+  if (!c) return;
+  if (c.unit?.value === "covered") c.unit.value = "auto";
+  if (c.by){ c.by.value = ""; c.by.hidden = true; }
+  const amount = document.querySelector(`[data-bp-people="${prefix}"] `
+    + `.bp-row[data-bp-row="${key}"] .bp-share input`);
+  if (amount) amount.disabled = false;
+}
+
+function plannerMove(prefix, key, where){
+  // Dragged out on their own, so they stop travelling with anybody.
+  plannerDetach(prefix, key);
+  for (const k of plannerParty(prefix, key)) plannerPlaceOne(prefix, k, where);
+  rerenderBookingPeople(prefix);
+}
+
+// Dropped onto somebody: they join that person's party, which puts the room
+// on that person's bill and moves them into it.
+function plannerJoin(prefix, key, hostKey){
+  const ctx = bpContext[prefix];
+  if (!ctx || key === hostKey) return;
+  const subjects = bookingSubjects(ctx.trip, "rental");
+  const hostSub = subjects.find(sub => sub.key === hostKey);
+  const hostHead = hostSub ? subjectHead(hostSub) : null;
+  if (!hostHead) return;
+  // Dropping the host onto one of its own dependants would make a ring, so
+  // the dependants come along instead of the party turning inside out.
+  const moving = plannerParty(prefix, key);
+  if (moving.includes(hostKey)) return;
+  const c = plannerRowControls(prefix, key);
+  if (!c?.unit || !c.by) return;
+  c.unit.value = "covered";
+  c.by.hidden = false;
+  c.by.value = hostHead;
+  const amount = document.querySelector(`[data-bp-people="${prefix}"] `
+    + `.bp-row[data-bp-row="${key}"] .bp-share input`);
+  if (amount){ amount.value = ""; amount.disabled = true; }
+  // Into whichever room the host is in, dependants and all.
+  const hostRoom = plannerRowControls(prefix, hostKey);
+  const where = !hostRoom?.on?.checked ? "__off__"
+    : hostRoom.unit?.value === "couch" ? "__couch__"
+    : (hostRoom.room?.value || "__off__");
+  for (const k of moving) plannerPlaceOne(prefix, k, where);
+  rerenderBookingPeople(prefix);
+}
+
+// Dragging, for a mouse. The tap-then-tap path below does the same work, so
+// the planner also answers to a finger and to a keyboard.
+let plannerDragKey = null;
+document.addEventListener("dragstart", (e) => {
+  const chip = e.target instanceof Element ? e.target.closest("[data-bp-chip]") : null;
+  if (!chip) return;
+  plannerDragKey = chip.getAttribute("data-bp-chip");
+  chip.classList.add("planner-chip-moving");
+  if (e.dataTransfer){ e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", plannerDragKey); }
+});
+document.addEventListener("dragend", () => {
+  plannerDragKey = null;
+  document.querySelectorAll(".planner-chip-moving").forEach(el => el.classList.remove("planner-chip-moving"));
+  document.querySelectorAll(".planner-over").forEach(el => el.classList.remove("planner-over"));
+});
+document.addEventListener("dragover", (e) => {
+  if (!plannerDragKey) return;
+  const target = e.target instanceof Element
+    ? e.target.closest("[data-bp-chip], [data-bp-place-box]") : null;
+  if (!target) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  document.querySelectorAll(".planner-over").forEach(el => el.classList.remove("planner-over"));
+  target.classList.add("planner-over");
+});
+document.addEventListener("drop", (e) => {
+  if (!plannerDragKey) return;
+  const el = e.target instanceof Element
+    ? e.target.closest("[data-bp-chip], [data-bp-place-box]") : null;
+  if (!el) return;
+  e.preventDefault();
+  const planner = el.closest("[data-bp-planner]");
+  const prefix = planner?.getAttribute("data-bp-planner");
+  const key = plannerDragKey;
+  plannerDragKey = null;
+  if (!prefix) return;
+  const onChip = el.getAttribute("data-bp-chip");
+  if (onChip) plannerJoin(prefix, key, onChip);
+  else plannerMove(prefix, key, el.getAttribute("data-bp-place-box"));
+});
+
+// Tap one, tap where it goes. The same two moves as dragging, for anyone
+// who can't drag — and quicker than dragging across a long list of rooms.
+let plannerPicked = null;
+document.addEventListener("click", (e) => {
+  if (!(e.target instanceof Element)) return;
+  const planner = e.target.closest("[data-bp-planner]");
+  if (!planner){
+    if (plannerPicked){
+      plannerPicked = null;
+      document.querySelectorAll(".planner-picked").forEach(el => el.classList.remove("planner-picked"));
+    }
+    return;
+  }
+  const prefix = planner.getAttribute("data-bp-planner");
+  const chip = e.target.closest("[data-bp-chip]");
+  const box = e.target.closest("[data-bp-place-box]");
+  const clear = () => {
+    plannerPicked = null;
+    planner.querySelectorAll(".planner-picked").forEach(el => el.classList.remove("planner-picked"));
+  };
+  if (chip){
+    const key = chip.getAttribute("data-bp-chip");
+    if (!plannerPicked){
+      plannerPicked = key;
+      chip.classList.add("planner-picked");
+    } else if (plannerPicked === key){
+      clear();
+    } else {
+      const from = plannerPicked;
+      clear();
+      plannerJoin(prefix, from, key);
+    }
+    return;
+  }
+  if (box && plannerPicked){
+    const from = plannerPicked;
+    clear();
+    plannerMove(prefix, from, box.getAttribute("data-bp-place-box"));
   }
 });
 

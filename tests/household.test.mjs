@@ -168,8 +168,10 @@ const ui = new Function("state", `
   ${["bookingCents", "bedroomCost", "bedroomOptions", "roomFieldHTML", "personById",
      "groupById", "tripPeople", "bookingSubjects", "shareValue", "flightTicketCost",
      "parseShare", "bookingPlacement", "bookingPersonRowHTML",
-     "bookingPeopleRowsHTML", "headPickerHTML"].map(extract).join("")}
-  return { bookingPeopleRowsHTML, bookingPlacement, headPickerHTML, bookingSubjects };
+     "bookingPeopleRowsHTML", "headPickerHTML", "subjectHead", "plannerParties",
+     "plannerPlaces", "plannerChipHTML", "roomPlannerHTML"].map(extract).join("")}
+  return { bookingPeopleRowsHTML, bookingPlacement, headPickerHTML, bookingSubjects,
+           subjectHead, plannerParties, plannerPlaces, roomPlannerHTML };
 `);
 
 const people = [
@@ -262,6 +264,142 @@ check("the couch wins over a room left behind",
 
 check("a household with nobody in it has nobody to pick",
   api.headPickerHTML({ id: "g-none", name: "Empty" }), "");
+
+// ---- the room planner ----------------------------------------------------
+//
+// The planner stores nothing of its own. A party is a covered share — drop
+// Chrstine onto Eugene and her share is charged to him, which is the same
+// sentence as "Eugene is responsible for that room". So these tests are
+// about one thing: that the picture it draws and the rows underneath it are
+// the same booking.
+
+const keyed = (rows) => new Map(rows.map(b =>
+  [b.group_id ? `g:${b.group_id}` : `p:${b.person_id}`, b]));
+const subjects = api.bookingSubjects(trip, "rental");
+const placesOf = (rows, bookingRow) =>
+  api.plannerPlaces(subjects, keyed(rows), bookingRow);
+const seating = (places) => Object.fromEntries(places.map(pl =>
+  [pl.name, pl.parties.map(p => p.under.length
+    ? `${p.sub.name} + ${p.under.map(u => u.name).join(" + ")}` : p.sub.name)]));
+
+const HOUSE = { bedrooms: 3, paid_cash: 900, currency: "USD" };
+
+check("who pays for a person is that person",
+  api.subjectHead({ key: "p:p-yu", personId: "p-yu", name: "yuhung" }), "p-yu");
+check("and for a household, the one it named",
+  api.subjectHead({ key: "g:g-ngs", groupId: "g-ngs", name: "The Ngs" }), "p-eug");
+
+{
+  const places = placesOf([
+    { person_id: "p-me", room: "Bedroom 1" },
+    { group_id: "g-ngs", room: "Bedroom 2" },
+  ], HOUSE);
+  check("every bedroom is a place, then the couch, then the tray",
+    places.map(pl => pl.name),
+    ["Bedroom 1", "Bedroom 2", "Bedroom 3", "Couch", "Not in the house"]);
+  check("people sit where their row says", seating(places),
+    { "Bedroom 1": ["Me"], "Bedroom 2": ["The Ngs"], "Bedroom 3": [],
+      "Couch": [], "Not in the house": ["yuhung"] });
+  check("an empty bedroom still costs what it costs", places[2].cost, 300);
+  check("and one party in a room isn't split", places[0].each, null);
+}
+
+{
+  // Dropped onto somebody: a covered share, which is what the planner draws
+  // as one chip inside another.
+  const places = placesOf([
+    { person_id: "p-me", room: "Bedroom 1" },
+    { person_id: "p-yu", room: "Bedroom 1", is_covered: true, covered_by: "p-me" },
+  ], HOUSE);
+  check("a covered share rides with whoever covers it", seating(places),
+    { "Bedroom 1": ["Me + yuhung"], "Bedroom 2": [], "Bedroom 3": [],
+      "Couch": [], "Not in the house": ["The Ngs"] });
+  check("a party is one party in the room, not two", places[0].each, null);
+}
+
+{
+  // Two parties in one bedroom do split it, and the room says so.
+  const places = placesOf([
+    { person_id: "p-me", room: "Bedroom 1" },
+    { person_id: "p-yu", room: "Bedroom 1" },
+  ], HOUSE);
+  check("two parties in one room split it", places[0].each, 150);
+}
+
+{
+  // Covered by someone not on this trip is a share arrangement, not a
+  // party — it has to stay a chip of its own rather than vanishing into
+  // somebody who isn't there.
+  const places = placesOf([
+    { person_id: "p-me", room: "Bedroom 1" },
+    { person_id: "p-yu", room: "Bedroom 2", is_covered: true, covered_by: "p-nobody" },
+  ], HOUSE);
+  check("covered by a stranger is still their own chip", seating(places)["Bedroom 2"],
+    ["yuhung"]);
+}
+
+{
+  // Covered by themselves would otherwise nest a chip inside itself.
+  const places = placesOf([
+    { person_id: "p-me", room: "Bedroom 1", is_covered: true, covered_by: "p-me" },
+  ], HOUSE);
+  check("covered by themselves doesn't nest", seating(places)["Bedroom 1"], ["Me"]);
+}
+
+{
+  // A household is one chip, and somebody can join it — the head named on
+  // the household is who their share goes to.
+  const places = placesOf([
+    { group_id: "g-ngs", room: "Bedroom 1" },
+    { person_id: "p-yu", room: "Bedroom 1", is_covered: true, covered_by: "p-eug" },
+  ], HOUSE);
+  check("joining a household means joining whoever pays for it",
+    seating(places)["Bedroom 1"], ["The Ngs + yuhung"]);
+}
+
+{
+  const places = placesOf([{ person_id: "p-me", is_couch: true }], HOUSE);
+  check("the couch is a place to be", seating(places)["Couch"], ["Me"]);
+  check("and it costs nothing", places.find(pl => pl.kind === "couch").cost, null);
+}
+
+{
+  // Nobody placed: everyone is in the tray, which is off the booking. A
+  // person on a stay with no room of any kind would be charged for a room
+  // of their own, so "not placed" has to mean "not on it".
+  const places = placesOf([], HOUSE);
+  // Households first, then whoever isn't in one — the order bookingSubjects
+  // offers them in, so the tray reads the same as the list underneath.
+  check("nobody placed, everybody in the tray", seating(places)["Not in the house"],
+    ["The Ngs", "Me", "yuhung"]);
+  check("and no bedroom claims anyone",
+    places.filter(pl => pl.kind === "bedroom").every(pl => !pl.parties.length), true);
+}
+
+{
+  // A row with a room the house no longer has — the count was turned down.
+  // The room stays on the list rather than the person silently moving.
+  const places = placesOf([{ person_id: "p-me", room: "Loft" }],
+    { bedrooms: 1, paid_cash: 900, currency: "USD" });
+  check("a room from before the count stays a room",
+    places.map(pl => pl.name), ["Bedroom 1", "Loft", "Couch", "Not in the house"]);
+  check("with whoever is in it still in it", seating(places)["Loft"], ["Me"]);
+}
+
+{
+  const html = api.roomPlannerHTML(trip, "er", [
+    { person_id: "p-me", room: "Bedroom 1" },
+    { person_id: "p-yu", room: "Bedroom 1", is_covered: true, covered_by: "p-me" },
+  ], HOUSE);
+  check("every chip can be picked up",
+    [...html.matchAll(/data-bp-chip="([^"]+)"/g)].map(m => m[1]).sort(),
+    ["g:g-ngs", "p:p-me", "p:p-yu"]);
+  check("every place can be dropped into",
+    [...html.matchAll(/data-bp-place-box="([^"]+)"/g)].map(m => m[1]),
+    ["Bedroom 1", "Bedroom 2", "Bedroom 3", "__couch__", "__off__"]);
+  check("a head says how many it's paying for", /pays for 2/.test(html), true);
+  check("an empty bedroom says whose it is", /Nobody — on whoever booked/.test(html), true);
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
