@@ -353,6 +353,9 @@
   .cancel-trip{color:var(--muted);font-size:12px;white-space:nowrap}
 
   .calendar-view{margin-bottom:20px}
+  /* Back out of a trip to the list of them. */
+  .trip-back{margin:-4px 0 10px}
+  .trip-back .btn-link{font-size:13px}
   .cal-year-block{margin-bottom:14px}
   .cal-year-block:last-child{margin-bottom:0}
   .cal-year-header{display:flex;align-items:center;gap:6px;cursor:pointer;margin-bottom:8px;
@@ -362,12 +365,18 @@
   .cal-year-caret{color:var(--amber);font-size:11px;display:inline-block;
       transition:transform .15s ease}
   .cal-year-caret.collapsed{transform:rotate(-90deg)}
-  .cal-month-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
-  @media (max-width:640px){ .cal-month-grid{grid-template-columns:repeat(2,1fr)} }
-  .cal-month-cell{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-      padding:8px 10px;min-height:56px}
-  .cal-month-label{font-size:11px;color:var(--muted);text-transform:uppercase;
-      letter-spacing:.08em;margin-bottom:6px;font-family:Inter,system-ui,sans-serif}
+  /* A year wants to be two rows, not three — and six to a row rather than
+     whatever fits, so the break falls at the half-year and the months stay
+     where you expect to find them. The empty ones carry nothing but their
+     name. */
+  .cal-month-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}
+  @media (max-width:860px){ .cal-month-grid{grid-template-columns:repeat(4,minmax(0,1fr))} }
+  @media (max-width:560px){ .cal-month-grid{grid-template-columns:repeat(3,minmax(0,1fr))} }
+  .cal-month-cell{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+      padding:6px 8px;min-height:38px}
+  .cal-month-cell-empty{background:none;border-style:dashed;opacity:.5}
+  .cal-month-label{font-size:10.5px;color:var(--muted);text-transform:uppercase;
+      letter-spacing:.08em;margin-bottom:4px;font-family:Inter,system-ui,sans-serif}
   .cal-trip-chip{display:block;width:100%;text-align:left;background:var(--panel2);
       border:1px solid var(--line);color:var(--ink);font-size:12px;padding:3px 8px;
       border-radius:9px;margin-bottom:4px;cursor:pointer;font-family:Inter,system-ui,sans-serif}
@@ -376,7 +385,6 @@
   .cal-trip-chip.selected{border-color:var(--amber);background:var(--amber);color:var(--btn-ink)}
   .cal-trip-chip.cal-highlight{border-color:var(--amber);background:var(--amber);color:var(--btn-ink)}
   .cal-trip-chip.cal-dim{opacity:.35}
-  .cal-month-empty{font-size:12px;color:var(--muted)}
   .cal-undated{font-size:12px;color:var(--muted);margin-top:2px}
   .cal-undated .cal-trip-chip{display:inline-block;width:auto;margin:0 6px 4px 0}
   .bulk-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--panel);
@@ -1175,8 +1183,15 @@ let expandedTripGroups = new Set(JSON.parse(localStorage.getItem(EXPANDED_GROUPS
 const COLLAPSED_FOLDERS_KEY = "flight-tracker-collapsed-folders";
 let collapsedFolders = new Set(JSON.parse(localStorage.getItem(COLLAPSED_FOLDERS_KEY) || "[]"));
 
-const CALENDAR_VISIBLE_KEY = "flight-tracker-calendar-visible";
-let calendarVisible = localStorage.getItem(CALENDAR_VISIBLE_KEY) === "1";
+// Trips is two pages, not one. The overview lists every trip and the
+// year's figures; opening one gives it the whole area to itself. Keeping
+// both on screen meant a trip was always read through a header of things
+// that weren't about it, and the trip is what you came for.
+let tripsView = "overview";
+function openTripPage(id){
+  if (id) activeTripId = id;
+  tripsView = "trip";
+}
 
 let bulkSelectMode = false;
 let selectedTripIds = new Set();
@@ -6825,9 +6840,9 @@ function renderCalendarView(){
     const months = byYear.get(year);
     const collapsed = collapsedCalYears.has(year);
     const cells = months.map((tripsInMonth, i) => `
-      <div class="cal-month-cell">
+      <div class="cal-month-cell${tripsInMonth.length ? "" : " cal-month-cell-empty"}">
         <div class="cal-month-label">${MONTH_ABBR[i]}</div>
-        ${tripsInMonth.length ? tripsInMonth.map(tripChip).join("") : `<span class="cal-month-empty">—</span>`}
+        ${tripsInMonth.map(tripChip).join("")}
       </div>`).join("");
     return `
       <div class="cal-year-block">
@@ -6884,7 +6899,8 @@ function renderTabs(){
     const month = MONTH_ABBR[Number(dateStr.slice(5, 7)) - 1];
     return `${month} - ${esc(t.title)}`;
   };
-  const tabBtn = t => `<button class="tab ${t.id===activeTripId?'active':''}"
+  const tabBtn = t => `<button class="tab ${
+      t.id === activeTripId && tripsView === "trip" ? "active" : ""}"
       draggable="true" data-drag-tab="${t.id}" data-tab="${t.id}">${tabLabel(t)}</button>`;
 
   // The past caret for one year (or for the ungrouped list). Newest first —
@@ -7037,7 +7053,6 @@ function renderViewMenu(showImport){
     <details class="menu view-menu">
       <summary class="hamburger-btn" title="Menu" aria-label="Menu">☰</summary>
       <div class="menu-panel">
-        <button type="button" id="toggleCalendarBtn">${calendarVisible ? "Hide calendar" : "Show calendar"}</button>
         <button type="button" id="toggleTrackingBtn">${trackingMode ? "Turn off tracking mode" : "Turn on tracking mode"}</button>
         <button type="button" id="toggleBulkSelectBtn">${bulkSelectMode ? "Done selecting" : "Select trips"}</button>
         <div class="menu-divider"></div>
@@ -7051,22 +7066,13 @@ function renderViewMenu(showImport){
 }
 
 function wireViewMenu(){
-  document.getElementById("toggleCalendarBtn").addEventListener("click", () => {
-    calendarVisible = !calendarVisible;
-    localStorage.setItem(CALENDAR_VISIBLE_KEY, calendarVisible ? "1" : "0");
-    render();
-  });
   document.getElementById("toggleTrackingBtn").addEventListener("click", () => setTrackingMode(!trackingMode));
   document.getElementById("toggleBulkSelectBtn").addEventListener("click", () => {
     bulkSelectMode = !bulkSelectMode;
     selectedTripIds.clear();
-    // Trip selection happens via the calendar's trip chips, so make sure
-    // it's visible when entering select mode — otherwise there's nothing
-    // to click.
-    if (bulkSelectMode && !calendarVisible){
-      calendarVisible = true;
-      localStorage.setItem(CALENDAR_VISIBLE_KEY, "1");
-    }
+    // Trips are selected by clicking them on the overview, so selecting
+    // from inside a trip has to come back out to where the trips are.
+    if (bulkSelectMode) tripsView = "overview";
     render();
   });
   document.querySelectorAll("[data-menu-action]").forEach(btn => {
@@ -7604,20 +7610,34 @@ function renderTripsSection(){
   document.getElementById("loggedOutBrand").style.display = "none";
   document.getElementById("sidebar").innerHTML = renderSidebar(showImport);
 
+  // The overview holds anything that is about the trips rather than about
+  // one of them, so an open trip carries none of it.
+  // A trip that has gone — deleted, or filtered out of the loaded set —
+  // drops back to the list rather than leaving the page on a trip that
+  // isn't there any more.
+  if (tripsView === "trip" && !activeTrip) tripsView = "overview";
+  const openTrip = tripsView === "trip" ? activeTrip : null;
   root.innerHTML = `
     ${bookmarkletPanelOpen ? renderBookmarkletPanel() : ""}
-
-    ${renderStatsBar()}
-
-    ${renderCancelDeadlines()}
-
-    ${calendarVisible ? renderCalendarView() : ""}
-
-    ${activeTrip ? renderTripPanel(activeTrip) :
-      `<div class="empty-state">No trips yet. Click "+" to add your first one, or import saved data above.</div>`}
+    ${openTrip ? `
+      <div class="trip-back">
+        <button type="button" class="btn-link" data-trips-back>← All trips</button>
+      </div>
+      ${renderTripPanel(openTrip)}`
+    : `
+      ${renderStatsBar()}
+      ${renderCancelDeadlines()}
+      ${trips.length ? renderCalendarView()
+        : `<div class="empty-state">No trips yet. Click "+" to add your first one,
+             or import saved data above.</div>`}`}
   `;
 
-  document.getElementById("statsFilterSelect").addEventListener("change", (e) => {
+  document.querySelector("[data-trips-back]")?.addEventListener("click", () => {
+    tripsView = "overview";
+    render();
+  });
+
+  document.getElementById("statsFilterSelect")?.addEventListener("change", (e) => {
     statsFilter = e.target.value;
     render();
   });
@@ -7631,7 +7651,7 @@ function renderTripsSection(){
     });
   });
 
-  document.getElementById("categoryHighlightSelect").addEventListener("change", (e) => {
+  document.getElementById("categoryHighlightSelect")?.addEventListener("change", (e) => {
     highlightCategoryId = e.target.value || null;
     render();
   });
@@ -7643,7 +7663,7 @@ function renderTripsSection(){
         if (selectedTripIds.has(id)) selectedTripIds.delete(id); else selectedTripIds.add(id);
         render();
       } else {
-        activeTripId = id;
+        openTripPage(id);
         render();
       }
     });
@@ -7688,7 +7708,10 @@ function renderTripsSection(){
   wireSectionNav();
   wireAccountMenu();
   wireViewMenu();
-  wireEvents(activeTrip);
+  // The trip half of this only has a DOM to wire when a trip's page is the
+  // one showing, so it gets the trip that's open rather than the one that
+  // happens to be remembered.
+  wireEvents(openTrip);
   wireTabDragEvents();
   wireAttachments();
 }
@@ -8473,14 +8496,14 @@ function wireEvents(activeTrip){
   };
 
   document.querySelectorAll("[data-tab]").forEach(btn => {
-    btn.addEventListener("click", () => { activeTripId = btn.dataset.tab; render(); });
+    btn.addEventListener("click", () => { openTripPage(btn.dataset.tab); render(); });
   });
 
   document.getElementById("newTripTab").onclick = async () => {
     const title = prompt("Trip title (e.g. Denver Trip):");
     if (!title || !title.trim()) return;
     const t = await createTrip({ title: title.trim() });
-    if (t) { activeTripId = t.id; }
+    if (t) openTripPage(t.id);
     await refresh();
   };
 
@@ -8595,6 +8618,7 @@ function wireEvents(activeTrip){
     if (!confirm(`Delete trip "${activeTrip.title}" and all its flights?`)) return;
     await deleteTrip(activeTrip.id);
     activeTripId = null;
+    tripsView = "overview";
     await refresh();
   });
 
@@ -9638,7 +9662,7 @@ async function processAddFlightHash(){
   // comes from another tab and carries no clue which trip you meant.
   const trip = trips.length === 1 ? trips[0] : await askWhichTrip();
   if (!trip) return;
-  activeTripId = trip.id;
+  openTripPage(trip.id);
   activeSection = "trips";
   render();
 
@@ -9741,7 +9765,7 @@ async function processBookmarkletHash(){
   // so confirm what's about to be recorded and against which flight.
   if (!confirm(`Log ${fmtCash(price)} as a price check for "${found.flight.label}"?`)) return;
   await addPriceLog(flightId, todayISO(), price);
-  activeTripId = found.trip.id;
+  openTripPage(found.trip.id);
   await refresh();
   alert(`Logged ${fmtCash(price)} for "${found.flight.label}".`);
 }
