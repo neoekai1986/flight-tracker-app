@@ -945,6 +945,14 @@
     letter-spacing:.02em;font-weight:400}
   .planner-chip-sub{background:color-mix(in srgb, var(--panel2) 70%, transparent);
     font-size:12px;padding:3px 7px}
+  /* The same person, shown where they're paying rather than where they're
+     sleeping. Dashed and dimmed, so it reads as a bill and not a bed. */
+  .planner-chip-ghost{background:none;border-style:dashed;cursor:default}
+  .planner-chip-ghost:hover{border-color:var(--line)}
+  .planner-chip-ghost > .planner-chip-name{color:var(--muted);font-weight:500}
+  .planner-free{background:none;border:0;padding:0 0 0 2px;margin-left:2px;
+    color:var(--muted);font-size:13px;line-height:1;cursor:pointer}
+  .planner-free:hover{color:var(--bad)}
   .planner-chip-sub .planner-chip-name{font-weight:500}
   .planner-under{display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
   /* The one being dragged, and wherever it would land. */
@@ -3197,26 +3205,60 @@ function plannerParties(subjects, byKey){
 // The rooms, and who's in each. The tray at the end is everyone not in the
 // house at all — on this booking means in a room or on the couch, because a
 // person on a stay with no room of any kind is charged for one.
+// Where a subject sleeps.
+function plannerWhere(byKey, sub){
+  const row = byKey.get(sub.key);
+  if (!row) return "__off__";
+  if (row.is_couch) return "__couch__";
+  return row.room || "__off__";
+}
+
+// The rooms, and who's in each.
+//
+// Somebody can be responsible for a room they don't sleep in — the parent
+// down the hall who is paying for the kids' room. Nothing stops that in the
+// arithmetic: a covered share says whose bill it lands on and never asks
+// where that person is sleeping. What it needs is somewhere to be seen, so
+// the kids' room shows the parent too, greyed, as the one paying for it.
+// They are one person in two places, not two people.
 function plannerPlaces(subjects, byKey, bookingRow){
   const { top, under } = plannerParties(subjects, byKey);
   const names = bedroomOptions(bookingRow, [...byKey.values()]);
   const cost = bedroomCost(bookingRow);
-  // A party's room is its head's room; the people under them follow.
-  const where = (sub) => {
-    const row = byKey.get(sub.key);
-    if (!row) return "__off__";
-    if (row.is_couch) return "__couch__";
-    return row.room || "__off__";
+  const where = (sub) => plannerWhere(byKey, sub);
+
+  const inside = (key) => {
+    const out = [];
+    // Whoever is actually in the room, each with the people under them who
+    // are in it too. A dependant sleeping elsewhere stays out of this chip,
+    // because what's inside a chip is what moves when you drag it.
+    for (const sub of top){
+      if (where(sub) !== key) continue;
+      out.push({ sub, row: byKey.get(sub.key) || null, ghost: false,
+                 under: (under.get(sub.key) || []).filter(u => where(u) === key) });
+    }
+    // Then the people in this room whose bill is somebody else's, with that
+    // somebody shown as a shadow of themselves.
+    for (const sub of top){
+      if (where(sub) === key) continue;
+      const here = (under.get(sub.key) || []).filter(u => where(u) === key);
+      if (here.length) out.push({ sub, row: byKey.get(sub.key) || null,
+                                  ghost: true, under: here });
+    }
+    return out;
   };
-  const party = (sub) => ({ sub, row: byKey.get(sub.key) || null,
-                            under: (under.get(sub.key) || []) });
-  const inside = (key) => top.filter(sub => where(sub) === key).map(party);
 
   const places = names.map(name => {
     const parties = inside(name);
-    return { key: name, name, kind: "bedroom", parties,
-             cost: cost || null,
-             each: cost && parties.length > 1 ? cost / parties.length : null };
+    // "$150.00 each" is only true when everyone in the room is paying their
+    // own way. Once somebody's share is on another person's bill the room
+    // doesn't divide evenly between the people in it — their chips say who
+    // is carrying what instead, which is the honest version of the same
+    // fact and doesn't need a figure that isn't anybody's.
+    const beds = parties.reduce((n, p) => n + (p.ghost ? 0 : 1) + p.under.length, 0);
+    const shared = parties.some(p => p.ghost || p.under.length);
+    return { key: name, name, kind: "bedroom", parties, cost: cost || null,
+             each: cost && beds > 1 && !shared ? cost / beds : null };
   });
   places.push({ key: "__couch__", name: "Couch", kind: "couch",
                 parties: inside("__couch__"), cost: null, each: null });
@@ -3226,12 +3268,16 @@ function plannerPlaces(subjects, byKey, bookingRow){
 }
 
 function plannerChipHTML(p, depth){
-  const name = p.sub.name;
-  const head = depth ? "" : (p.under.length && p.sub.personId
-    ? `<span class="planner-chip-tag">pays for ${p.under.length + 1}</span>` : "");
-  return `<div class="planner-chip${depth ? " planner-chip-sub" : ""}"
-      draggable="true" data-bp-chip="${p.sub.key}">
-    <span class="planner-chip-name">${esc(name)}${head}</span>
+  const tag = depth ? "" : p.ghost ? `<span class="planner-chip-tag">pays for this room</span>`
+    : p.under.length ? `<span class="planner-chip-tag">pays for ${p.under.length + 1}</span>` : "";
+  // A shadow isn't draggable: it's a label saying whose bill this is, and
+  // the person it stands for is somewhere else to be picked up.
+  return `<div class="planner-chip${depth ? " planner-chip-sub" : ""}${
+      p.ghost ? " planner-chip-ghost" : ""}"
+      ${p.ghost ? "" : `draggable="true" data-bp-chip="${p.sub.key}"`}>
+    <span class="planner-chip-name">${esc(p.sub.name)}${tag}${depth
+      ? `<button type="button" class="planner-free" data-bp-detach="${p.sub.key}"
+          title="Pay for themselves" aria-label="Pay for themselves">×</button>` : ""}</span>
     ${p.sub.sub ? `<span class="planner-chip-who">${esc(p.sub.sub)}</span>` : ""}
     ${p.under.length ? `<div class="planner-under">
       ${p.under.map(sub => plannerChipHTML({ sub, under: [] }, 1)).join("")}
@@ -7126,8 +7172,18 @@ function plannerRowControls(prefix, key){
   };
 }
 
-// Everyone travelling with this subject: them, and anyone whose share is
-// covered by their head.
+// Where a row currently sits, read off the form rather than the database.
+function plannerSpot(c){
+  if (!c?.on?.checked) return "__off__";
+  if (c.unit?.value === "couch") return "__couch__";
+  return c.room?.value || "__off__";
+}
+
+// Who moves when this chip moves: them, and the people under them who are
+// in the same room. A dependant sleeping somewhere else stays where they
+// are — that is the whole point of letting a parent pay for a room down the
+// hall, and it is also what the chip draws, so what you see move is what
+// moves.
 function plannerParty(prefix, key){
   const ctx = bpContext[prefix];
   const host = document.querySelector(`[data-bp-people="${prefix}"]`);
@@ -7137,12 +7193,32 @@ function plannerParty(prefix, key){
   const head = me ? subjectHead(me) : null;
   const out = [key];
   if (!head) return out;
+  const mySpot = plannerSpot(plannerRowControls(prefix, key));
   for (const sub of subjects){
     if (sub.key === key) continue;
     const c = plannerRowControls(prefix, sub.key);
-    if (c?.unit?.value === "covered" && c.by?.value === head) out.push(sub.key);
+    if (c?.unit?.value === "covered" && c.by?.value === head
+        && plannerSpot(c) === mySpot) out.push(sub.key);
   }
   return out;
+}
+
+// Everyone whose share is on this subject's bill, wherever they're sleeping.
+// Taking somebody out of the house takes the people they're paying for too,
+// since a share charged to somebody who isn't on the booking is a bill for
+// a bed nobody slept in.
+function plannerDependants(prefix, key){
+  const ctx = bpContext[prefix];
+  if (!ctx) return [];
+  const subjects = bookingSubjects(ctx.trip, "rental");
+  const me = subjects.find(sub => sub.key === key);
+  const head = me ? subjectHead(me) : null;
+  if (!head) return [];
+  return subjects.filter(sub => {
+    if (sub.key === key) return false;
+    const c = plannerRowControls(prefix, sub.key);
+    return c?.unit?.value === "covered" && c.by?.value === head;
+  }).map(sub => sub.key);
 }
 
 // Put one subject in a place: a bedroom by name, the couch, or out of the
@@ -7172,9 +7248,17 @@ function plannerDetach(prefix, key){
 }
 
 function plannerMove(prefix, key, where){
-  // Dragged out on their own, so they stop travelling with anybody.
-  plannerDetach(prefix, key);
-  for (const k of plannerParty(prefix, key)) plannerPlaceOne(prefix, k, where);
+  // Moving between rooms doesn't change whose bill it is — a child who
+  // changes bedroom is still their parent's to pay for. Leaving the house
+  // does: there is no share left to charge to anybody, and the people they
+  // were covering can't be left pointing at someone who isn't here.
+  if (where === "__off__"){
+    for (const k of plannerDependants(prefix, key)) plannerDetach(prefix, k);
+    plannerDetach(prefix, key);
+    plannerPlaceOne(prefix, key, where);
+  } else {
+    for (const k of plannerParty(prefix, key)) plannerPlaceOne(prefix, k, where);
+  }
   rerenderBookingPeople(prefix);
 }
 
@@ -7249,6 +7333,18 @@ document.addEventListener("drop", (e) => {
   else plannerMove(prefix, key, el.getAttribute("data-bp-place-box"));
 });
 
+// The × on somebody travelling under another: they go back to paying for
+// themselves, staying in whatever room they're in.
+document.addEventListener("click", (e) => {
+  const btn = e.target instanceof Element ? e.target.closest("[data-bp-detach]") : null;
+  if (!btn) return;
+  e.stopPropagation();
+  const prefix = btn.closest("[data-bp-planner]")?.getAttribute("data-bp-planner");
+  if (!prefix) return;
+  plannerDetach(prefix, btn.getAttribute("data-bp-detach"));
+  rerenderBookingPeople(prefix);
+});
+
 // Tap one, tap where it goes. The same two moves as dragging, for anyone
 // who can't drag — and quicker than dragging across a long list of rooms.
 let plannerPicked = null;
@@ -7262,6 +7358,11 @@ document.addEventListener("click", (e) => {
     }
     return;
   }
+  // The × sits inside a chip and has its own handler on this same node, so
+  // stopPropagation there doesn't reach this one. Without this, freeing
+  // somebody also picked their chip up, and the next tap joined a party the
+  // wrong way round.
+  if (e.target.closest("[data-bp-detach]")) return;
   const prefix = planner.getAttribute("data-bp-planner");
   const chip = e.target.closest("[data-bp-chip]");
   const box = e.target.closest("[data-bp-place-box]");

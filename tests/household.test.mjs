@@ -169,6 +169,7 @@ const ui = new Function("state", `
      "groupById", "tripPeople", "bookingSubjects", "shareValue", "flightTicketCost",
      "parseShare", "bookingPlacement", "bookingPersonRowHTML",
      "bookingPeopleRowsHTML", "headPickerHTML", "subjectHead", "plannerParties",
+     "plannerWhere",
      "plannerPlaces", "plannerChipHTML", "roomPlannerHTML"].map(extract).join("")}
   return { bookingPeopleRowsHTML, bookingPlacement, headPickerHTML, bookingSubjects,
            subjectHead, plannerParties, plannerPlaces, roomPlannerHTML };
@@ -314,7 +315,9 @@ check("and for a household, the one it named",
   check("a covered share rides with whoever covers it", seating(places),
     { "Bedroom 1": ["Me + yuhung"], "Bedroom 2": [], "Bedroom 3": [],
       "Couch": [], "Not in the house": ["The Ngs"] });
-  check("a party is one party in the room, not two", places[0].each, null);
+  // No "each" for a room where somebody else is paying: the figure would
+  // be nobody's. The chip says "pays for 2" instead.
+  check("a room on one person's bill doesn't claim a figure each", places[0].each, null);
 }
 
 {
@@ -399,6 +402,77 @@ check("and for a household, the one it named",
     ["Bedroom 1", "Bedroom 2", "Bedroom 3", "__couch__", "__off__"]);
   check("a head says how many it's paying for", /pays for 2/.test(html), true);
   check("an empty bedroom says whose it is", /Nobody — on whoever booked/.test(html), true);
+}
+
+// ---- one person, two rooms ----------------------------------------------
+//
+// A parent sleeping in one bedroom and paying for the kids in another. The
+// arithmetic never cared where the person paying was sleeping — a covered
+// share says whose bill it lands on and nothing else — so this is about the
+// planner drawing them in both places without pretending there are two of
+// them.
+
+const ghosts = (places) => Object.fromEntries(places.map(pl =>
+  [pl.name, pl.parties.map(p => `${p.ghost ? "~" : ""}${p.sub.name}${
+    p.under.length ? ` + ${p.under.map(u => u.name).join(" + ")}` : ""}`)]));
+
+{
+  const places = placesOf([
+    { person_id: "p-me", room: "Bedroom 1" },
+    { person_id: "p-yu", room: "Bedroom 2", is_covered: true, covered_by: "p-me" },
+  ], HOUSE);
+  check("the one paying shows up in the room they're paying for", ghosts(places),
+    { "Bedroom 1": ["Me"], "Bedroom 2": ["~Me + yuhung"], "Bedroom 3": [],
+      "Couch": [], "Not in the house": ["The Ngs"] });
+  check("and is still really in their own room", places[0].parties[0].ghost, false);
+  check("while the other one is only a shadow", places[1].parties[0].ghost, true);
+}
+
+{
+  // The shadow isn't a person in the room, so it isn't a bed in it either:
+  // one kid in Bedroom 2 is one occupant, not two.
+  const places = placesOf([
+    { person_id: "p-me", room: "Bedroom 1" },
+    { person_id: "p-yu", room: "Bedroom 2", is_covered: true, covered_by: "p-me" },
+  ], HOUSE);
+  check("a shadow doesn't take up a bed", places[1].each, null);
+}
+
+{
+  // Two kids down the hall, one parent paying for both.
+  const places = placesOf([
+    { group_id: "g-ngs", room: "Bedroom 1" },
+    { person_id: "p-me", room: "Bedroom 2", is_covered: true, covered_by: "p-eug" },
+    { person_id: "p-yu", room: "Bedroom 2", is_covered: true, covered_by: "p-eug" },
+  ], HOUSE);
+  check("one shadow carries everyone it's paying for", ghosts(places)["Bedroom 2"],
+    ["~The Ngs + Me + yuhung"]);
+  check("and the room it sleeps in is its own", ghosts(places)["Bedroom 1"], ["The Ngs"]);
+}
+
+{
+  // Someone paying for a room they aren't even on the booking for. The
+  // settlement charges them regardless, so the planner has to show it
+  // rather than leaving the room looking like nobody's.
+  const places = placesOf([
+    { person_id: "p-yu", room: "Bedroom 1", is_covered: true, covered_by: "p-me" },
+  ], HOUSE);
+  check("paying for a room without being in the house is still visible",
+    ghosts(places)["Bedroom 1"], ["~Me + yuhung"]);
+}
+
+{
+  const html = api.roomPlannerHTML(trip, "er", [
+    { person_id: "p-me", room: "Bedroom 1" },
+    { person_id: "p-yu", room: "Bedroom 2", is_covered: true, covered_by: "p-me" },
+  ], HOUSE);
+  check("a shadow says what it's for", /pays for this room/.test(html), true);
+  // Dragging a shadow would mean moving someone by their bill rather than
+  // by their bed. The real chip is a room away and is the one to pick up.
+  const chips = [...html.matchAll(/data-bp-chip="([^"]+)"/g)].map(m => m[1]);
+  check("and isn't something you can pick up",
+    chips.filter(k => k === "p:p-me").length, 1);
+  check("the one under it can be set loose", /data-bp-detach="p:p-yu"/.test(html), true);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
