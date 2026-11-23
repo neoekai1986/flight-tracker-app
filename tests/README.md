@@ -59,7 +59,10 @@ of those functions the test will say so rather than silently passing.
 - **bedrooms.test.mjs** — splitting a house by its bedrooms. The divisor
   used to be however many room names someone had typed, so a room's cost
   moved with the turnout. Stating the count fixes it, and the room nobody
-  took still has to land on somebody — every case checks it did.
+  took still has to land on somebody — every case checks it did. It also
+  checks where the count is asked for: it's the switch that turns the room
+  planner on, so it sits at the head of the share block, and outside the
+  part a rebuild replaces.
 - **transfers.test.mjs** — who hands money to whom, which the net column
   can't say once two people have paid for things. Every case checks the same
   property: follow the plan and everybody lands on zero, to the cent.

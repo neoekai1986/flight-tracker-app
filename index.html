@@ -928,6 +928,17 @@
   .bp-group-note{font-size:12px;color:var(--ink);font-variant-numeric:tabular-nums}
   .bp-group-empty{margin:2px 0 4px;font-size:12px;color:var(--muted)}
   .bp-group-off{background:none;border-style:dashed;opacity:.85}
+  /* The bedroom count, at the head of the share block: the switch that turns
+     the rooms on, next to the rooms it turns on. */
+  .bp-beds{display:flex;flex-direction:row;align-items:baseline;gap:10px;
+    flex-wrap:wrap;margin-bottom:2px}
+  /* A stated display beats the hidden attribute, and this one is switched off
+     for a car rental, which has no bedrooms to count. */
+  .field[hidden],.bp-beds[hidden]{display:none}
+  .bp-beds-label{display:flex;align-items:baseline;gap:7px;font-size:12px;
+    color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+  .bp-beds-label input{width:72px}
+  .bp-beds-note{font-size:12px;color:var(--muted);flex:1;min-width:160px}
   .planner{margin-bottom:10px}
   .planner-rooms{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));
     gap:10px;margin-bottom:10px}
@@ -1594,9 +1605,10 @@ function applyRentalKindToShares(prefix, kind){
   if (bedrooms) bedrooms.hidden = !housing;
 }
 
-// The bedroom count is a live choice on the form, so the pickers that offer
-// those bedrooms have to be rebuilt as it changes — typing "4" should put
-// four bedrooms on the list without saving and reopening. Rooms already
+// The bedroom count and the price are live choices on the form, so the rooms
+// they describe have to be rebuilt as they change — typing "4" should put
+// four bedrooms on the list, and typing the price should put a figure on each
+// of them, without saving and reopening. Rooms already
 // chosen are kept, including any that fall outside a count since reduced:
 // dropping somebody's room silently because a digit changed would lose who
 // slept where, and that is the part the arithmetic is built on.
@@ -1608,8 +1620,12 @@ function applyBedroomsToRooms(prefix){
   // none to some turns the block into the bedrooms themselves. So the
   // context it rebuilds from has to carry the number being typed, not the
   // one the booking was loaded with.
+  const cash = document.querySelector(`[data-${prefix}-paidcash]`)?.value;
+  const points = document.querySelector(`[data-${prefix}-paidpoints]`)?.value;
+  const num = (v) => v === "" || v == null ? null : parseFloat(v);
   ctx.bookingRow = { ...ctx.bookingRow,
-                     bedrooms: field.value === "" ? null : parseInt(field.value, 10) };
+                     bedrooms: field.value === "" ? null : parseInt(field.value, 10),
+                     paid_cash: num(cash), paid_points: num(points) };
   rerenderBookingPeople(prefix);
 }
 
@@ -3442,11 +3458,25 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
   // spellings would read as two rooms and halve the cost twice.
   const namedRooms = [...new Set((existing || []).map(b => b.room).filter(Boolean))];
   const beds = kind !== "flight" && Math.max(0, Math.round(Number(bookingRow.bedrooms) || 0));
+  const roomCost = beds ? bedroomCost(bookingRow) : null;
   return `
     <div class="form-section">${beds ? "Who's in each bedroom" : "Who's on this booking"}
       <span class="field-opt">(leave empty if it's all yours)</span>
       <button type="button" class="btn-link bp-clear" data-bp-clear>start over</button>
     </div>
+    ${kind === "flight" || !lodgingBedroomsAvailable ? "" : `
+    <div class="field span2 bp-beds" data-${prefix}-bedrooms-field>
+      <label class="bp-beds-label">Bedrooms
+        <input type="number" min="0" step="1" data-${prefix}-bedrooms
+          value="${bookingRow.bedrooms ?? ""}" placeholder="e.g. 4">
+      </label>
+      <span class="bp-beds-note">${beds
+        ? roomCost
+          ? `Each one is ${esc(fmtCash(roomCost, bookingRow.currency))} of this booking, and one
+             nobody takes still costs that — it goes to whoever booked.`
+          : `Each one costs the same share of the place, however many people end up in it.`
+        : `Say how many and this turns into the bedrooms themselves, to drag people into.`}</span>
+    </div>`}
     <div class="field span2">
       ${kind !== "flight" && lodgingRoomsAvailable ? `<datalist id="bp-rooms-${prefix}">
         ${namedRooms.map(r => `<option value="${esc(r)}"></option>`).join("")}
@@ -3466,12 +3496,7 @@ function bookingPeopleFieldsHTML(trip, prefix, existing, kind, bookingRow){
           ? ` Set the unit to <b>pass</b> for a companion seat — it costs its passenger
              nothing, and the summary says so rather than showing a bare $0.00.` : ""}${
         kind !== "flight" && lodgingRoomsAvailable
-          ? `<span data-${prefix}-room-hint>${bedroomCost(bookingRow)
-               ? ` Each bedroom is ${esc(fmtCash(bedroomCost(bookingRow), bookingRow.currency))}
-                 of this booking, and one nobody takes still costs that — it goes to
-                 whoever booked the place.`
-               : ` Say how many <b>bedrooms</b> the place has, above, and this turns into a
-                 list of them to put people in.`}
+          ? `<span data-${prefix}-room-hint>
              Anyone not taking a bedroom goes down as <b>couch</b> — listed, and charged nothing.
              Set someone to <b>whole room</b> to have them cover theirs on their own
              instead of splitting it with whoever else is in it.</span>` : ""}
@@ -6453,13 +6478,6 @@ function rentalFormHTML(prefix, idAttr, defaults, trip, existingPeople){
     <label class="field">Confirmation code
       <input type="text" data-${p}-confirmation placeholder="optional">
     </label>
-    ${!lodgingBedroomsAvailable ? "" : `<label class="field" data-${p}-bedrooms-field>Bedrooms
-      <input type="number" min="0" step="1" data-${p}-bedrooms
-        value="${d.bedrooms ?? ""}" placeholder="e.g. 4">
-      <span class="field-hint">Say how many and each bedroom costs the same
-        fixed share of the place, however many people end up in it. A bedroom
-        nobody takes still costs that, and goes to whoever booked.</span>
-    </label>`}
     <label class="field">Paid (cash)
       <input type="number" step="0.01" data-${p}-paidcash placeholder="optional">
     </label>
@@ -8782,6 +8800,8 @@ function wireEvents(activeTrip){
     applyRentalKindToShares("nr", "housing");
     holder.querySelector("[data-nr-bedrooms]")
       ?.addEventListener("input", () => applyBedroomsToRooms("nr"));
+    holder.querySelector("[data-nr-paidcash]")
+      ?.addEventListener("input", () => applyBedroomsToRooms("nr"));
     holder.querySelector("[data-nr-kind]").addEventListener("change", (e) => {
       applyRentalKindToProgramField("nr", e.target.value);
       applyRentalKindToShares("nr", e.target.value);
@@ -8829,7 +8849,7 @@ function wireEvents(activeTrip){
       const card = document.querySelector(`[data-rental-card="${rid}"]`);
       const wrap = document.createElement("div");
       wrap.innerHTML = rentalFormHTML("er", `data-rental-edit-form="${rid}"`,
-        { paidBy: rental.paid_by, bedrooms: rental.bedrooms },
+        { ...rental, paidBy: rental.paid_by, bedrooms: rental.bedrooms },
         activeTrip, bookingPeopleFor(activeTrip, "rental", rid));
       card.replaceWith(wrap.firstElementChild);
       wireDateRangeButtons();
@@ -8853,6 +8873,8 @@ function wireEvents(activeTrip){
         applyRentalKindToShares("er", e.target.value);
       });
       form.querySelector("[data-er-bedrooms]")
+        ?.addEventListener("input", () => applyBedroomsToRooms("er"));
+      form.querySelector("[data-er-paidcash]")
         ?.addEventListener("input", () => applyBedroomsToRooms("er"));
       form.querySelector("[data-er-notes]").value = rental.notes || "";
       form.querySelector("[data-er-status]").value = rental.status || "booked";

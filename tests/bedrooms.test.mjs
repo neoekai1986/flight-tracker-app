@@ -347,5 +347,80 @@ check("a share row with no room adds nothing",
   check("somebody on the couch isn't picking a bedroom", html.includes("disabled"), true);
 }
 
+// ---- The count, and where it lives on the form ----
+//
+// The planner only exists once the place has a stated number of bedrooms, so
+// the box that states it is the switch that turns the rooms on. It used to
+// sit eight fields up the form, which made the planner look like it had
+// vanished rather than like it was waiting for a number. These check that the
+// switch is beside the thing it switches, and that a rebuild can't eat it:
+// typing in it rebuilds the share block, so it has to be outside the part
+// that gets replaced.
+
+function extractWrapped(name){
+  const start = src.indexOf(`const ${name} = `);
+  if (start < 0) throw new Error(`${name} not found in index.html`);
+  return src.slice(start, src.indexOf(";\n", start) + 2);
+}
+
+const formNames = ["bookingCents", "bedroomCost", "bedroomOptions", "roomFieldHTML",
+  "personById", "groupById", "tripPeople", "bookingSubjects", "shareValue",
+  "flightTicketCost", "parseShare", "bookingPlacement", "bookingPersonRowHTML",
+  "bookingPeopleRowsHTML", "headPickerHTML", "subjectHead", "plannerParties",
+  "plannerWhere", "plannerPlaces", "plannerChipHTML", "roomPlannerHTML",
+  "bookingPeopleFieldsHTML"];
+
+const block = new Function("state", `
+  const { people, personGroups } = state;
+  const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const companionPassAvailable = true, lodgingRoomsAvailable = true;
+  const coveredSharesAvailable = true, shareTextAvailable = true;
+  const lodgingBedroomsAvailable = true, groupHeadAvailable = true;
+  const bpContext = {};
+  ${extractWrapped("fmtCash")}${extractConst("toCents")}${extractConst("fromCents")}
+  ${formNames.map(extract).join("")}
+  return bookingPeopleFieldsHTML(state.trip, "er", state.existing, state.kind, state.row);
+`);
+
+const roster = [
+  { id: "me", name: "Me", is_self: true },
+  { id: "kit", name: "Kit" },
+];
+const shareBlock = (kind, row) => block({
+  people: roster, personGroups: [], kind, row,
+  trip: { id: "t1", trip_people: roster.map(p => ({ person_id: p.id })) },
+  existing: [{ person_id: "kit", room: "Bedroom 1" }],
+});
+
+{
+  const html = shareBlock("rental", { currency: "USD" });
+  check("with no count stated the block still asks for one",
+    html.includes("data-er-bedrooms"), true);
+  check("and says what saying it does",
+    html.includes("this turns into the bedrooms themselves"), true);
+  check("there being no rooms to drag anybody into yet",
+    html.includes("data-bp-planner"), false);
+}
+
+{
+  const html = shareBlock("rental", { bedrooms: 4, paid_cash: 1200, currency: "USD" });
+  check("a count turns the rooms on", html.includes("data-bp-planner"), true);
+  check("and prices each one", html.includes("$300.00 of this booking"), true);
+  check("the count is asked for above the rooms, not below them",
+    html.indexOf("data-er-bedrooms") < html.indexOf("data-bp-planner"), true);
+  // rerenderBookingPeople replaces everything inside [data-bp-people]. The
+  // count field is what you are typing in when that happens.
+  const host = html.indexOf('data-bp-people="er"');
+  check("and outside the part a rebuild replaces",
+    html.indexOf("data-er-bedrooms") < host, true);
+}
+
+{
+  const html = shareBlock("flight", { currency: "USD" });
+  check("a flight is not asked how many bedrooms it has",
+    html.includes("data-er-bedrooms"), false);
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
